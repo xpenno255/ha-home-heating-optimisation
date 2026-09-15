@@ -91,7 +91,7 @@ def build_evidence(report, house, live_quality, task, question=""):
             "demand_coverage": "Percent analysis window with known demand; independent of active share.",
             "response_status": "Eligibility of matched concurrent-response comparison only.",
             "heating_rate_avg": "Eligible observed warming ramps in degrees C per hour, not radiator power.",
-            "missing": "Null metrics are unavailable, never zero. Each metric has independent eligibility.",
+            "missing": "Null metrics and names in unavailable_metrics are unavailable, never zero. Each metric has independent eligibility.",
         },
     )
     latest = report.get("recent_decision_context", [])[-1:]
@@ -117,8 +117,18 @@ def build_evidence(report, house, live_quality, task, question=""):
     for index, room in enumerate(report["rooms"], 1):
         rid = room["id"]
         add(f"room.{index}.identity", room)
+        unavailable = []
         for key, value in report["analysis"]["zone_stats"].get(rid, {}).items():
-            add(f"room.{index}.{key}", value)
+            if value is None and key not in (
+                "within_band",
+                "duty_cycle",
+                "deficit_degree_hours",
+                "overshoot_degree_hours",
+            ):
+                unavailable.append(key)
+            else:
+                add(f"room.{index}.{key}", value)
+        add(f"room.{index}.unavailable_metrics", unavailable)
     # Notes may include private free text. Only time/kind and room scope are sent.
     add(
         "adjustments",

@@ -92,7 +92,7 @@ properties/confidence, missing-data advisories and adjustment time/kind/scope.
 Raw history, journal note text, credentials, addresses and household routines are
 excluded. An investigation question is sent as entered (up to 1,000 characters).
 
-Evidence is bounded to 48 KB of UTF-8 JSON. Repeated construction properties are
+Evidence is bounded to 48 KB of UTF-8 JSON. Unavailable non-gated metrics are grouped by name in an explicit `unavailable_metrics` list; missing values are never replaced by zero. Repeated construction properties are
 shared. Room adjacency is retained; detailed internal surfaces and repeated survey timestamps are explicitly omitted. If necessary, detailed room
 surveys are omitted with an explicit marker. Larger remaining evidence is rejected.
 Byte limits are not token counts: smaller-context models can still reject a request.
