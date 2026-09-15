@@ -6,6 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 
+from .advisor.coordinator import Advisor
 from .analytics.coordinator import AnalyticsCoordinator
 from .const import DOMAIN
 from .coordinator import HeatingCoordinator
@@ -29,6 +30,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     if coordinator.config.get("analytics_enabled", False):
         coordinator.analytics = AnalyticsCoordinator(hass, entry, coordinator.config)
         await coordinator.analytics.initialise()
+    coordinator.advisor = Advisor(hass, entry, coordinator)
+    await coordinator.advisor.initialise()
     # Remove only our entities for explicitly removed rooms, retaining all others' IDs.
     registry = er.async_get(hass)
     valid_rooms = {room["id"] for room in coordinator.config["rooms"]}
@@ -40,6 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
                 registry.async_remove(entity.entity_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.start(entry)
+    coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()
     entry.async_on_unload(entry.add_update_listener(async_reload))
@@ -52,6 +56,8 @@ async def async_reload(hass: HomeAssistant, entry: HeatingEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded and entry.runtime_data.advisor:
+        await entry.runtime_data.advisor.stop()
     if unloaded and entry.runtime_data.analytics:
         await entry.runtime_data.analytics.stop()
     return unloaded

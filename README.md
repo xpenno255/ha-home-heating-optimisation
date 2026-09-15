@@ -5,10 +5,10 @@
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
-**Version 0.4.0 is observation-only, with optional historical analytics.** It publishes
+**Version 0.5.0 is observation-only, with optional historical analytics.** It publishes
 sensors, structured reports and a private adjustment journal. Existing
 OT Thermostat Control, Boiler Flow Control and Radiator Analytics continue operating.
-Control migration and AI-generated reports remain future milestones.
+An optional Heating Advisor generates reports through selected Home Assistant AI Task profiles. Control migration remains a future milestone.
 
 ## Install
 
@@ -27,7 +27,7 @@ Home Assistant's `custom_components` directory.
 
 1. Open **HACS → ⋮ → Custom repositories**.
 2. Add `https://github.com/xpenno255/ha-home-heating-optimisation` with type **Integration**.
-3. Find **Home Heating Optimisation**, download release **v0.4.0**, then restart Home Assistant.
+3. Find **Home Heating Optimisation**, download release **v0.5.0**, then restart Home Assistant.
 4. Go to **Settings → Devices & services → Add integration** and select
    **Home Heating Optimisation**.
 
@@ -36,7 +36,7 @@ in HACS's default catalogue. It includes standard and high-resolution local bran
 icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
 
 HACS installs the component from the selected release tag. The attached
-`home_heating_optimisation-0.4.0.zip` is an alternative for manual installation.
+`home_heating_optimisation-0.5.0.zip` is an alternative for manual installation.
 Keep the existing heating integrations enabled: this release observes them and
 makes no thermostat or boiler commands.
 
@@ -125,7 +125,7 @@ physical sampling. The prior recent-change expiry policy remains selectable. Con
 
 ## House survey (`house.yaml`)
 
-Version 0.4.0 can read the existing OT Thermostat Control survey: `house.yaml` and
+Version 0.5.0 can read the existing OT Thermostat Control survey: `house.yaml` and
 `rooms/*.yaml`. In the system options, set **House survey directory**, then confirm
 which survey room belongs to each thermostat. Unique survey climate bindings are
 suggested; mappings never change your selected sensors or controller settings.
@@ -148,7 +148,7 @@ analytics is disabled. `get_report` includes the same context alongside historic
 metrics. After editing survey files, run `reload_house_model` to refresh the model.
 
 See [house survey documentation](docs/house-survey.md) for validation, privacy,
-confidence labels and limitations. AI and control migration remain future work.
+confidence labels and limitations. The optional advisor can use this survey context; control migration remains future work.
 
 ## Roadmap and AI
 
@@ -159,7 +159,7 @@ Planned modules: operative-temperature comfort control, boiler supervision and a
 optional Heating Advisor. The advisor will select Home
 Assistant AI Task profiles per task. Extended OpenAI Conversation manages local
 Gemma; the built-in Anthropic integration manages Claude credentials, model and
-supported effort settings. Version 0.4.0 makes no AI calls.
+supported effort settings. See [Heating Advisor setup and limits](docs/heating-advisor.md) for profile selection, scheduled reviews and report actions. AI calls require explicit enablement.
 
 ## Development
 
@@ -176,7 +176,7 @@ Tests use an isolated Home Assistant instance. They cover configuration, units,
 quality, activity states, source expiry, options, entity identity, unload/reload,
 absence of device-service calls, historical calculations, storage failures, real
 Recorder replay, journal actions and package contents. The GitHub workflow also runs
-hassfest and HACS validation. No live heating deployment has been performed.
+hassfest and HACS validation. The observer and analytics have been verified on the live installation. Advisor provider evaluation is documented separately.
 
 The GitHub workflow runs the full HACS validation with no skipped checks, plus
 hassfest and the test suite. Package tests verify the MIT licence and bundled icon.

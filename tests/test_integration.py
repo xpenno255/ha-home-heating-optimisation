@@ -101,6 +101,9 @@ async def test_options_clear_mappings_preserve_identity_and_remove_room(hass, co
     old_air_id = entity_id(hass, entry, "room:old:air")
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "mapping"}
+    )
+    result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"zones": ["climate.study"]}
     )
     result = await hass.config_entries.options.async_configure(
@@ -149,6 +152,9 @@ async def test_self_source_rejected(hass, config, sources):
     entry = await setup(hass, config)
     own_air = entity_id(hass, entry, "room:study:air")
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "mapping"}
+    )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"zones": ["climate.study"]}
     )

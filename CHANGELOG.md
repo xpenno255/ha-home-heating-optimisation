@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — optional Heating Advisor
+
+- Per-task AI Task profiles for daily summaries, weekly reviews and investigations.
+- Extended OpenAI and Anthropic profile checks with tools disabled; provider-owned model/effort settings.
+- Bounded evidence, strict report/reference validation and private retention of 20 reports.
+- Optional local-time schedules, persisted call limits, timeouts and unload cancellation.
+- Separate advisor options, status sensor and run/list report actions.
+
 ## 0.4.0 — history retention and survey compatibility
 
 - Separate recorded-state availability from recent-change coverage; retain the previous conservative policy as an option.

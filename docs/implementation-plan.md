@@ -29,10 +29,9 @@ it has no runtime imports or dependencies on sibling projects.
 ## Milestone 2 — shared intent and analytics
 
 Implemented in 0.2.0; see [definitions and validation](historical-analytics.md).
-The live trial remains pending. Context currently includes allowlisted controller
+Live observation, backfill, house mappings and storage migration were verified in 0.4.0. Context currently includes allowlisted controller
 outputs; complete schedule provenance and controller model versions remain future
-work. The next implementation is the optional advisor, before control ownership
-migration.
+work. The optional advisor follows before control ownership migration.
 
 - Add explicit schedule, operative target, corrected-air target and decision-reason
   records. Associate units, provenance and model version with each field.
@@ -61,6 +60,10 @@ restart, unload, invalid limits, failed writes, stale inputs and concurrent even
 handover tests demonstrate that only one controller owns each actuator.
 
 ## Milestone 4 — heating advisor
+
+Initial AI Task profiles, bounded execution, optional schedules and retained reports
+are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). Notifications,
+conversation compatibility, follow-up outcomes and controlled trials remain future work.
 
 - Select an existing Home Assistant AI Task profile per task. Provide conversation
   compatibility only where needed and validate its responses equally strictly.

@@ -169,6 +169,9 @@ async def test_options_mapping_suggestions_and_clear(hass, config, sources, surv
     entry = await setup(hass, config)
     flow = await hass.config_entries.options.async_init(entry.entry_id)
     flow = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"next_step_id": "mapping"}
+    )
+    flow = await hass.config_entries.options.async_configure(
         flow["flow_id"], {"zones": ["climate.study"]}
     )
     flow = await hass.config_entries.options.async_configure(flow["flow_id"], {"name": "Study"})
@@ -222,6 +225,9 @@ async def test_invalid_directory_flow_and_explicit_disable(hass, config, sources
     config.update(survey_directory="house", survey_rooms={"study": "study"})
     entry = await setup(hass, config)
     flow = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"next_step_id": "mapping"}
+    )
     flow = await hass.config_entries.options.async_configure(
         flow["flow_id"], {"zones": ["climate.study"]}
     )
