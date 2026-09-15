@@ -11,6 +11,7 @@ def custom_integrations(enable_custom_integrations):
 @pytest.fixture
 def config():
     return {
+        "history_state_policy": "recent_change",
         "rooms": [
             {
                 "id": "study",

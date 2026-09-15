@@ -35,6 +35,8 @@ class ZoneStats:
     setpoint_achievement: float | None = None
     coverage: float = 0
     demand_coverage: float = 0
+    recent_change_coverage: float = 0
+    demand_recent_change_coverage: float = 0
     within_band: float | None = None
     deficit_degree_hours: float | None = None
     overshoot_degree_hours: float | None = None
@@ -360,6 +362,7 @@ def compute_analytics(
         zs = ZoneStats(zone)
         result.zone_stats[zone] = zs
         observed = band = deficit = overshoot = demand_known = active = 0.0
+        recent = demand_recent = 0.0
         for o, z, left, right in _segments(history, zone, start_ts, end_ts):
             duration = right - left
             demand_duration = max(
@@ -367,17 +370,29 @@ def compute_analytics(
             )
             if z.get("active") is not None:
                 demand_known += demand_duration
+                demand_recent += max(
+                    0,
+                    min(
+                        right, z.get("demand_change_valid_until", z.get("demand_valid_until", left))
+                    )
+                    - left,
+                )
                 active += demand_duration if z["active"] else 0
             if not _valid(z, left):
                 continue
             duration = max(0, min(right, z.get("valid_until", left)) - left)
             observed += duration
+            recent += max(
+                0, min(right, z.get("change_valid_until", z.get("valid_until", left))) - left
+            )
             error = z["target"] - z["temperature"]
             band += duration if abs(error) <= tolerance + 1e-9 else 0
             deficit += max(0, error - tolerance) * duration / 3600
             overshoot += max(0, -error - tolerance) * duration / 3600
         zs.coverage = round(100 * observed / (end_ts - start_ts), 1)
         zs.demand_coverage = round(100 * demand_known / (end_ts - start_ts), 1)
+        zs.recent_change_coverage = round(100 * recent / (end_ts - start_ts), 1)
+        zs.demand_recent_change_coverage = round(100 * demand_recent / (end_ts - start_ts), 1)
         zs.observed_hours = round(observed / 3600, 2)
         if demand_known:
             zs.duty_cycle = round(active / demand_known * 100, 1)

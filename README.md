@@ -5,7 +5,7 @@
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
-**Version 0.3.0 is observation-only, with optional historical analytics.** It publishes
+**Version 0.4.0 is observation-only, with optional historical analytics.** It publishes
 sensors, structured reports and a private adjustment journal. Existing
 OT Thermostat Control, Boiler Flow Control and Radiator Analytics continue operating.
 Control migration and AI-generated reports remain future milestones.
@@ -27,7 +27,7 @@ Home Assistant's `custom_components` directory.
 
 1. Open **HACS → ⋮ → Custom repositories**.
 2. Add `https://github.com/xpenno255/ha-home-heating-optimisation` with type **Integration**.
-3. Find **Home Heating Optimisation**, download release **v0.3.0**, then restart Home Assistant.
+3. Find **Home Heating Optimisation**, download release **v0.4.0**, then restart Home Assistant.
 4. Go to **Settings → Devices & services → Add integration** and select
    **Home Heating Optimisation**.
 
@@ -36,7 +36,7 @@ in HACS's default catalogue. It includes standard and high-resolution local bran
 icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
 
 HACS installs the component from the selected release tag. The attached
-`home_heating_optimisation-0.3.0.zip` is an alternative for manual installation.
+`home_heating_optimisation-0.4.0.zip` is an alternative for manual installation.
 Keep the existing heating integrations enabled: this release observes them and
 makes no thermostat or boiler commands.
 
@@ -119,11 +119,13 @@ IDs or temperature history. Source provenance remains visible locally on sensors
 See [historical analytics](docs/historical-analytics.md) for metrics, freshness,
 Recorder backfill, retention and the `record_adjustment` / `get_report` actions.
 History is optional and disabled by default. Reports gate window-wide metrics below
-80% coverage. Controller estimates remain separate from measured room air.
+80% known-state coverage. Unchanged available values are held during clean Recorder
+runs; recent-change coverage is exposed separately. This is not proof of fresh
+physical sampling. The prior recent-change expiry policy remains selectable. Controller estimates remain separate from measured room air.
 
 ## House survey (`house.yaml`)
 
-Version 0.3.0 can read the existing OT Thermostat Control survey: `house.yaml` and
+Version 0.4.0 can read the existing OT Thermostat Control survey: `house.yaml` and
 `rooms/*.yaml`. In the system options, set **House survey directory**, then confirm
 which survey room belongs to each thermostat. Unique survey climate bindings are
 suggested; mappings never change your selected sensors or controller settings.
@@ -157,7 +159,7 @@ Planned modules: operative-temperature comfort control, boiler supervision and a
 optional Heating Advisor. The advisor will select Home
 Assistant AI Task profiles per task. Extended OpenAI Conversation manages local
 Gemma; the built-in Anthropic integration manages Claude credentials, model and
-supported effort settings. Version 0.3.0 makes no AI calls.
+supported effort settings. Version 0.4.0 makes no AI calls.
 
 ## Development
 

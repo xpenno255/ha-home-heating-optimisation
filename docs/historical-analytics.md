@@ -1,4 +1,4 @@
-# Historical analytics (0.2.0)
+# Historical analytics
 
 ## What is available
 
@@ -27,30 +27,39 @@ balance or the effect of changing a valve. Unmonitored loads remain a limitation
 
 ## Input definitions and reproducibility
 
-Live observation sensors use `last_reported`. History uses `last_updated` for both
-live collection and Recorder replay: Recorder cannot reproduce the timeline of
-identical received reports. The age limits are the same as the live observer.
-Climate attributes share an entity timestamp; neither timestamp proves a separate
-physical sample for every attribute.
+Live observation sensors retain their `last_reported` expiry policy. Since 0.4.0,
+history defaults to **recorded state availability**: unchanged available readings
+remain usable within a clean Recorder run until changed or marked unavailable.
+Known Recorder stop/start boundaries clear carried readings, and actual new events
+are required after restart. Unclean Recorder runs use the earlier conservative
+age limits because the exact failure time is not known. The database run table
+is read-only and accessed through Recorder's executor.
 
-Historical active demand means **the selected normalised demand is greater than
-zero**. Unknown is not idle. Its validity follows that demand source independently
-of the air temperature. A commanded climate target is held while available; air
-and demand expire after 30 minutes. Heating/DHW context expires after five minutes,
-flow/return after ten, and outdoor temperature after two hours. Context must remain
-valid throughout a matched comparison interval.
+Coverage is known-state duration, not proof of fresh physical samples. Reports and
+sensor attributes separately expose `recent_change_coverage` and
+`demand_recent_change_coverage`: the share with a source update within 30 minutes.
+Recorder cannot reconstruct every identical report, so these fields describe
+**changes**, not sample acquisition. A frozen available upstream sensor can remain
+available in this mode; the live input-quality sensors and recency fields remain
+important. Select **Require recent state changes** in options to use the previous
+age-limited history policy.
 
-Recorder's synthetic state at a query's start can be stamped with the query time.
-Backfill deliberately requests actual events only, in daily batches, carrying
-original event timestamps between batches. Inputs stay unknown until an actual
-recorded event establishes them. Excluded/purged entities and long unchanged
-states can therefore reduce coverage. Backfill requests 15 days, subject to the
-user's Recorder retention. It runs in the background; failure or absence of
-Recorder leaves live observation and collection working. There is no automatic
-retry until reload. Calculations and history reconstruction run in executors.
+Historical active demand means the selected normalised demand is greater than
+zero. Missing/unavailable is never treated as idle. Commanded targets are not
+operative-comfort measurements. The policy and observation semantics version form
+part of the history era, so a change rebuilds current history from Recorder.
 
-Collection records source changes and five-minute samples, with explicit validity
-intervals. A clean stop writes an unknown boundary. Abrupt termination is bounded
+Backfill requests actual events only in daily batches, with one day of leading
+context beyond the maximum 14-day window. It does not trust Recorder's synthetic
+start state timestamp. It runs in the background and never delays the observer.
+If Recorder is absent or fails, live collection continues. There is no automatic
+backfill retry until reload.
+
+Collection records room and activity events plus five-minute samples. Numeric
+system context is sampled at most once per minute, with availability transitions
+retained immediately. Matching-condition averages can therefore differ within this
+one-minute sampling resolution. Controller intent alone does not create a whole
+measurement snapshot; it is retained separately at five-minute intervals. A clean stop writes an unknown boundary. Abrupt termination is bounded
 by the existing freshness limits, but its exact time cannot be recovered without
 Recorder evidence. Both daily comparison windows and the primary report share one
 calculation time. Daily comparisons are descriptive and require coverage in both
@@ -59,12 +68,17 @@ calculation time. Daily comparisons are descriptive and require coverage in both
 ## Storage and adjustment journal
 
 The integration owns `.storage/home_heating_optimisation.<entry_id>.history`.
+Version 0.4.0 stores historical collections as compressed JSON inside the atomic HA
+Store envelope. Compression/decompression runs in an executor; old payloads are
+read and migrated. Source files and private external backups are not altered.
 It never reads or changes the live Radiator Analytics store. Keep this file private:
 it contains household history and notes. Downloadable diagnostics contain counts
 and quality only. Notes are not published in entity attributes or copied into
 Recorder by the integration; service calls can still appear in HA traces/events.
 
 Current history is limited to 15 days plus a boundary observation and 50,000 points.
+Controller context has a separate limit of 4,321 five-minute samples, roughly 15
+days, and is not duplicated in every measurement record.
 If the point cap is reached, oldest points are dropped and `history_truncated` is
 reported; a busy installation may retain less than the selected window. Saves run
 with reports, adjustment actions and clean shutdown. An abrupt stop can lose the
@@ -141,14 +155,10 @@ end-to-end outputs. New ingestion intentionally differs:
 
 - Selected demand replaces `hvac_action` for demand activity and uses its own expiry.
 - Available commanded targets persist when separate air readings remain fresh.
-- System context uses per-source limits, checked across complete ramp intervals.
+- System context follows the selected availability/age policy across complete ramp intervals.
 - Unknown demand starts cannot produce scored recoveries.
 - Recorder synthetic start states cannot refresh old measurements.
 
-On 15 September 2026, the prepared private trial mapping resolved all 52 selected
-sources for nine rooms and their existing controllers. At the snapshot time, 14 of
-27 room readings and both activity inputs were stale under the current live age
-limits. Only two rooms had known historical air/demand readings at that instant.
-This is a cadence/coverage finding, not a missing-entity problem. An observation
-trial spanning real heating cycles must establish useful coverage before drawing
-optimisation conclusions. The integration has not been deployed to live HA.
+State availability and recent-change coverage should be reviewed together over
+real heating cycles before drawing optimisation conclusions. High availability
+alone does not establish measurement accuracy or fresh physical samples.

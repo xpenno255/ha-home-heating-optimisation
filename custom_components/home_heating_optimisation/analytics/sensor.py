@@ -73,7 +73,9 @@ class AnalyticsSensor(CoordinatorEntity, SensorEntity):
         attrs = {
             "window_start": result["window_start"],
             "window_end": result["window_end"],
-            "freshness_basis": "last_updated",
+            "freshness_basis": self.coordinator.config.get(
+                "history_state_policy", "recorded_state"
+            ),
         }
         if self.room_id:
             stats = result["zone_stats"][self.room_id]
@@ -83,6 +85,8 @@ class AnalyticsSensor(CoordinatorEntity, SensorEntity):
                     for k in (
                         "coverage",
                         "demand_coverage",
+                        "recent_change_coverage",
+                        "demand_recent_change_coverage",
                         "observed_hours",
                         "completed_recoveries",
                         "cancelled_recoveries",

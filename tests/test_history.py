@@ -16,6 +16,7 @@ from custom_components.home_heating_optimisation.analytics.observations import s
 from custom_components.home_heating_optimisation.analytics.store import (
     HistoryStore,
     source_signature,
+    unpack_history,
 )
 from custom_components.home_heating_optimisation.const import DOMAIN
 from tests.test_integration import entity_id, setup
@@ -83,7 +84,10 @@ def test_replay_matches_live_at_every_event_including_unknown_and_target_edges(c
             for e, rows in history.items()
             if (eligible := [s for s in rows if s.last_updated <= at])
         }
-        assert point == snapshot(states, at, config, "°C")
+        expected = snapshot(states, at, config, "°C")
+        assert {k: v for k, v in point.items() if k != "intent"} == {
+            k: v for k, v in expected.items() if k != "intent"
+        }
     assert points[-1]["zones"]["study"]["active"] is None
     assert any(p["time"] == (BASE + timedelta(minutes=11)).timestamp() for p in points)
 
@@ -112,18 +116,18 @@ async def test_storage_roundtrip_mapping_eras_and_live_precedence(hass, config):
     store.append(point)
     store.adjustments.append({"time": BASE.timestamp(), "note": "Valve checked"})
     store.merge([{**point, "zones": {}}])
-    assert store.observations == [point]
+    assert store.observations == [{k: v for k, v in point.items() if k != "intent"}]
     await store.save()
     restored = HistoryStore(hass, "test")
     await restored.load(signature)
-    assert restored.observations == [point]
+    assert restored.observations == store.observations
     renamed = deepcopy(config)
     renamed["rooms"][0]["name"] = "New name"
     assert source_signature(renamed, "°C") == signature
     renamed["rooms"][0]["air_sensor"] = "sensor.new"
     await restored.load(source_signature(renamed, "°C"))
     assert restored.observations == []
-    assert restored.previous_era["observations"] == [point]
+    assert restored.previous_era["observations"] == store.observations
     assert restored.adjustments == store.adjustments
 
 
@@ -154,7 +158,7 @@ async def test_save_retry_and_mutation_during_save(hass, config):
 
     with patch.object(store.backend, "async_save", saving):
         await store.save()
-    assert saved[0]["observations"] == []
+    assert unpack_history(saved[0])["observations"] == []
     assert len(store.observations) == 1
     await store.save()
     restored = HistoryStore(hass, "test")

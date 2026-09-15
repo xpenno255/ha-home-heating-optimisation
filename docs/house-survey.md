@@ -33,12 +33,16 @@ survey loading; this does not delete files or measured history.
 Missing measurements remain null. Gross wall area is retained as supplied; do not
 sum it with opening area as if it were net wall area. Radiator rated output is not
 current heat output. No solar gain, heat-loss coefficient or hydraulic position is
-inferred by this loader. Bearings and construction values are not silently filled
-from defaults.
+inferred by this loader. Bearings are not filled from defaults. Heated-room walls and floors may use the
+explicitly supplied `internal_wall` / `internal_floor` construction in house.yaml,
+matching the OT survey convention. These carry `construction_source: house_default`
+and the original confidence. If the house supplies no such default, the missing
+construction remains a warning; no U-value is invented.
 
 Adjacency IDs are resolved against the survey room IDs. Legacy comma-separated
-neighbours retain unknown area shares; explicit fractions must sum to one. Names
-that do not match IDs are flagged as unresolved rather than silently assigned.
+neighbours retain unknown area shares; explicit fractions must sum to one. Unique room IDs/names are matched with case/spacing normalisation. Unmatched names
+become referenced spaces with `geometry_available: false`; qualifiers such as
+first-floor toilet are preserved. They are not fabricated full room surveys.
 No symmetric wall relationships or physical coordinates are invented.
 
 Address hints, network/device details, raw notes, photo paths, occupancy routines,
@@ -52,9 +56,10 @@ to the household. No data is sent to any AI or cloud provider by this integratio
 Legacy files without `schema_version` are supported as version 1; explicit versions
 other than integer 1 are rejected. Structural errors, duplicate room IDs/YAML keys,
 unsafe YAML tags/aliases, invalid confidence labels and nonfinite/negative physical
-quantities reject the import. Missing optional data, unknown construction references,
-unknown boundary types and unresolved neighbours produce warnings and `partial`
-status. Valid surveys show `ready`; absent configuration shows `not_configured`.
+quantities reject the import. Missing required areas, unknown construction references and unknown boundary
+types produce warnings and `partial` status. Unsurveyed neighbour references and
+unspecified wall shares are separate advisories: useful layout context is retained,
+but those missing details remain unsuitable for a complete heat-loss model. Valid surveys show `ready`; absent configuration shows `not_configured`.
 A removed mapped survey room shows `mapping_invalid`.
 
 The `House model status` sensor exposes counts and error codes, not the household

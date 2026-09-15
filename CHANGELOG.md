@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 — history retention and survey compatibility
+
+- Separate recorded-state availability from recent-change coverage; retain the previous conservative policy as an option.
+- Exclude known Recorder downtime and use conservative expiry for unclean runs.
+- Keep room/activity events; sample numeric boiler context every minute and controller intent every five minutes.
+- Store controller context separately and compress historical payloads; migrate older stores with a distinct observation era.
+- Honour supplied internal-wall/floor survey defaults with explicit provenance.
+- Represent unsurveyed neighbours as named references, preserve qualifiers, and expose missing wall shares as advisories.
+
 ## 0.3.0 — read-only house survey
 
 - Optional house.yaml and room-file loading with explicit thermostat mappings.

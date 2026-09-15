@@ -14,6 +14,7 @@ from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
     "analytics_enabled": False,
+    "history_state_policy": "recorded_state",
     "analysis_window_days": 7,
     "update_interval_minutes": 15,
     "comfort_tolerance": 0.3,
@@ -21,6 +22,14 @@ ANALYTICS_DEFAULTS = {
 }
 ANALYTICS_VALIDATORS = {
     "analytics_enabled": bool,
+    "history_state_policy": selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=[
+                {"value": "recorded_state", "label": "Recorded state availability"},
+                {"value": "recent_change", "label": "Require recent state changes"},
+            ]
+        )
+    ),
     "analysis_window_days": vol.All(vol.Coerce(int), vol.Range(min=3, max=14)),
     "update_interval_minutes": vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
     "comfort_tolerance": vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2)),
