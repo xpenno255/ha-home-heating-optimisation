@@ -1,0 +1,13 @@
+{
+  "domain": "home_heating_optimisation",
+  "name": "Home Heating Optimisation",
+  "codeowners": ["@xpenno255"],
+  "config_flow": true,
+  "documentation": "https://github.com/xpenno255/ha-home-heating-optimisation",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/xpenno255/ha-home-heating-optimisation/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

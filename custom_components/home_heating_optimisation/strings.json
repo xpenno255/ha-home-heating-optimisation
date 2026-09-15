@@ -1,0 +1,134 @@
+{
+  "title": "Home Heating Optimisation",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Observe your heating",
+        "description": "Select the room thermostats to observe. This version only reads data; existing heating controls continue to operate.",
+        "data": {
+          "zones": "Room thermostats"
+        }
+      },
+      "room": {
+        "title": "Configure {room}",
+        "description": "Optionally select an independent air sensor and a zone demand sensor. Otherwise the thermostat attributes are used. This does not change the sensor used by your thermostat.",
+        "data": {
+          "name": "Room name",
+          "air_sensor": "Independent air temperature",
+          "demand_sensor": "Zone heat demand"
+        },
+        "data_description": {
+          "demand_sensor": "Percentage (0\u2013100 %) or unitless fraction (0\u20131)."
+        }
+      },
+      "system": {
+        "title": "System observations",
+        "description": "All inputs are optional. Select measured flow/return temperatures. For DHW, use a resolved signal such as Boiler Flow Control DHW Active. Unknown activity remains unknown.",
+        "data": {
+          "outdoor_temperature": "Outdoor temperature",
+          "flow_temperature": "Actual boiler flow temperature",
+          "return_temperature": "Actual boiler return temperature",
+          "flow_setpoint": "Boiler flow setpoint readback",
+          "heating_active": "Space heating active",
+          "dhw_active": "Resolved DHW active"
+        }
+      }
+    },
+    "error": {
+      "no_rooms": "Select at least one room.",
+      "invalid_source": "Choose a valid source outside this integration.",
+      "invalid_name": "Enter a room name."
+    },
+    "abort": {
+      "already_configured": "Only one heating system can be configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Observe your heating",
+        "description": "Select the room thermostats to observe. This version only reads data; existing heating controls continue to operate.",
+        "data": {
+          "zones": "Room thermostats"
+        }
+      },
+      "room": {
+        "title": "Configure {room}",
+        "description": "Optionally select an independent air sensor and a zone demand sensor. Otherwise the thermostat attributes are used. This does not change the sensor used by your thermostat.",
+        "data": {
+          "name": "Room name",
+          "air_sensor": "Independent air temperature",
+          "demand_sensor": "Zone heat demand"
+        },
+        "data_description": {
+          "demand_sensor": "Percentage (0\u2013100 %) or unitless fraction (0\u20131)."
+        }
+      },
+      "system": {
+        "title": "System observations",
+        "description": "All inputs are optional. Select measured flow/return temperatures. For DHW, use a resolved signal such as Boiler Flow Control DHW Active. Unknown activity remains unknown.",
+        "data": {
+          "outdoor_temperature": "Outdoor temperature",
+          "flow_temperature": "Actual boiler flow temperature",
+          "return_temperature": "Actual boiler return temperature",
+          "flow_setpoint": "Boiler flow setpoint readback",
+          "heating_active": "Space heating active",
+          "dhw_active": "Resolved DHW active"
+        }
+      }
+    },
+    "error": {
+      "no_rooms": "Select at least one room.",
+      "invalid_source": "Choose a valid source outside this integration.",
+      "invalid_name": "Enter a room name."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "air": {
+        "name": "{room} air temperature"
+      },
+      "target": {
+        "name": "{room} commanded air target"
+      },
+      "deficit": {
+        "name": "{room} air target deficit"
+      },
+      "demand": {
+        "name": "{room} heat demand"
+      },
+      "outdoor_temperature": {
+        "name": "Outdoor temperature"
+      },
+      "flow_temperature": {
+        "name": "Actual flow temperature"
+      },
+      "return_temperature": {
+        "name": "Actual return temperature"
+      },
+      "flow_setpoint": {
+        "name": "Flow setpoint readback"
+      },
+      "operating_state": {
+        "name": "Observed operating state",
+        "state": {
+          "heating": "Space heating",
+          "dhw": "Hot water",
+          "mixed": "Heating and hot water",
+          "idle": "Idle"
+        }
+      },
+      "input_availability": {
+        "name": "Input availability"
+      }
+    },
+    "binary_sensor": {
+      "heating_active": {
+        "name": "Space heating active"
+      },
+      "dhw_active": {
+        "name": "DHW active"
+      }
+    }
+  }
+}
