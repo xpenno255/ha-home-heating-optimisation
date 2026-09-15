@@ -1,5 +1,7 @@
 # Home Heating Optimisation
 
+<img src="custom_components/home_heating_optimisation/brand/icon.png" width="96" alt="Home Heating Optimisation">
+
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
@@ -124,6 +126,13 @@ Tests use an isolated Home Assistant instance. They cover configuration, units,
 quality, activity states, source expiry, options, entity identity, unload/reload,
 absence of device-service calls and package contents. The GitHub workflow also runs
 hassfest and HACS validation. No live heating deployment has been performed.
+
+The initial feature branch skips HACS's GitHub default-branch licence lookup until
+the first merge; package tests verify the MIT licence in this branch and the ZIP.
+The full HACS licence check runs on `main` and subsequent feature branches.
+
+Brand artwork is in `assets/icon.svg`. To regenerate its PNGs, install the optional
+development dependency `CairoSVG==2.8.2` and run `python scripts/build_icon.py`.
 
 Remove the integration through Settings → Devices & services. It owns only its
 observation entities; source controls and the three existing integrations remain
