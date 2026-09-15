@@ -40,17 +40,28 @@
           "analysis_window_days": "Analysis window (days)",
           "update_interval_minutes": "Report interval (minutes)",
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
-          "recovery_minutes": "Recovery deadline (minutes)"
+          "recovery_minutes": "Recovery deadline (minutes)",
+          "survey_directory": "House survey directory (optional)"
         },
         "data_description": {
-          "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown."
+          "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
+          "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only."
+        }
+      },
+      "survey_rooms": {
+        "title": "Survey mapping: {room}",
+        "description": "Choose the surveyed room for {thermostat}. A matching climate binding is suggested when unique; confirm it here. Leave unmonitored or ambiguous rooms unmapped. Survey warnings: {warnings}; details are available in Get house model.",
+        "data": {
+          "survey_room": "Survey room"
         }
       }
     },
     "error": {
       "no_rooms": "Select at least one room.",
       "invalid_source": "Choose a valid source outside this integration.",
-      "invalid_name": "Enter a room name."
+      "invalid_name": "Enter a room name.",
+      "invalid_survey": "Cannot load this survey. Check its path, YAML format, room IDs and numeric values. Files must be inside the Home Assistant configuration directory.",
+      "invalid_survey_mapping": "Choose an existing survey room; each room can only be mapped once."
     },
     "abort": {
       "already_configured": "Only one heating system can be configured."
@@ -96,17 +107,28 @@
           "analysis_window_days": "Analysis window (days)",
           "update_interval_minutes": "Report interval (minutes)",
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
-          "recovery_minutes": "Recovery deadline (minutes)"
+          "recovery_minutes": "Recovery deadline (minutes)",
+          "survey_directory": "House survey directory (optional)"
         },
         "data_description": {
-          "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown."
+          "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
+          "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only."
+        }
+      },
+      "survey_rooms": {
+        "title": "Survey mapping: {room}",
+        "description": "Choose the surveyed room for {thermostat}. A matching climate binding is suggested when unique; confirm it here. Leave unmonitored or ambiguous rooms unmapped. Survey warnings: {warnings}; details are available in Get house model.",
+        "data": {
+          "survey_room": "Survey room"
         }
       }
     },
     "error": {
       "no_rooms": "Select at least one room.",
       "invalid_source": "Choose a valid source outside this integration.",
-      "invalid_name": "Enter a room name."
+      "invalid_name": "Enter a room name.",
+      "invalid_survey": "Cannot load this survey. Check its path, YAML format, room IDs and numeric values. Files must be inside the Home Assistant configuration directory.",
+      "invalid_survey_mapping": "Choose an existing survey room; each room can only be mapped once."
     }
   },
   "entity": {
@@ -188,6 +210,9 @@
       },
       "analytics_comparison": {
         "name": "Daily comfort comparison"
+      },
+      "house_model": {
+        "name": "House model status"
       }
     },
     "binary_sensor": {
@@ -221,6 +246,14 @@
     "get_report": {
       "name": "Get heating report",
       "description": "Return historical metrics, coverage, adjustment notes and recent controller context. No AI or device commands are called."
+    },
+    "get_house_model": {
+      "name": "Get house model",
+      "description": "Return the current read-only thermal survey, confidence labels and explicit room mappings. Excludes address, network details, photos and occupancy routines."
+    },
+    "reload_house_model": {
+      "name": "Reload house model",
+      "description": "Read the configured survey files again. Invalid files make the model unavailable; measurements and existing controls continue."
     }
   }
 }

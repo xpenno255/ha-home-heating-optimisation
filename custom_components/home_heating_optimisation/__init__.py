@@ -25,6 +25,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator = HeatingCoordinator(hass, entry)
     entry.runtime_data = coordinator
     await coordinator.async_config_entry_first_refresh()
+    await coordinator.load_house()
     if coordinator.config.get("analytics_enabled", False):
         coordinator.analytics = AnalyticsCoordinator(hass, entry, coordinator.config)
         await coordinator.analytics.initialise()

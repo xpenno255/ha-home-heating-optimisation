@@ -28,6 +28,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         from .analytics.sensor import create_sensors
 
         entities.extend(create_sensors(coordinator.analytics, entry))
+    entities.append(HouseModelSensor(coordinator, entry))
     async_add_entities(entities)
 
 
@@ -61,3 +62,25 @@ class HeatingSensor(HeatingEntity, SensorEntity):
             return self.room.deficit
         value = self.reading.value
         return round(value * 100, 2) if value is not None and self.key == "demand" else value
+
+
+class HouseModelSensor(HeatingEntity, SensorEntity):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "house_model")
+
+    @property
+    def native_value(self):
+        return self.coordinator.house_report()["status"]
+
+    @property
+    def extra_state_attributes(self):
+        report = self.coordinator.house_report()
+        return {
+            "survey_room_count": len(report["rooms"]),
+            "mapped_room_count": report["mapped_room_count"],
+            "unmapped_configured_room_count": report["unmapped_configured_room_count"],
+            "warning_count": len(report["warnings"]),
+            "error_code": report.get("error_code"),
+        }

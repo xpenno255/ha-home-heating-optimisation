@@ -10,6 +10,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, effective_config
 from .observations import make_snapshot, watched_entities
+from .survey import async_load_survey, evidence
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,8 +19,17 @@ class HeatingCoordinator(DataUpdateCoordinator):
     def __init__(self, hass, entry):
         super().__init__(hass, LOGGER, name=DOMAIN, config_entry=entry)
         self.analytics = None
+        self.survey = {"status": "not_configured", "rooms": {}, "bindings": {}, "warnings": []}
         self.config = effective_config(entry)
         self.sources = watched_entities(self.config)
+
+    async def load_house(self):
+        self.survey = await async_load_survey(self.hass, self.config)
+        if self.data is not None:
+            self.async_set_updated_data(self.data)
+
+    def house_report(self):
+        return evidence(self.survey, self.config)
 
     def snapshot(self):
         return make_snapshot(

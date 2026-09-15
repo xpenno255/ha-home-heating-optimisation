@@ -10,6 +10,7 @@ from homeassistant.helpers import selector
 
 from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, NAME, SYSTEM_SOURCES, effective_config
+from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
     "analytics_enabled": False,
@@ -134,7 +135,18 @@ class MappingFlow:
                 self.pending.update(
                     {k: user_input.get(k, default) for k, default in ANALYTICS_DEFAULTS.items()}
                 )
-                return self.async_create_entry(title=NAME, data=self.pending)
+                self.pending["survey_directory"] = user_input.get("survey_directory", "").strip()
+                if self.pending["survey_directory"]:
+                    self.survey = await async_load_survey(self.hass, self.pending)
+                    if self.survey["status"] == "error":
+                        errors["base"] = "invalid_survey"
+                    else:
+                        self.survey_index = 0
+                        self.pending["survey_rooms"] = {}
+                        return await self.async_step_survey_rooms()
+                else:
+                    self.pending["survey_rooms"] = {}
+                    return self.async_create_entry(title=NAME, data=self.pending)
         return self.async_show_form(
             step_id="system",
             errors=errors,
@@ -145,6 +157,7 @@ class MappingFlow:
                         for key, spec in SYSTEM_SOURCES.items()
                     },
                     optional("boiler_decision_sensor", self.current): entity_selector(("sensor",)),
+                    optional("survey_directory", self.current): str,
                     **{
                         vol.Optional(k, default=self.current.get(k, default)): ANALYTICS_VALIDATORS[
                             k
@@ -153,6 +166,47 @@ class MappingFlow:
                     },
                 }
             ),
+        )
+
+    async def async_step_survey_rooms(self, user_input=None):
+        room = self.pending["rooms"][self.survey_index]
+        errors = {}
+        if user_input is not None:
+            chosen = user_input.get("survey_room", "")
+            if chosen and (
+                chosen not in self.survey["rooms"]
+                or chosen in self.pending["survey_rooms"].values()
+            ):
+                errors["base"] = "invalid_survey_mapping"
+            else:
+                if chosen:
+                    self.pending["survey_rooms"][room["id"]] = chosen
+                self.survey_index += 1
+                if self.survey_index < len(self.pending["rooms"]):
+                    return await self.async_step_survey_rooms()
+                return self.async_create_entry(title=NAME, data=self.pending)
+        suggestions = suggest_mappings(self.survey, self.pending)
+        existing = self.current.get("survey_rooms", {})
+        current = existing.get(room["id"], suggestions.get(room["id"], ""))
+        choices = [{"value": "", "label": "Not mapped"}] + [
+            {"value": rid, "label": f"{r['name']} ({rid})"}
+            for rid, r in self.survey["rooms"].items()
+        ]
+        return self.async_show_form(
+            step_id="survey_rooms",
+            errors=errors,
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "survey_room", default=current if current in self.survey["rooms"] else ""
+                    ): selector.SelectSelector(selector.SelectSelectorConfig(options=choices))
+                }
+            ),
+            description_placeholders={
+                "room": room["name"],
+                "thermostat": room["climate"],
+                "warnings": str(len(self.survey["warnings"])),
+            },
         )
 
 

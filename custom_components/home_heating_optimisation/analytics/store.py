@@ -30,6 +30,8 @@ def source_signature(config, unit):
             if k
             not in (
                 "rooms",
+                "survey_directory",
+                "survey_rooms",
                 "analytics_enabled",
                 "analysis_window_days",
                 "update_interval_minutes",
