@@ -115,3 +115,18 @@ attempt/schedule metadata. Corrupt/unsupported storage is preserved and blocks n
 calls. Failed saves also block calls until reload. Removing the integration preserves
 this private store. Home Assistant/provider traces or logs can contain AI task inputs
 and outputs; integration diagnostics omit them.
+
+## Initial local-model evaluation
+
+The installed `gemma-4-26b-a4b` endpoint returned structured reports in approximately
+13 seconds in the initial live trial. Its 16,384-token context limit required compact
+survey evidence and a 2,000-token output allowance. The direct generation schema
+uses arrays of allowed references without `uniqueItems`, which this server's grammar
+backend rejects when using a multiple-select selector through the generic service.
+
+The trial also produced unsupported causal explanations, invented reference paths,
+and some irrelevant follow-up checks. Explicit definitions improved the summaries;
+reference constraints and validation reject unknown IDs. Existing IDs can still be
+cited incorrectly, and a plausible suggestion can still be irrelevant. Treat Gemma
+reports as drafts for review, not validated optimisation recommendations. Scheduled
+reviews remain opt-in. A like-for-like Claude evaluation is still outstanding.
