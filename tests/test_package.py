@@ -14,6 +14,7 @@ def test_install_archive(tmp_path):
         assert all(n.startswith(root) for n in names)
         assert root + "__init__.py" in names
         assert root + "config_flow.py" in names
+        assert "MIT License" in archive.read(root + "LICENSE").decode()
         manifest = json.loads(archive.read(root + "manifest.json"))
         assert manifest["domain"] == "home_heating_optimisation"
         assert manifest["version"] == "0.1.0"
