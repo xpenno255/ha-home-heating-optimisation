@@ -5,7 +5,7 @@
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
-**Version 0.5.0 is observation-only, with optional historical analytics.** It publishes
+**Version 0.5.1 is observation-only, with optional historical analytics.** It publishes
 sensors, structured reports and a private adjustment journal. Existing
 OT Thermostat Control, Boiler Flow Control and Radiator Analytics continue operating.
 An optional Heating Advisor generates reports through selected Home Assistant AI Task profiles. Control migration remains a future milestone.
@@ -27,7 +27,7 @@ Home Assistant's `custom_components` directory.
 
 1. Open **HACS → ⋮ → Custom repositories**.
 2. Add `https://github.com/xpenno255/ha-home-heating-optimisation` with type **Integration**.
-3. Find **Home Heating Optimisation**, download release **v0.5.0**, then restart Home Assistant.
+3. Find **Home Heating Optimisation**, download release **v0.5.1**, then restart Home Assistant.
 4. Go to **Settings → Devices & services → Add integration** and select
    **Home Heating Optimisation**.
 
@@ -36,7 +36,7 @@ in HACS's default catalogue. It includes standard and high-resolution local bran
 icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
 
 HACS installs the component from the selected release tag. The attached
-`home_heating_optimisation-0.5.0.zip` is an alternative for manual installation.
+`home_heating_optimisation-0.5.1.zip` is an alternative for manual installation.
 Keep the existing heating integrations enabled: this release observes them and
 makes no thermostat or boiler commands.
 
@@ -125,7 +125,7 @@ physical sampling. The prior recent-change expiry policy remains selectable. Con
 
 ## House survey (`house.yaml`)
 
-Version 0.5.0 can read the existing OT Thermostat Control survey: `house.yaml` and
+Version 0.5.1 can read the existing OT Thermostat Control survey: `house.yaml` and
 `rooms/*.yaml`. In the system options, set **House survey directory**, then confirm
 which survey room belongs to each thermostat. Unique survey climate bindings are
 suggested; mappings never change your selected sensors or controller settings.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 — provider diagnostics and repeatable history sampling
+
+- Align sampling and daily backfill boundaries so overlapping reloads reuse the same sample grid.
+- Rebuild the current recording era once while retaining the prior era privately.
+- Expose provider error categories without private error text.
+- Document the verified local profile output allowance, including Home Assistant prompt overhead.
+
 ## 0.5.0 — optional Heating Advisor
 
 - Per-task AI Task profiles for daily summaries, weekly reviews and investigations.

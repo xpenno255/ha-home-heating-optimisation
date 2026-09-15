@@ -135,3 +135,47 @@ def test_survey_defaults_are_labelled_and_unsurveyed_spaces_are_references(surve
     assert "toilet_first_floor" in model["referenced_spaces"]
     assert model["status"] == "ready" and not model["warnings"]
     assert model["advisories"]
+
+
+def test_replay_sampling_stays_identical_when_reload_time_moves(config):
+    """An overlapping Recorder rebuild must not create a second sample grid."""
+    from datetime import timedelta
+
+    from homeassistant.core import State
+    from homeassistant.util import dt as dt_util
+
+    start = dt_util.parse_datetime("2026-09-01T00:00:00+00:00")
+    config = {**config, "history_state_policy": "recorded_state"}
+    history = {
+        "climate.study": [
+            State(
+                "climate.study",
+                "heat",
+                {"current_temperature": 18, "temperature": 20},
+                last_updated=start,
+            )
+        ],
+        "sensor.flow": [
+            State(
+                "sensor.flow",
+                str(40 + i % 3),
+                {"unit_of_measurement": "°C"},
+                last_updated=start + timedelta(seconds=i),
+            )
+            for i in range(7200)
+        ],
+    }
+    first, _ = reconstruct(
+        history, start + timedelta(seconds=17), start + timedelta(seconds=7017), config, "°C"
+    )
+    second, _ = reconstruct(
+        history, start + timedelta(seconds=47), start + timedelta(seconds=7047), config, "°C"
+    )
+    lower, upper = (
+        (start + timedelta(minutes=5)).timestamp(),
+        (start + timedelta(minutes=115)).timestamp(),
+    )
+    a = {p["time"]: p for p in first if lower <= p["time"] <= upper}
+    b = {p["time"]: p for p in second if lower <= p["time"] <= upper}
+    assert a == b
+    assert len(a) < 200

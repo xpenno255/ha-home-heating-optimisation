@@ -17,6 +17,8 @@ def mock_recorder_before_hass(recorder_db_url):
 
 async def test_real_recorder_backfill_and_reload(hass, recorder_mock, freezer, config):
     config["analytics_enabled"] = True
+    # Keep this short fixture above one-decimal coverage rounding.
+    config["analysis_window_days"] = 3
     for minute, demand, temperature in ((0, 0, 18), (5, 70, 18.5), (5, 40, 19)):
         freezer.tick(timedelta(minutes=minute))
         hass.states.async_set(

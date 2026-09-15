@@ -9,7 +9,11 @@ from functools import partial
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+    async_track_utc_time_change,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -91,8 +95,11 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
         self.unsubscribers.extend(
             [
                 async_track_state_change_event(self.hass, self.sources, self.capture),
-                async_track_time_interval(
-                    self.hass, self.capture, timedelta(seconds=SAMPLE_SECONDS)
+                async_track_utc_time_change(
+                    self.hass,
+                    self.capture,
+                    minute=list(range(0, 60, SAMPLE_SECONDS // 60)),
+                    second=0,
                 ),
                 async_track_time_interval(
                     self.hass,

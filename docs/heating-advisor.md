@@ -18,7 +18,7 @@ For Extended OpenAI, add an **AI Task** subentry to your existing local connecti
 
 - Name it Heating Advisor.
 - Select the model served by your endpoint, with an output allowance suitable for
-  reports (2,000 tokens is a tested starting point for the local Gemma deployment).
+  reports (1,500 tokens is a tested starting point for the local Gemma deployment).
 - Set Home Assistant APIs to none and **Functions to the literal `[]`**. An empty
   field inherits Extended OpenAI's default tools and is rejected.
 - Extra body must be empty, `{}`, or a literal JSON object containing only
@@ -120,7 +120,7 @@ and outputs; integration diagnostics omit them.
 
 The installed `gemma-4-26b-a4b` endpoint returned structured reports in approximately
 13 seconds in the initial live trial. Its 16,384-token context limit required compact
-survey evidence and a 2,000-token output allowance. The direct generation schema
+survey evidence and a 1,500-token output allowance through Home Assistant. The direct generation schema
 uses arrays of allowed references without `uniqueItems`, which this server's grammar
 backend rejects when using a multiple-select selector through the generic service.
 
@@ -130,3 +130,5 @@ reference constraints and validation reject unknown IDs. Existing IDs can still 
 cited incorrectly, and a plausible suggestion can still be irrelevant. Treat Gemma
 reports as drafts for review, not validated optimisation recommendations. Scheduled
 reviews remain opt-in. A like-for-like Claude evaluation is still outstanding.
+
+Provider failures expose an error category without provider response text. Context-limit and unsupported-grammar errors are identified separately.

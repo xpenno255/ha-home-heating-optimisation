@@ -38,4 +38,4 @@ def should_capture(config, changed, before, after, at, last):
             or new.state in ("unknown", "unavailable")
         ):
             return True
-    return last is None or at - last >= CONTEXT_SECONDS
+    return last is None or int(at // CONTEXT_SECONDS) > int(last // CONTEXT_SECONDS)
