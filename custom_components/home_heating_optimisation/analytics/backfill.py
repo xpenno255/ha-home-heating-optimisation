@@ -7,30 +7,57 @@ from functools import partial
 from ..observations import watched_entities
 from .const import MAX_POINTS, SAMPLE_SECONDS
 from .observations import snapshot
+from .runs import recorded_runs
+from .sampling import should_capture
 
 
-def reconstruct(history, start, end, config, climate_unit, initial_states=None):
+def reconstruct(history, start, end, config, climate_unit, initial_states=None, runs=None):
     events = {}
     states = initial_states if initial_states is not None else {}
     for entity, rows in history.items():
         for state in sorted(rows, key=lambda s: s.last_updated):
             at = state.last_updated
-            if at <= start:
+            if at < start:
                 states[entity] = state
             elif at <= end:
                 events.setdefault(at, {})[entity] = state
+    boundaries = {t for a, b, _ in (runs or []) for t in (a, b) if start <= t <= end}
+    for t in boundaries:
+        events.setdefault(t, {})
+    ticks = set()
     at = start
     while at <= end:
         events.setdefault(at, {})
+        ticks.add(at)
         at += timedelta(seconds=SAMPLE_SECONDS)
     events.setdefault(end, {})
     result = deque(maxlen=MAX_POINTS)
     count = 0
-    # Keep every event in the retained interval: do not hide target or demand edges.
+    # Keep room/activity edges exactly; sample numeric and controller context.
+    last_capture = None
     for at, changes in sorted(events.items()):
+        active = next((r for r in (runs or []) if r[0] <= at < r[1]), None)
+        if at in boundaries or (runs is not None and active is None):
+            states.clear()
+        before = dict(states)
         states.update(changes)
-        result.append(snapshot(states, at, config, climate_unit))
-        count += 1
+        selected = (
+            config
+            if runs is None or (active and active[2])
+            else {**config, "history_state_policy": "recent_change"}
+        )
+        if (
+            at in ticks
+            or at == end
+            or at in boundaries
+            or should_capture(config, set(changes), before, states, at.timestamp(), last_capture)
+        ):
+            point = snapshot(states, at, selected, climate_unit)
+            if at not in ticks and at != end:
+                point.pop("intent", None)
+            result.append(point)
+            count += 1
+            last_capture = at.timestamp()
     return list(result), count > MAX_POINTS
 
 
@@ -40,6 +67,7 @@ async def async_backfill(hass, config, start, end):
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.history import get_significant_states
 
+    runs = await get_instance(hass).async_add_executor_job(recorded_runs, hass, start, end)
     retained = {}
     truncated = False
     carried_states = {}
@@ -65,6 +93,7 @@ async def async_backfill(hass, config, start, end):
             config,
             hass.config.units.temperature_unit,
             carried_states,
+            runs,
         )
         retained.update({p["time"]: p for p in points})
         truncated |= limited or len(retained) > MAX_POINTS

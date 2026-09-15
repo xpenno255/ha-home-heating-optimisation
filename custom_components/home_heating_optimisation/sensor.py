@@ -82,5 +82,6 @@ class HouseModelSensor(HeatingEntity, SensorEntity):
             "mapped_room_count": report["mapped_room_count"],
             "unmapped_configured_room_count": report["unmapped_configured_room_count"],
             "warning_count": len(report["warnings"]),
+            "advisory_count": len(report.get("advisories", [])),
             "error_code": report.get("error_code"),
         }

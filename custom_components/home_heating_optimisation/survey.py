@@ -109,9 +109,7 @@ def adjacency(value):
         return result
     if not isinstance(value, str):
         raise SurveyError("invalid_adjacency")
-    names = list(
-        dict.fromkeys(re.sub(r"\s*\([^)]*\)", "", v).strip() for v in value.split(",") if v.strip())
-    )
+    names = list(dict.fromkeys(v.strip() for v in value.split(",") if v.strip()))
     return [{"room_id": label(n), "area_fraction": 1 if len(names) == 1 else None} for n in names]
 
 
@@ -185,6 +183,17 @@ def clean_room(data, fallback, constructions, warnings):
                     warnings.append({"code": "missing_emitter_rating", "room_id": rid})
             if section in ("boundaries", "openings"):
                 key = out.get("construction")
+                if key is None and section == "boundaries" and out.get("boundary") == "heated_room":
+                    key = (
+                        "internal_floor"
+                        if str(out.get("face", "")).upper() in ("FLOOR", "CEILING")
+                        else "internal_wall"
+                    )
+                    if key in constructions:
+                        out["construction"] = key
+                        out["construction_source"] = "house_default"
+                else:
+                    out["construction_source"] = "explicit"
                 out["construction_properties"] = constructions.get(key)
                 if key not in constructions:
                     warnings.append({"code": "unknown_construction", "room_id": rid})
@@ -252,12 +261,49 @@ def load_survey(directory, config_root):
             raise SurveyError("duplicate_room_id")
         rooms[room["id"]] = room
         bindings[room["id"]] = links
+    aliases = {}
+
+    def normalise(value):
+        return re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+
+    for rid, room in rooms.items():
+        for name in (rid, room["name"]):
+            aliases.setdefault(normalise(name), set()).add(rid)
+    referenced = {}
+    advisories = [w for w in warnings if w["code"] == "unspecified_adjacency_fractions"]
+    warnings = [w for w in warnings if w["code"] != "unspecified_adjacency_fractions"]
     for room in rooms.values():
         for boundary in room["boundaries"]:
             for adjacent in boundary["adjacent"]:
-                adjacent["resolved"] = adjacent["room_id"] in rooms
-                if not adjacent["resolved"]:
-                    warnings.append({"code": "unresolved_adjacency", "room_id": room["id"]})
+                original = adjacent["room_id"]
+                candidates = aliases.get(normalise(original), set())
+                if not candidates:
+                    candidates = aliases.get(
+                        normalise(re.sub(r"\s*\([^)]*\)", "", original)), set()
+                    )
+                adjacent["reference"] = original
+                if original in rooms or len(candidates) == 1:
+                    adjacent["room_id"] = original if original in rooms else next(iter(candidates))
+                    adjacent["resolved"] = True
+                    adjacent["resolution"] = "survey_room"
+                else:
+                    adjacent["resolved"] = False
+                    adjacent["resolution"] = "referenced_space"
+                    # Preserve qualifiers (e.g. first-floor toilet) for unsurveyed spaces.
+                    space_id = normalise(original)
+                    referenced[space_id] = {
+                        "name": original,
+                        "source": "boundary_reference",
+                        "geometry_available": False,
+                    }
+                    adjacent["reference_id"] = space_id
+                    advisories.append(
+                        {
+                            "code": "unsurveyed_adjacent_space",
+                            "room_id": room["id"],
+                            "reference_id": space_id,
+                        }
+                    )
     return {
         "status": "partial" if warnings else "ready",
         "schema_version": 1,
@@ -271,6 +317,8 @@ def load_survey(directory, config_root):
             **provenance(facts),
         },
         "rooms": rooms,
+        "referenced_spaces": referenced,
+        "advisories": advisories,
         "bindings": bindings,
         "warnings": warnings,
     }

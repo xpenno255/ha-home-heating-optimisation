@@ -1,7 +1,8 @@
 """Recorder-reproducible observations using the shared input normalisation.
 
 Identical last_reported heartbeats are not retained by Recorder. Historical
-coverage therefore uses last_updated for both live collection and backfill.
+recency therefore uses last_updated for both live collection and backfill.
+Availability can persist independently under the recorded-state policy.
 """
 
 import math
@@ -77,19 +78,23 @@ def intent(states, entity):
 
 
 def snapshot(states, at, config, climate_unit):
+    available_states = config.get("history_state_policy", "recorded_state") == "recorded_state"
     read_at = partial(read, states, now=at, time_basis="last_updated", climate_unit=climate_unit)
+    room_age = None if available_states else ROOM_MAX_AGE
     zones = {}
     decisions = {}
     for room in config["rooms"]:
         climate = room["climate"]
         air = read_at(
             room.get("air_sensor") or climate,
+            max_age=room_age,
             attribute=None if room.get("air_sensor") else "current_temperature",
         )
         target = read_at(climate, attribute="temperature", max_age=None)
         demand = read_at(
             room.get("demand_sensor") or climate,
             kind="demand",
+            max_age=room_age,
             attribute=None if room.get("demand_sensor") else "heat_demand",
         )
         zones[room["id"]] = {
@@ -97,19 +102,31 @@ def snapshot(states, at, config, climate_unit):
             "target": target.value,
             "active": demand.value > 0 if demand.value is not None else None,
             "demand": demand.value,
-            "valid_until": expiry(air, ROOM_MAX_AGE, at)
+            "valid_until": at.timestamp() + ROOM_MAX_AGE
+            if available_states and air.value is not None and target.value is not None
+            else expiry(air, ROOM_MAX_AGE, at)
             if target.value is not None
             else at.timestamp(),
-            "demand_valid_until": expiry(demand, ROOM_MAX_AGE, at),
+            "demand_valid_until": at.timestamp() + ROOM_MAX_AGE
+            if available_states and demand.value is not None
+            else expiry(demand, ROOM_MAX_AGE, at),
+            "change_valid_until": expiry(air, ROOM_MAX_AGE, at),
+            "demand_change_valid_until": expiry(demand, ROOM_MAX_AGE, at),
             "temperature_updated": air.reported_at.timestamp() if air.reported_at else None,
         }
         decisions[room["id"]] = {k: intent(states, room[k]) for k in ROOM_INTENT if room.get(k)}
     context, valid = {}, {}
     for key, name in CONTEXT.items():
         spec = SYSTEM_SOURCES[key]
-        value = read_at(config.get(key), kind=spec.kind, max_age=spec.max_age)
+        value = read_at(
+            config.get(key), kind=spec.kind, max_age=None if available_states else spec.max_age
+        )
         context[name] = value.value
-        valid[name] = expiry(value, spec.max_age, at)
+        valid[name] = (
+            at.timestamp() + ROOM_MAX_AGE
+            if available_states and value.value is not None
+            else expiry(value, spec.max_age, at)
+        )
     return {
         "time": at.timestamp(),
         "zones": zones,

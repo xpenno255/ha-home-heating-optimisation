@@ -19,6 +19,7 @@ from .analyzer import compare_windows, compute_analytics
 from .backfill import async_backfill
 from .const import SAMPLE_SECONDS
 from .observations import snapshot
+from .sampling import should_capture
 from .store import HistoryStore, source_signature
 
 LOGGER = logging.getLogger(__name__)
@@ -56,6 +57,8 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
         self.task = None
         self.refresh_task = None
         self.closed = False
+        self.source_states = {}
+        self.last_capture = None
         self.calculation_lock = asyncio.Lock()
         self.unsubscribers = []
         self.async_set_updated_data(
@@ -73,9 +76,14 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
             return
         now = dt_util.utcnow()
         states = {e: s for e in self.sources if (s := self.hass.states.get(e)) is not None}
-        self.store.append(
-            snapshot(states, now, self.config, self.hass.config.units.temperature_unit)
-        )
+        changed = {_event.data["entity_id"]} if hasattr(_event, "data") else set()
+        before = self.source_states
+        self.source_states = states
+        if should_capture(self.config, changed, before, states, now.timestamp(), self.last_capture):
+            self.store.append(
+                snapshot(states, now, self.config, self.hass.config.units.temperature_unit)
+            )
+            self.last_capture = now.timestamp()
 
     @callback
     def start(self):
@@ -147,11 +155,13 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
                 "adjustments": self.store.adjustments,
                 "recent_decision_context": [
                     {"time": p["time"], "intent": p.get("intent", {})}
-                    for p in self.store.observations[-100:]
+                    for p in self.store.decision_context[-100:]
                 ],
                 "definitions": {
                     "demand_active": "selected demand > 0",
-                    "freshness_basis": "last_updated",
+                    "freshness_basis": self.config.get("history_state_policy", "recorded_state"),
+                    "coverage": "Known recorded state duration; not proof of fresh physical samples. Recent-change coverage is reported separately.",
+                    "context_sampling_seconds": 60,
                     "decision_context": "reported controller intent and estimates; not measured room comfort",
                     "control": "observation_only",
                 },
@@ -184,6 +194,8 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
             "observation_count": len(self.store.observations),
             "history_truncated": self.store.truncated,
             "adjustment_count": len(self.store.adjustments),
+            "decision_context_count": len(self.store.decision_context),
+            "history_state_policy": self.config.get("history_state_policy", "recorded_state"),
         }
 
     async def stop(self, _event=None):

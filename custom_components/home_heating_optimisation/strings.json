@@ -41,11 +41,13 @@
           "update_interval_minutes": "Report interval (minutes)",
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
-          "survey_directory": "House survey directory (optional)"
+          "survey_directory": "House survey directory (optional)",
+          "history_state_policy": "Historical state coverage"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
-          "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only."
+          "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
+          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy."
         }
       },
       "survey_rooms": {
@@ -108,11 +110,13 @@
           "update_interval_minutes": "Report interval (minutes)",
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
-          "survey_directory": "House survey directory (optional)"
+          "survey_directory": "House survey directory (optional)",
+          "history_state_policy": "Historical state coverage"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
-          "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only."
+          "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
+          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy."
         }
       },
       "survey_rooms": {
