@@ -150,3 +150,27 @@ instructions, record profile settings and failed attempts, and assess interpreta
 separately from format validation. A passing response is not proof of a reliable model.
 
 Provider failures expose an error category without provider response text. Context-limit and unsupported-grammar errors are identified separately.
+
+## Frozen-evidence comparison (15 September 2026)
+
+Two standalone provider requests per model used the same saved evidence,
+instructions, system prompt and serialized generation schema, followed by HHO's
+local validator. These requests isolate model output; a deployment check through
+Home Assistant is a separate step. No retries or response editing were used.
+
+| Model/profile | Output cap | Format passes | Mean latency |
+| --- | ---: | ---: | ---: |
+| Sonnet 5, high effort | 10,000 tokens | 2/2 | 42.8 s |
+| Haiku 4.5, 1,024 thinking tokens | 6,000 tokens | 2/2 | 29.4 s |
+| Gemma 4 26B A4B, provider default effort | 1,500 tokens | 2/2 | 10.5 s |
+
+All six responses passed format/reference validation, but all contained unsupported
+or over-broad interpretations. Sonnet handled several metric distinctions better
+in this small trial but still miscounted available duty values. Haiku invented
+an observation count and a causal role for shadow mode. Gemma again linked matched
+comparison eligibility to recovery/rate validity. This is a profile comparison on
+one evidence snapshot, not a general model ranking or a reliable optimisation
+benchmark. Haiku was not tested at its default response allowance. Sonnet is a
+candidate for human-reviewed investigations; automatic recommendations remain
+unvalidated. Private fixture hashes, settings, usage, responses and review notes
+are retained locally and excluded from the repository.
