@@ -1,4 +1,6 @@
 {
+  "domain": "home_heating_optimisation",
+  "name": "Home Heating Optimisation",
   "after_dependencies": [
     "recorder"
   ],
@@ -7,11 +9,9 @@
   ],
   "config_flow": true,
   "documentation": "https://github.com/xpenno255/ha-home-heating-optimisation",
-  "domain": "home_heating_optimisation",
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/xpenno255/ha-home-heating-optimisation/issues",
-  "name": "Home Heating Optimisation",
   "requirements": [],
   "single_config_entry": true,
   "version": "0.2.0"
