@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — read-only house survey
+
+- Optional house.yaml and room-file loading with explicit thermostat mappings.
+- Thermal/layout context in reports: dimensions, boundaries, neighbours, openings, construction U-values and radiator ratings.
+- Preserved confidence labels, survey revision and validation warnings.
+- House model status, standalone report and reload actions.
+- Address, network, photo and occupancy-routine fields excluded from evidence.
+- Survey changes preserve measured history; source files are never written.
+
 ## 0.2.0 — historical analytics
 
 - Optional shared history, background Recorder backfill and bounded private storage.

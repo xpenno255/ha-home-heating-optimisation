@@ -12,18 +12,20 @@ from .const import DOMAIN
 
 @callback
 def async_register_services(hass):
-    def analytics():
+    def heating():
         entries = hass.config_entries.async_entries(DOMAIN)
         for entry in entries:
-            if (
-                entry.state.value == "loaded"
-                and (coordinator := getattr(entry, "runtime_data", None))
-                and coordinator.analytics
+            if entry.state.value == "loaded" and (
+                coordinator := getattr(entry, "runtime_data", None)
             ):
-                return coordinator.analytics
-        raise ServiceValidationError(
-            "Enable historical analytics on a loaded heating integration first"
-        )
+                return coordinator
+        raise ServiceValidationError("Load the heating integration first")
+
+    def analytics():
+        coordinator = heating()
+        if coordinator.analytics is None:
+            raise ServiceValidationError("Enable historical analytics first")
+        return coordinator.analytics
 
     async def record(call):
         coordinator = analytics()
@@ -57,8 +59,27 @@ def async_register_services(hass):
     async def report(call):
         coordinator = analytics()
         await coordinator.refresh()
-        return coordinator.report()
+        return {**coordinator.report(), "house_model": heating().house_report()}
 
+    async def house_report(call):
+        return heating().house_report()
+
+    async def reload_house(call):
+        coordinator = heating()
+        await coordinator.load_house()
+        if coordinator.survey["status"] == "error":
+            raise HomeAssistantError(
+                f"House survey reload failed: {coordinator.survey['error_code']}"
+            )
+
+    hass.services.async_register(
+        DOMAIN,
+        "get_house_model",
+        house_report,
+        schema=vol.Schema({}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(DOMAIN, "reload_house_model", reload_house, schema=vol.Schema({}))
     hass.services.async_register(
         DOMAIN,
         "record_adjustment",

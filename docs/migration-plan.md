@@ -1,6 +1,6 @@
 # Migration and control handover design
 
-Status: design only. Version 0.2.0 does not migrate or alter legacy integrations.
+Status: design only. Version 0.3.0 does not migrate or alter legacy integrations.
 
 ## Existing identities and storage
 
@@ -16,7 +16,7 @@ Treat registry transfer and metric compatibility as explicit migration work.
 ## House survey ownership
 
 The existing survey is `house.yaml` plus `rooms/*.yaml`; it is currently loaded by
-OT Thermostat Control. Home Heating Optimisation 0.2.0 does not read or modify it.
+OT Thermostat Control. Home Heating Optimisation 0.3.0 reads it optionally and never modifies it.
 The proposed consolidated comfort model should use one shared, versioned survey,
 with user data outside the HACS-managed component directory (for example
 `/config/home_heating_optimisation/house/`). Do not bundle a household's survey in a
@@ -26,7 +26,7 @@ A future import must validate house/room schemas, preserve unknown fields and
 provenance, preview room matches and retain originals for rollback. AI evidence
 should contain only relevant selected thermal properties, excluding unrelated
 household/network details. Sharing survey data does not itself transfer actuator
-ownership. This policy is design guidance; no survey migration is implemented yet.
+ownership. Read-only survey loading and explicit mappings are implemented in 0.3.0. File migration and actuator transfer are not implemented.
 
 ## Proposed importer
 

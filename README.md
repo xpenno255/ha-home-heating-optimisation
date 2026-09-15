@@ -5,7 +5,7 @@
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
-**Version 0.2.0 is observation-only, with optional historical analytics.** It publishes
+**Version 0.3.0 is observation-only, with optional historical analytics.** It publishes
 sensors, structured reports and a private adjustment journal. Existing
 OT Thermostat Control, Boiler Flow Control and Radiator Analytics continue operating.
 Control migration and AI-generated reports remain future milestones.
@@ -27,7 +27,7 @@ Home Assistant's `custom_components` directory.
 
 1. Open **HACS → ⋮ → Custom repositories**.
 2. Add `https://github.com/xpenno255/ha-home-heating-optimisation` with type **Integration**.
-3. Find **Home Heating Optimisation**, download release **v0.2.0**, then restart Home Assistant.
+3. Find **Home Heating Optimisation**, download release **v0.3.0**, then restart Home Assistant.
 4. Go to **Settings → Devices & services → Add integration** and select
    **Home Heating Optimisation**.
 
@@ -36,7 +36,7 @@ in HACS's default catalogue. It includes standard and high-resolution local bran
 icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
 
 HACS installs the component from the selected release tag. The attached
-`home_heating_optimisation-0.2.0.zip` is an alternative for manual installation.
+`home_heating_optimisation-0.3.0.zip` is an alternative for manual installation.
 Keep the existing heating integrations enabled: this release observes them and
 makes no thermostat or boiler commands.
 
@@ -123,17 +123,30 @@ History is optional and disabled by default. Reports gate window-wide metrics be
 
 ## House survey (`house.yaml`)
 
-The existing OT Thermostat Control survey consists of `house.yaml` plus
-`rooms/*.yaml`. Version 0.2.0 of this integration does not load, migrate or modify
-those files. It can observe OT's published targets, estimates and decisions through
-optional sensor mappings.
+Version 0.3.0 can read the existing OT Thermostat Control survey: `house.yaml` and
+`rooms/*.yaml`. In the system options, set **House survey directory**, then confirm
+which survey room belongs to each thermostat. Unique survey climate bindings are
+suggested; mappings never change your selected sensors or controller settings.
 
-The planned consolidation will use a shared house survey for the comfort model
-and relevant report context. The intended location is a user-owned directory
-outside `custom_components`, for example `/config/home_heating_optimisation/house/`,
-so integration updates cannot replace household data. Survey import, schema
-validation and control handover are future work; existing files remain in use by
-OT Thermostat Control until that migration is implemented and verified.
+For the bundled OT survey, the usual HA-relative directory is:
+
+```text
+custom_components/ot_thermostat_control/house
+```
+
+Use your OT hub's configured survey directory if you already use an override. The
+folder must be inside HA's configuration directory. Files stay in their current
+location and are read only. For long-term storage, a user-owned folder outside
+`custom_components` avoids replacement by updates to the integration that bundles
+them; this release does not move the files.
+
+The **House model status** sensor shows import/mapping status and counts.
+`home_heating_optimisation.get_house_model` returns thermal/layout context even when
+analytics is disabled. `get_report` includes the same context alongside historical
+metrics. After editing survey files, run `reload_house_model` to refresh the model.
+
+See [house survey documentation](docs/house-survey.md) for validation, privacy,
+confidence labels and limitations. AI and control migration remain future work.
 
 ## Roadmap and AI
 
@@ -144,7 +157,7 @@ Planned modules: operative-temperature comfort control, boiler supervision and a
 optional Heating Advisor. The advisor will select Home
 Assistant AI Task profiles per task. Extended OpenAI Conversation manages local
 Gemma; the built-in Anthropic integration manages Claude credentials, model and
-supported effort settings. Version 0.2.0 makes no AI calls.
+supported effort settings. Version 0.3.0 makes no AI calls.
 
 ## Development
 

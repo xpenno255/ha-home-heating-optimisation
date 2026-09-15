@@ -6,7 +6,12 @@ from collections import Counter
 async def async_get_config_entry_diagnostics(hass, entry):
     snapshot = entry.runtime_data.data
     return {
-        "version": 2,
+        "version": 3,
+        "house_model": {
+            "status": entry.runtime_data.house_report()["status"],
+            "survey_room_count": len(entry.runtime_data.survey["rooms"]),
+            "warning_count": len(entry.runtime_data.survey["warnings"]),
+        },
         "analytics": entry.runtime_data.analytics.quality()
         if entry.runtime_data.analytics
         else {"enabled": False},
