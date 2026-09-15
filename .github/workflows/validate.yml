@@ -36,7 +36,3 @@ jobs:
         with:
           category: integration
           comment: false
-          # The licence check queries GitHub's default branch, still the initial
-          # README until the foundation PR merges. Package tests check the actual MIT file.
-          # main runs the full check without this bootstrap exception.
-          ignore: ${{ (github.head_ref == 'feature/observation-foundation' || github.ref == 'refs/heads/feature/observation-foundation' || github.head_ref == 'feature/historical-analytics' || github.ref == 'refs/heads/feature/historical-analytics') && 'license' || '' }}
