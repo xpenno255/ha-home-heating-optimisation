@@ -6,6 +6,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
+from .advisor.evidence import TASKS
 from .analytics.const import MAX_ADJUSTMENTS
 from .const import DOMAIN
 
@@ -96,4 +97,30 @@ def async_register_services(hass):
     )
     hass.services.async_register(
         DOMAIN, "get_report", report, schema=vol.Schema({}), supports_response=SupportsResponse.ONLY
+    )
+
+    async def run_review(call):
+        return await heating().advisor.run(call.data["task"], call.data.get("question", ""))
+
+    async def advisor_reports(call):
+        return heating().advisor.report_list(call.data.get("report_id"))
+
+    hass.services.async_register(
+        DOMAIN,
+        "run_review",
+        run_review,
+        schema=vol.Schema(
+            {
+                vol.Required("task"): vol.In(TASKS),
+                vol.Optional("question", default=""): vol.All(cv.string, vol.Length(max=1000)),
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_advisor_reports",
+        advisor_reports,
+        schema=vol.Schema({vol.Optional("report_id"): cv.string}),
+        supports_response=SupportsResponse.ONLY,
     )

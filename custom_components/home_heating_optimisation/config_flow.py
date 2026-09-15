@@ -8,6 +8,8 @@ from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
+from .advisor.evidence import TASKS
+from .advisor.profiles import profile_info
 from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, NAME, SYSTEM_SOURCES, effective_config
 from .survey import async_load_survey, suggest_mappings
@@ -63,7 +65,7 @@ class MappingFlow:
             elif len(zones) != len(set(zones)) or any(not z.startswith("climate.") for z in zones):
                 errors["base"] = "invalid_source"
             else:
-                self.pending = {"rooms": []}
+                self.pending = {"rooms": [], "advisor": self.current.get("advisor", {})}
                 self.zones = list(zones)
                 self.room_index = 0
                 return await self.async_step_room()
@@ -237,4 +239,60 @@ class HeatingConfigFlow(MappingFlow, ConfigFlow, domain=DOMAIN):
 class HeatingOptionsFlow(MappingFlow, OptionsFlow):
     async def async_step_init(self, user_input=None):
         self.current = effective_config(self.config_entry)
-        return await self.choose_rooms("init", user_input)
+        return self.async_show_menu(step_id="init", menu_options=["mapping", "advisor"])
+
+    async def async_step_mapping(self, user_input=None):
+        self.current = effective_config(self.config_entry)
+        return await self.choose_rooms("mapping", user_input)
+
+    async def async_step_advisor(self, user_input=None):
+        self.current = effective_config(self.config_entry)
+        old = self.current.get("advisor", {})
+        errors = {}
+        if user_input is not None:
+            if user_input.get("enabled") and not self.current.get("analytics_enabled"):
+                errors["base"] = "advisor_needs_analytics"
+            elif any(
+                profile_info(self.hass, user_input[t])["status"] != "ready"
+                for t in TASKS
+                if user_input.get(t)
+            ):
+                errors["base"] = "invalid_ai_profile"
+            elif any(
+                user_input.get(f"schedule_{t}") and not user_input.get(t)
+                for t in ("daily_summary", "weekly_review")
+            ):
+                errors["base"] = "missing_ai_profile"
+            else:
+                return self.async_create_entry(
+                    title=NAME, data={**self.current, "advisor": user_input}
+                )
+        defaults = {
+            "enabled": False,
+            "schedule_daily_summary": False,
+            "schedule_weekly_review": False,
+            "schedule_hour": 9,
+            "max_calls_per_day": 4,
+            "timeout_seconds": 120,
+        }
+        schema = {
+            vol.Optional(k, default=old.get(k, default)): bool
+            for k, default in defaults.items()
+            if isinstance(default, bool)
+        }
+        schema.update({optional(t, old): entity_selector(("ai_task",)) for t in TASKS})
+        schema.update(
+            {
+                vol.Optional(k, default=old.get(k, defaults[k])): vol.All(
+                    vol.Coerce(int), vol.Range(min=low, max=high)
+                )
+                for k, low, high in (
+                    ("schedule_hour", 0, 23),
+                    ("max_calls_per_day", 1, 12),
+                    ("timeout_seconds", 30, 300),
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id="advisor", errors=errors, data_schema=vol.Schema(schema)
+        )

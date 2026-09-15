@@ -72,10 +72,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Observe your heating",
-        "description": "Select the room thermostats to observe. This version only reads data; existing heating controls continue to operate.",
-        "data": {
-          "zones": "Room thermostats"
+        "title": "Heating options",
+        "menu_options": {
+          "mapping": "Room, system and survey mappings",
+          "advisor": "Heating Advisor"
         }
       },
       "room": {
@@ -125,6 +125,28 @@
         "data": {
           "survey_room": "Survey room"
         }
+      },
+      "mapping": {
+        "title": "Observe your heating",
+        "description": "Select the room thermostats to observe. This version only reads data; existing heating controls continue to operate.",
+        "data": {
+          "zones": "Room thermostats"
+        }
+      },
+      "advisor": {
+        "title": "Heating Advisor",
+        "description": "Select dedicated AI Task profiles from Extended OpenAI or Anthropic with tools disabled. Provider, model and effort are inherited from each profile. Enabling a review sends selected room names, thermal survey details and heating metrics to that provider. Journal note text and raw history are excluded. Schedules are optional; weekly reviews run on Monday. Reports provide advice only.",
+        "data": {
+          "enabled": "Enable Heating Advisor",
+          "daily_summary": "Daily summary AI profile",
+          "weekly_review": "Weekly review AI profile",
+          "investigation": "Investigation AI profile",
+          "schedule_daily_summary": "Schedule daily summaries",
+          "schedule_weekly_review": "Schedule weekly reviews",
+          "schedule_hour": "Review hour (Home Assistant local time)",
+          "max_calls_per_day": "Maximum calls in any 24 hours",
+          "timeout_seconds": "Maximum seconds per call"
+        }
       }
     },
     "error": {
@@ -132,7 +154,10 @@
       "invalid_source": "Choose a valid source outside this integration.",
       "invalid_name": "Enter a room name.",
       "invalid_survey": "Cannot load this survey. Check its path, YAML format, room IDs and numeric values. Files must be inside the Home Assistant configuration directory.",
-      "invalid_survey_mapping": "Choose an existing survey room; each room can only be mapped once."
+      "invalid_survey_mapping": "Choose an existing survey room; each room can only be mapped once.",
+      "advisor_needs_analytics": "Enable historical analytics before the advisor.",
+      "invalid_ai_profile": "Select an available Extended OpenAI or Anthropic AI Task profile with Home Assistant APIs and all tools disabled. For Extended OpenAI, set Functions to [].",
+      "missing_ai_profile": "Select a profile for each scheduled task."
     }
   },
   "entity": {
@@ -217,6 +242,9 @@
       },
       "house_model": {
         "name": "House model status"
+      },
+      "advisor": {
+        "name": "Advisor status"
       }
     },
     "binary_sensor": {
@@ -258,6 +286,30 @@
     "reload_house_model": {
       "name": "Reload house model",
       "description": "Read the configured survey files again. Invalid files make the model unavailable; measurements and existing controls continue."
+    },
+    "run_review": {
+      "name": "Run heating review",
+      "description": "Generate a bounded advisory report using the selected AI profile. Returns the report and its evidence.",
+      "fields": {
+        "task": {
+          "name": "Task",
+          "description": "Select the heating review task."
+        },
+        "question": {
+          "name": "Question",
+          "description": "Optional question; sent to the selected provider (maximum 1000 characters)."
+        }
+      }
+    },
+    "get_advisor_reports": {
+      "name": "Get advisor reports",
+      "description": "Return retained reports and profile settings. Supply a report ID to include its full evidence.",
+      "fields": {
+        "report_id": {
+          "name": "Report ID",
+          "description": "Optional ID from the report list."
+        }
+      }
     }
   }
 }

@@ -19,6 +19,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
     def __init__(self, hass, entry):
         super().__init__(hass, LOGGER, name=DOMAIN, config_entry=entry)
         self.analytics = None
+        self.advisor = None
         self.survey = {"status": "not_configured", "rooms": {}, "bindings": {}, "warnings": []}
         self.config = effective_config(entry)
         self.sources = watched_entities(self.config)

@@ -40,6 +40,7 @@ def source_signature(config, unit):
             if k
             not in (
                 "rooms",
+                "advisor",
                 "survey_directory",
                 "survey_rooms",
                 "analytics_enabled",

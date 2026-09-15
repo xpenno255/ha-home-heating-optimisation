@@ -294,6 +294,9 @@ async def test_options_enable_history_with_context_and_keep_observation_id(hass,
     old_id = entity_id(hass, entry, "room:study:air")
     flow = await hass.config_entries.options.async_init(entry.entry_id)
     flow = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {"next_step_id": "mapping"}
+    )
+    flow = await hass.config_entries.options.async_configure(
         flow["flow_id"], {"zones": ["climate.study"]}
     )
     flow = await hass.config_entries.options.async_configure(

@@ -20,3 +20,22 @@ record_adjustment:
 get_report:
 get_house_model:
 reload_house_model:
+run_review:
+  fields:
+    task:
+      required: true
+      selector:
+        select:
+          options:
+            - daily_summary
+            - weekly_review
+            - investigation
+    question:
+      selector:
+        text:
+          multiline: true
+get_advisor_reports:
+  fields:
+    report_id:
+      selector:
+        text:
