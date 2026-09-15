@@ -15,5 +15,5 @@
   "issue_tracker": "https://github.com/xpenno255/ha-home-heating-optimisation/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.5.1"
+  "version": "0.5.2"
 }

@@ -15,6 +15,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_heating_optimisation.advisor.coordinator import Advisor
 from custom_components.home_heating_optimisation.advisor.evidence import (
+    FIELD_DESCRIPTIONS,
+    INSTRUCTIONS,
+    ReportValidationError,
     build_evidence,
     encode,
     validate_response,
@@ -260,6 +263,97 @@ def test_generation_schema_constrains_evidence_ids():
     bad["findings"][0]["evidence_ids"] = ["quality.history.invented"]
     with pytest.raises(vol.Invalid):
         schema(bad)
+
+
+def test_provider_schema_describes_bounds_without_unsupported_keywords():
+    from probatio import to_openapi
+
+    from custom_components.home_heating_optimisation.advisor.evidence import report_schema
+
+    schema = to_openapi(report_schema(vol.In(("quality.history",))))
+    finding = schema["properties"]["findings"]["items"]
+    assert finding["properties"]["evidence_ids"]["description"].startswith("1-12 exact fact IDs")
+    assert finding["properties"]["next_check"]["description"].startswith("30-500 characters")
+    assert set(finding["required"]) == set(VALID["findings"][0])
+    assert finding["additionalProperties"] is False
+    assert finding["properties"]["evidence_ids"]["items"]["enum"] == ["quality.history"]
+    for keyword in ("minLength", "maxLength", "maxItems", "uniqueItems"):
+        assert keyword not in encode(schema)
+    for description in FIELD_DESCRIPTIONS.values():
+        assert description in INSTRUCTIONS
+
+
+@pytest.mark.parametrize("count,accepted", [(0, False), (1, True), (12, True), (13, False)])
+def test_reference_count_boundaries(count, accepted):
+    refs = [f"fact.{n}" for n in range(count)]
+    evidence = {"facts": dict.fromkeys(refs)}
+    response = deepcopy(VALID)
+    response["findings"][0]["evidence_ids"] = refs
+    if accepted:
+        assert validate_response(response, evidence) == response
+    else:
+        with pytest.raises(ReportValidationError, match="invalid_evidence_reference"):
+            validate_response(response, evidence)
+
+
+@pytest.mark.parametrize(
+    "field,minimum,maximum,error",
+    [
+        ("summary", 1, 1000, "invalid_summary"),
+        ("title", 1, 160, "invalid_finding"),
+        ("detail", 1, 1200, "invalid_finding"),
+        ("next_check", 30, 500, "invalid_finding"),
+        ("limitation", 1, 500, "invalid_limitation"),
+    ],
+)
+def test_text_boundaries(field, minimum, maximum, error):
+    for text, accepted in (
+        ("", False),
+        (" " * minimum, False),
+        ("x" * (minimum - 1), False),
+        ("x" * minimum, True),
+        ("x" * maximum, True),
+        ("x" * (maximum + 1), False),
+        (" " + "x" * (minimum - 1) + " ", False),
+    ):
+        response = deepcopy(VALID)
+        if field == "summary":
+            response[field] = text
+        elif field == "limitation":
+            response["limitations"] = [text]
+        else:
+            response["findings"][0][field] = text
+        if accepted:
+            assert validate_response(response, {"facts": {"quality.history": {}}}) == response
+        else:
+            with pytest.raises(ReportValidationError, match=error):
+                validate_response(response, {"facts": {"quality.history": {}}})
+
+
+@pytest.mark.parametrize("field,maximum", [("findings", 6), ("limitations", 8)])
+def test_report_list_boundaries(field, maximum):
+    for count in (0, maximum, maximum + 1):
+        response = deepcopy(VALID)
+        response[field] *= count
+        if count <= maximum:
+            assert validate_response(response, {"facts": {"quality.history": {}}}) == response
+        else:
+            with pytest.raises(ReportValidationError, match="too_many_findings"):
+                validate_response(response, {"facts": {"quality.history": {}}})
+
+
+async def test_rejection_category_visible_without_report_text(hass, config, sources):
+    a = await advisor(hass, config)
+    response = deepcopy(VALID)
+    response["findings"][0].update(detail="private response text", next_check="")
+    with patch(MODULE + ".generate", return_value=SimpleNamespace(data=response)) as generate:
+        with pytest.raises(HomeAssistantError, match="invalid_finding") as error:
+            await a.run("investigation")
+        generate.assert_awaited_once()
+    assert "private response text" not in str(error.value)
+    assert a.quality()["error_type"] == "invalid_finding"
+    assert not a.data["reports"]
+    assert len(a.data["attempts"]) == 1
 
 
 async def test_corrupt_report_store_is_preserved_and_blocks_calls(hass, config, sources):

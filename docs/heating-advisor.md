@@ -1,4 +1,4 @@
-# Heating Advisor (0.5.0)
+# Heating Advisor (0.5.2)
 
 The optional advisor produces daily summaries, reviews of the configured historical
 window, and investigations. It does not change heating settings. Every task selects
@@ -28,8 +28,9 @@ For Extended OpenAI, add an **AI Task** subentry to your existing local connecti
 For Claude, add Anthropic under Devices & services, enter the key there, and add an
 AI Task profile with the chosen model and supported thinking settings. Disable
 Home Assistant APIs, web search/fetch, code execution and tool search. Anthropic
-compatibility is source-checked and covered by profile tests; live Claude evaluation
-requires a configured account and has not yet been performed.
+profiles use task-specific heating instructions supplied by HHO on each request;
+a separate conversation-agent system prompt is not required. Provider defaults and
+model availability can change, so select explicit settings for comparisons.
 
 Profiles are checked before calls. Unsupported providers, enabled tools and missing
 profiles prevent a call. No profile is selected by default and there is no fallback
@@ -104,10 +105,25 @@ rejected. These checks verify structure and reference existence, **not whether t
 AI's interpretation is correct**. Reports require human review. A cited number alone
 does not validate a causal explanation or recommendation.
 
+Prompt version 2 states every acceptance limit, including 1–12 references per
+finding, a nonblank 30–500-character practical follow-up, and all report/string
+limits. Schema field descriptions and local validation use the same constants.
+The provider schema constrains fields, types and reference choices. Length/count
+limits remain locally enforced because provider grammars do not support the same
+JSON Schema keywords (see [Anthropic's structured-output limitations](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)).
+There is no silent trimming, invented follow-up text or automatic paid retry.
+Rejections expose a category such as `invalid_finding` or
+`invalid_evidence_reference`, without exposing private report content. Previously
+accepted reports remain readable; storage format and acceptance limits are unchanged.
+
 In particular, target overshoot includes setbacks/off-floor targets and cannot alone
 establish heating-induced overheating. Demand coverage is different from demand
 active share. Matched-response eligibility does not determine recovery eligibility.
 No energy savings claims are supported without metered energy and suitable context.
+Detected target-recovery episodes are not a count of all heating or burner cycles.
+Recent-change coverage cannot establish physical sensor freshness, since unchanged
+values may still be freshly reported. Current shadow/observation-only state cannot
+establish what any controller did throughout a historical window.
 
 Private storage is `.storage/home_heating_optimisation.<entry_id>.advisor`, separate
 from measurement history. It retains 20 reports with exact evidence plus bounded
@@ -129,6 +145,8 @@ and some irrelevant follow-up checks. Explicit definitions improved the summarie
 reference constraints and validation reject unknown IDs. Existing IDs can still be
 cited incorrectly, and a plausible suggestion can still be irrelevant. Treat Gemma
 reports as drafts for review, not validated optimisation recommendations. Scheduled
-reviews remain opt-in. A like-for-like Claude evaluation is still outstanding.
+reviews remain opt-in. Model comparisons must use identical saved evidence and
+instructions, record profile settings and failed attempts, and assess interpretation
+separately from format validation. A passing response is not proof of a reliable model.
 
 Provider failures expose an error category without provider response text. Context-limit and unsupported-grammar errors are identified separately.
