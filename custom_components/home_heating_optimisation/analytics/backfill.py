@@ -3,6 +3,9 @@
 from collections import deque
 from datetime import timedelta
 from functools import partial
+from math import ceil
+
+from homeassistant.util import dt as dt_util
 
 from ..observations import watched_entities
 from .const import MAX_POINTS, SAMPLE_SECONDS
@@ -25,7 +28,8 @@ def reconstruct(history, start, end, config, climate_unit, initial_states=None, 
     for t in boundaries:
         events.setdefault(t, {})
     ticks = set()
-    at = start
+    events.setdefault(start, {})
+    at = dt_util.utc_from_timestamp(ceil(start.timestamp() / SAMPLE_SECONDS) * SAMPLE_SECONDS)
     while at <= end:
         events.setdefault(at, {})
         ticks.add(at)
@@ -47,7 +51,8 @@ def reconstruct(history, start, end, config, climate_unit, initial_states=None, 
             else {**config, "history_state_policy": "recent_change"}
         )
         if (
-            at in ticks
+            at == start
+            or at in ticks
             or at == end
             or at in boundaries
             or should_capture(config, set(changes), before, states, at.timestamp(), last_capture)
@@ -72,7 +77,9 @@ async def async_backfill(hass, config, start, end):
     truncated = False
     carried_states = {}
     while start < end:
-        chunk_end = min(start + timedelta(days=1), end)
+        chunk_end = min(
+            start.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1), end
+        )
         history = await get_instance(hass).async_add_executor_job(
             partial(
                 get_significant_states,

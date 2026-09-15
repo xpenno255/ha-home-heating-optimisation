@@ -55,7 +55,7 @@ start state timestamp. It runs in the background and never delays the observer.
 If Recorder is absent or fails, live collection continues. There is no automatic
 backfill retry until reload.
 
-Collection records room and activity events plus five-minute samples. Numeric
+Since 0.5.1, collection records room and activity events plus five-minute samples aligned to UTC clock boundaries. Numeric sampling uses fixed minute buckets and backfill batches end at UTC midnight. Overlapping reloads therefore reuse the same sample grid instead of creating shifted duplicates. This recording-semantics change rebuilds the current era once, retaining the previous era privately. Numeric
 system context is sampled at most once per minute, with availability transitions
 retained immediately. Matching-condition averages can therefore differ within this
 one-minute sampling resolution. Controller intent alone does not create a whole

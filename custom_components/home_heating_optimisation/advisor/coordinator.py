@@ -42,6 +42,7 @@ class Advisor:
         self.backend = Store(hass, 1, f"home_heating_optimisation.{entry.entry_id}.advisor")
         self.data = {"schema": 1, "reports": [], "attempts": [], "scheduled": {}}
         self.status = "disabled" if not self.config.get("enabled") else "ready"
+        self.error_type = None
         self.storage_ready = True
         self.closed = False
         self.running = None
@@ -87,6 +88,7 @@ class Advisor:
     def quality(self):
         return {
             "status": self.status,
+            "error_type": self.error_type,
             "report_count": len(self.data["reports"]),
             "last_report_at": self.data["reports"][-1]["created_at"]
             if self.data["reports"]
@@ -143,6 +145,7 @@ class Advisor:
             raise ServiceValidationError("Heating Advisor rolling 24-hour call limit reached")
         if attempts and now.timestamp() - max(attempts) < 60:
             raise ServiceValidationError("Wait one minute between heating reviews")
+        self.error_type = None
         self.running = asyncio.current_task()
         self.changed("running")
         try:
@@ -218,10 +221,17 @@ class Advisor:
                 "Heating Advisor rejected invalid evidence or response"
             ) from err
         except Exception as err:
+            self.error_type = (
+                "context_limit"
+                if "maximum context length" in str(err).lower()
+                else "schema_unsupported"
+                if "grammar error" in str(err).lower()
+                else type(err).__name__
+            )
             if self.storage_ready:
                 self.changed("provider_failed")
             raise HomeAssistantError(
-                "Heating Advisor failed; heating observation continues"
+                f"Heating Advisor failed ({self.error_type}); heating observation continues"
             ) from err
         finally:
             self.running = None
