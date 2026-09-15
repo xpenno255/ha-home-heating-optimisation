@@ -20,7 +20,7 @@ def test_install_archive(tmp_path):
         assert root + "brand/icon.png" in names
         manifest = json.loads(archive.read(root + "manifest.json"))
         assert manifest["domain"] == "home_heating_optimisation"
-        assert manifest["version"] == "0.5.1"
+        assert manifest == json.loads(Path(root + "manifest.json").read_text())
         assert json.loads(archive.read(root + "strings.json")) == json.loads(
             archive.read(root + "translations/en.json")
         )

@@ -17,6 +17,7 @@ from .evidence import (
     INSTRUCTIONS,
     PROMPT_VERSION,
     TASKS,
+    ReportValidationError,
     build_evidence,
     encode,
     evidence_hash,
@@ -216,9 +217,12 @@ class Advisor:
             self.changed("timeout")
             raise HomeAssistantError("Heating Advisor timed out; no automatic retry") from err
         except (ValueError, TypeError) as err:
+            self.error_type = (
+                err.code if isinstance(err, ReportValidationError) else "invalid_payload"
+            )
             self.changed("invalid_response")
             raise HomeAssistantError(
-                "Heating Advisor rejected invalid evidence or response"
+                f"Heating Advisor rejected invalid evidence or response ({self.error_type})"
             ) from err
         except Exception as err:
             self.error_type = (

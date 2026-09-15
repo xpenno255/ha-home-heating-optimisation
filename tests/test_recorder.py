@@ -1,6 +1,7 @@
 """A real Recorder database exercises the supported history API."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.components.recorder.common import (
@@ -15,7 +16,10 @@ def mock_recorder_before_hass(recorder_db_url):
     yield
 
 
-async def test_real_recorder_backfill_and_reload(hass, recorder_mock, freezer, config):
+@pytest.mark.freeze_time("2026-09-15T21:09:06.630565+00:00")
+@pytest.mark.parametrize("timezone", ["UTC", "Europe/London", "America/Los_Angeles"])
+async def test_real_recorder_backfill_and_reload(hass, recorder_mock, freezer, config, timezone):
+    await hass.config.async_set_time_zone(timezone)
     config["analytics_enabled"] = True
     # Keep this short fixture above one-decimal coverage rounding.
     config["analysis_window_days"] = 3
@@ -40,9 +44,10 @@ async def test_real_recorder_backfill_and_reload(hass, recorder_mock, freezer, c
     await entry.runtime_data.analytics.task
     assert history.closed
     assert entity_id(hass, entry, "room:study:analytics_coverage") == old_id
-    assert (
-        entry.runtime_data.analytics.data["analysis"]["zone_stats"]["study"]["demand_coverage"] > 0
-    )
+    coverage = entry.runtime_data.analytics.data["analysis"]["zone_stats"]["study"][
+        "demand_coverage"
+    ]
+    assert coverage == pytest.approx(100 * 10 / (3 * 24 * 60), abs=0.05)
 
 
 async def test_recorder_does_not_refresh_old_start_state(hass, recorder_mock, freezer, config):
@@ -60,3 +65,28 @@ async def test_recorder_does_not_refresh_old_start_state(hass, recorder_mock, fr
     assert status == "complete"
     assert all(p["zones"]["study"]["temperature"] is None for p in points)
     assert all(p["zones"]["study"]["active"] is None for p in points)
+
+
+async def test_closed_recorder_run_bounds_are_utc(hass):
+    from custom_components.home_heating_optimisation.analytics.runs import recorded_runs
+
+    await hass.config.async_set_time_zone("Europe/London")
+    start = datetime(2026, 9, 15, 10)
+    end = datetime(2026, 9, 15, 11)
+    aware = timezone(timedelta(hours=2))
+    session = MagicMock()
+    session.execute.return_value.all.return_value = [
+        (start, end, False),
+        (start.replace(tzinfo=aware), end.replace(tzinfo=aware), True),
+    ]
+    with patch("homeassistant.components.recorder.util.session_scope") as scope:
+        scope.return_value.__enter__.return_value = session
+        runs = recorded_runs(hass, start.replace(tzinfo=UTC), end.replace(tzinfo=UTC))
+    assert runs == [
+        (start.replace(tzinfo=UTC), end.replace(tzinfo=UTC), True),
+        (
+            start.replace(hour=8, tzinfo=UTC),
+            end.replace(hour=9, tzinfo=UTC),
+            False,
+        ),
+    ]

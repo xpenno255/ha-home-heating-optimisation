@@ -1,8 +1,6 @@
 """Read Recorder run boundaries without carrying observations across shutdowns."""
 
-from datetime import timedelta
-
-from homeassistant.util import dt as dt_util
+from datetime import UTC, timedelta
 
 
 def recorded_runs(hass, start, end):
@@ -17,7 +15,12 @@ def recorded_runs(hass, start, end):
                 or_(RecorderRuns.end >= start, RecorderRuns.end.is_(None)),
             )
         ).all()
+
+    # Recorder's SQLite DateTime columns are naive UTC. as_utc() interprets
+    # naive datetimes in HA's local timezone, shifting run/gap boundaries.
+    def utc(value):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
     return [
-        (dt_util.as_utc(a), dt_util.as_utc(b) if b else end + timedelta(microseconds=1), not bad)
-        for a, b, bad in rows
+        (utc(a), utc(b) if b else end + timedelta(microseconds=1), not bad) for a, b, bad in rows
     ]

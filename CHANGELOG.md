@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2 — consistent advisor report requirements
+
+- Share report limits between prompt instructions, schema field descriptions and local validation, including the 12-reference limit per finding and required follow-up checks.
+- Keep provider schemas compatible with Anthropic and local grammar backends; reject out-of-bounds reports locally without trimming content or making automatic retry calls.
+- Expose report rejection categories without private response text.
+- Clarify the difference between recovery episodes and burner cycles, state changes and physical sensor freshness, and current controller state and historical behaviour.
+- Interpret Recorder's naive database timestamps as UTC, keeping restart-gap boundaries correct in non-UTC HA timezones. Rebuild the current history era once and retain the previous era privately.
+
 ## 0.5.1 — provider diagnostics and repeatable history sampling
 
 - Align sampling and daily backfill boundaries so overlapping reloads reuse the same sample grid.
