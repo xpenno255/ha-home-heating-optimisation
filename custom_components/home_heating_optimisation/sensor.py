@@ -24,6 +24,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
             HeatingSensor(coordinator, entry, k, room)
             for k in ("air", "target", "demand", "deficit")
         )
+    if coordinator.analytics:
+        from .analytics.sensor import create_sensors
+
+        entities.extend(create_sensors(coordinator.analytics, entry))
     async_add_entities(entities)
 
 

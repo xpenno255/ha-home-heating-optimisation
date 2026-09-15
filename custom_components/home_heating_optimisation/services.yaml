@@ -1,0 +1,20 @@
+record_adjustment:
+  fields:
+    note:
+      required: true
+      selector:
+        text:
+          multiline: true
+    kind:
+      default: other
+      selector:
+        select:
+          options:
+            - lockshield
+            - boiler_setting
+            - sensor_change
+            - other
+    room_id:
+      selector:
+        text:
+get_report:

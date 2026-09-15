@@ -1,5 +1,6 @@
 """Build a deterministic manual-install ZIP containing only integration files."""
 
+import json
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -21,4 +22,5 @@ def build(output: Path):
 
 
 if __name__ == "__main__":
-    print(build(ROOT / "dist" / "home_heating_optimisation-0.1.0.zip"))
+    version = json.loads((COMPONENT / "manifest.json").read_text())["version"]
+    print(build(ROOT / "dist" / f"home_heating_optimisation-{version}.zip"))

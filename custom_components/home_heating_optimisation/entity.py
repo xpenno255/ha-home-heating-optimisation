@@ -21,7 +21,7 @@ class HeatingEntity(CoordinatorEntity):
             identifiers={(DOMAIN, entry.entry_id)},
             name=NAME,
             manufacturer="Home Heating Optimisation",
-            model="Observation foundation",
+            model="Heating observations and analytics",
             sw_version=VERSION,
         )
 

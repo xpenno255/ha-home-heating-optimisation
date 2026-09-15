@@ -5,9 +5,10 @@
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
-**Version 0.1.0 is observation-only.** It publishes sensors and diagnostics. Existing
+**Version 0.2.0 is observation-only, with optional historical analytics.** It publishes
+sensors, structured reports and a private adjustment journal. Existing
 OT Thermostat Control, Boiler Flow Control and Radiator Analytics continue operating.
-Control migration, historical analytics and AI reports are planned milestones.
+Control migration and AI-generated reports remain future milestones.
 
 ## Install
 
@@ -24,9 +25,20 @@ Home Assistant's `custom_components` directory.
 
 ### HACS custom repository
 
-Add `https://github.com/xpenno255/ha-home-heating-optimisation` as an Integration
-custom repository in HACS. This is a development version, not a claim of inclusion
-in the default HACS catalogue or a published stable release.
+1. Open **HACS → ⋮ → Custom repositories**.
+2. Add `https://github.com/xpenno255/ha-home-heating-optimisation` with type **Integration**.
+3. Find **Home Heating Optimisation**, download release **v0.2.0**, then restart Home Assistant.
+4. Go to **Settings → Devices & services → Add integration** and select
+   **Home Heating Optimisation**.
+
+This repository supports HACS custom-repository installation; it is not included
+in HACS's default catalogue. It includes standard and high-resolution local brand
+icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
+
+HACS installs the component from the selected release tag. The attached
+`home_heating_optimisation-0.2.0.zip` is an alternative for manual installation.
+Keep the existing heating integrations enabled: this release observes them and
+makes no thermostat or boiler commands.
 
 ## Configure
 
@@ -39,6 +51,8 @@ Add **Home Heating Optimisation** in Settings → Devices & services.
    and `heat_demand` attributes. A different air sensor changes observation only.
 3. Optionally select outdoor temperature, actual boiler flow/return, the boiler flow
    setpoint readback, space-heating activity and resolved DHW activity.
+4. Enable historical analytics if wanted. Optionally map OT and boiler decision
+   sensors to provide context for reports.
 
 Use Boiler Flow Control's resolved **DHW Active** binary sensor where available.
 The observer does not infer DHW from aggregate demand. Select a space-heating signal
@@ -100,16 +114,37 @@ attribute freshness cannot be established independently.
 Download diagnostics returns quality/count information without room names, entity
 IDs or temperature history. Source provenance remains visible locally on sensors.
 
+## Historical analytics and reports
+
+See [historical analytics](docs/historical-analytics.md) for metrics, freshness,
+Recorder backfill, retention and the `record_adjustment` / `get_report` actions.
+History is optional and disabled by default. Reports gate window-wide metrics below
+80% coverage. Controller estimates remain separate from measured room air.
+
+## House survey (`house.yaml`)
+
+The existing OT Thermostat Control survey consists of `house.yaml` plus
+`rooms/*.yaml`. Version 0.2.0 of this integration does not load, migrate or modify
+those files. It can observe OT's published targets, estimates and decisions through
+optional sensor mappings.
+
+The planned consolidation will use a shared house survey for the comfort model
+and relevant report context. The intended location is a user-owned directory
+outside `custom_components`, for example `/config/home_heating_optimisation/house/`,
+so integration updates cannot replace household data. Survey import, schema
+validation and control handover are future work; existing files remain in use by
+OT Thermostat Control until that migration is implemented and verified.
+
 ## Roadmap and AI
 
 See the [implementation plan](docs/implementation-plan.md),
 [migration design](docs/migration-plan.md) and [design notes](docs/design-notes.md).
 
-Planned modules: operative-temperature comfort control, boiler supervision, historical
-heating analytics and an optional Heating Advisor. The advisor will select Home
+Planned modules: operative-temperature comfort control, boiler supervision and an
+optional Heating Advisor. The advisor will select Home
 Assistant AI Task profiles per task. Extended OpenAI Conversation manages local
 Gemma; the built-in Anthropic integration manages Claude credentials, model and
-supported effort settings. Version 0.1.0 makes no AI calls.
+supported effort settings. Version 0.2.0 makes no AI calls.
 
 ## Development
 
@@ -124,16 +159,16 @@ python3.14 -m venv .venv
 
 Tests use an isolated Home Assistant instance. They cover configuration, units,
 quality, activity states, source expiry, options, entity identity, unload/reload,
-absence of device-service calls and package contents. The GitHub workflow also runs
+absence of device-service calls, historical calculations, storage failures, real
+Recorder replay, journal actions and package contents. The GitHub workflow also runs
 hassfest and HACS validation. No live heating deployment has been performed.
 
-The initial feature branch skips HACS's GitHub default-branch licence lookup until
-the first merge; package tests verify the MIT licence in this branch and the ZIP.
-The full HACS licence check runs on `main` and subsequent feature branches.
+The GitHub workflow runs the full HACS validation with no skipped checks, plus
+hassfest and the test suite. Package tests verify the MIT licence and bundled icon.
 
 Brand artwork is in `assets/icon.svg`. To regenerate its PNGs, install the optional
 development dependency `CairoSVG==2.8.2` and run `python scripts/build_icon.py`.
 
 Remove the integration through Settings → Devices & services. It owns only its
-observation entities; source controls and the three existing integrations remain
+observation entities and private history/journal storage; source controls and the three existing integrations remain
 independent.
