@@ -58,6 +58,7 @@ def read(
     attribute: str | None = None,
     max_age: int | None = ROOM_MAX_AGE,
     climate_unit: str = "°C",
+    time_basis: str = "last_reported",
 ) -> Reading:
     """Normalise a reading and retain source/quality even when no value is usable."""
     if not entity_id:
@@ -65,7 +66,7 @@ def read(
     state = states.get(entity_id)
     if state is None:
         return Reading(None, "missing", entity_id)
-    reported = state.last_reported
+    reported = getattr(state, time_basis)
 
     def result(value, quality):
         return Reading(value, quality, entity_id, reported)
@@ -160,4 +161,17 @@ def watched_entities(config):
     entities = {config[k] for k in SYSTEM_SOURCES if config.get(k)}
     for room in config["rooms"]:
         entities.update(room[k] for k in ("climate", "air_sensor", "demand_sensor") if room.get(k))
+    if config.get("boiler_decision_sensor"):
+        entities.add(config["boiler_decision_sensor"])
+    for room in config["rooms"]:
+        entities.update(
+            room[k]
+            for k in (
+                "comfort_target_sensor",
+                "corrected_air_target_sensor",
+                "estimated_operative_sensor",
+                "decision_sensor",
+            )
+            if room.get(k)
+        )
     return sorted(entities)

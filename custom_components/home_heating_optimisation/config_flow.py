@@ -8,7 +8,23 @@ from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
+from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, NAME, SYSTEM_SOURCES, effective_config
+
+ANALYTICS_DEFAULTS = {
+    "analytics_enabled": False,
+    "analysis_window_days": 7,
+    "update_interval_minutes": 15,
+    "comfort_tolerance": 0.3,
+    "recovery_minutes": 120,
+}
+ANALYTICS_VALIDATORS = {
+    "analytics_enabled": bool,
+    "analysis_window_days": vol.All(vol.Coerce(int), vol.Range(min=3, max=14)),
+    "update_interval_minutes": vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
+    "comfort_tolerance": vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2)),
+    "recovery_minutes": vol.All(vol.Coerce(int), vol.Range(min=15, max=360)),
+}
 
 
 def entity_selector(domains, multiple=False):
@@ -70,7 +86,9 @@ class MappingFlow:
         if user_input is not None:
             if not user_input.get("name", "").strip():
                 errors["base"] = "invalid_name"
-            elif self.invalid_sources(user_input.get(k) for k in ("air_sensor", "demand_sensor")):
+            elif self.invalid_sources(
+                user_input.get(k) for k in ("air_sensor", "demand_sensor", *ROOM_INTENT)
+            ):
                 errors["base"] = "invalid_source"
             else:
                 self.pending["rooms"].append(
@@ -80,6 +98,7 @@ class MappingFlow:
                         "name": user_input["name"].strip(),
                         "air_sensor": user_input.get("air_sensor") or None,
                         "demand_sensor": user_input.get("demand_sensor") or None,
+                        **{k: user_input.get(k) or None for k in ROOM_INTENT},
                     }
                 )
                 self.room_index += 1
@@ -95,6 +114,7 @@ class MappingFlow:
                     vol.Required("name", default=name): str,
                     optional("air_sensor", old): entity_selector(("sensor",)),
                     optional("demand_sensor", old): entity_selector(("sensor",)),
+                    **{optional(k, old): entity_selector(("sensor",)) for k in ROOM_INTENT},
                 }
             ),
         )
@@ -102,18 +122,35 @@ class MappingFlow:
     async def async_step_system(self, user_input=None):
         errors = {}
         if user_input is not None:
-            if self.invalid_sources(user_input.values()):
+            if self.invalid_sources(
+                user_input.get(k) for k in (*SYSTEM_SOURCES, "boiler_decision_sensor")
+            ):
                 errors["base"] = "invalid_source"
             else:
                 self.pending.update({k: user_input.get(k) or None for k in SYSTEM_SOURCES})
+                self.pending["boiler_decision_sensor"] = (
+                    user_input.get("boiler_decision_sensor") or None
+                )
+                self.pending.update(
+                    {k: user_input.get(k, default) for k, default in ANALYTICS_DEFAULTS.items()}
+                )
                 return self.async_create_entry(title=NAME, data=self.pending)
         return self.async_show_form(
             step_id="system",
             errors=errors,
             data_schema=vol.Schema(
                 {
-                    optional(key, self.current): entity_selector(spec.domains)
-                    for key, spec in SYSTEM_SOURCES.items()
+                    **{
+                        optional(key, self.current): entity_selector(spec.domains)
+                        for key, spec in SYSTEM_SOURCES.items()
+                    },
+                    optional("boiler_decision_sensor", self.current): entity_selector(("sensor",)),
+                    **{
+                        vol.Optional(k, default=self.current.get(k, default)): ANALYTICS_VALIDATORS[
+                            k
+                        ]
+                        for k, default in ANALYTICS_DEFAULTS.items()
+                    },
                 }
             ),
         )

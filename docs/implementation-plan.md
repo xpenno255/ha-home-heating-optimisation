@@ -28,6 +28,12 @@ it has no runtime imports or dependencies on sibling projects.
 
 ## Milestone 2 — shared intent and analytics
 
+Implemented in 0.2.0; see [definitions and validation](historical-analytics.md).
+The live trial remains pending. Context currently includes allowlisted controller
+outputs; complete schedule provenance and controller model versions remain future
+work. The next implementation is the optional advisor, before control ownership
+migration.
+
 - Add explicit schedule, operative target, corrected-air target and decision-reason
   records. Associate units, provenance and model version with each field.
 - Port analytics and their existing tests; add versioned persistence and Recorder

@@ -17,6 +17,7 @@ LOGGER = logging.getLogger(__name__)
 class HeatingCoordinator(DataUpdateCoordinator):
     def __init__(self, hass, entry):
         super().__init__(hass, LOGGER, name=DOMAIN, config_entry=entry)
+        self.analytics = None
         self.config = effective_config(entry)
         self.sources = watched_entities(self.config)
 

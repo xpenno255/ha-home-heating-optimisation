@@ -15,7 +15,11 @@
         "data": {
           "name": "Room name",
           "air_sensor": "Independent air temperature",
-          "demand_sensor": "Zone heat demand"
+          "demand_sensor": "Zone heat demand",
+          "comfort_target_sensor": "OT comfort target (optional context)",
+          "corrected_air_target_sensor": "OT corrected air target (optional context)",
+          "estimated_operative_sensor": "OT estimated operative temperature (optional context)",
+          "decision_sensor": "OT decision state (optional context)"
         },
         "data_description": {
           "demand_sensor": "Percentage (0\u2013100 %) or unitless fraction (0\u20131)."
@@ -30,7 +34,16 @@
           "return_temperature": "Actual boiler return temperature",
           "flow_setpoint": "Boiler flow setpoint readback",
           "heating_active": "Space heating active",
-          "dhw_active": "Resolved DHW active"
+          "dhw_active": "Resolved DHW active",
+          "boiler_decision_sensor": "Boiler controller decision (optional context)",
+          "analytics_enabled": "Enable historical analytics",
+          "analysis_window_days": "Analysis window (days)",
+          "update_interval_minutes": "Report interval (minutes)",
+          "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
+          "recovery_minutes": "Recovery deadline (minutes)"
+        },
+        "data_description": {
+          "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown."
         }
       }
     },
@@ -58,7 +71,11 @@
         "data": {
           "name": "Room name",
           "air_sensor": "Independent air temperature",
-          "demand_sensor": "Zone heat demand"
+          "demand_sensor": "Zone heat demand",
+          "comfort_target_sensor": "OT comfort target (optional context)",
+          "corrected_air_target_sensor": "OT corrected air target (optional context)",
+          "estimated_operative_sensor": "OT estimated operative temperature (optional context)",
+          "decision_sensor": "OT decision state (optional context)"
         },
         "data_description": {
           "demand_sensor": "Percentage (0\u2013100 %) or unitless fraction (0\u20131)."
@@ -73,7 +90,16 @@
           "return_temperature": "Actual boiler return temperature",
           "flow_setpoint": "Boiler flow setpoint readback",
           "heating_active": "Space heating active",
-          "dhw_active": "Resolved DHW active"
+          "dhw_active": "Resolved DHW active",
+          "boiler_decision_sensor": "Boiler controller decision (optional context)",
+          "analytics_enabled": "Enable historical analytics",
+          "analysis_window_days": "Analysis window (days)",
+          "update_interval_minutes": "Report interval (minutes)",
+          "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
+          "recovery_minutes": "Recovery deadline (minutes)"
+        },
+        "data_description": {
+          "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown."
         }
       }
     },
@@ -120,6 +146,48 @@
       },
       "input_availability": {
         "name": "Input availability"
+      },
+      "analytics_coverage": {
+        "name": "{room} temperature and target coverage"
+      },
+      "analytics_demand_coverage": {
+        "name": "{room} demand coverage"
+      },
+      "analytics_within_band": {
+        "name": "{room} time in commanded comfort band"
+      },
+      "analytics_duty_cycle": {
+        "name": "{room} demand active share"
+      },
+      "analytics_deficit_degree_hours": {
+        "name": "{room} deficit degree hours"
+      },
+      "analytics_overshoot_degree_hours": {
+        "name": "{room} overshoot degree hours"
+      },
+      "analytics_heating_rate_avg": {
+        "name": "{room} observed warm-up rate"
+      },
+      "analytics_time_to_setpoint_avg": {
+        "name": "{room} successful recovery time"
+      },
+      "analytics_setpoint_achievement": {
+        "name": "{room} recovery success"
+      },
+      "analytics_completed_recoveries": {
+        "name": "{room} scored recoveries"
+      },
+      "analytics_response_ratio": {
+        "name": "{room} matched concurrent response ratio"
+      },
+      "analytics_status": {
+        "name": "Historical analysis status"
+      },
+      "analytics_adjustments": {
+        "name": "Recorded adjustments"
+      },
+      "analytics_comparison": {
+        "name": "Daily comfort comparison"
       }
     },
     "binary_sensor": {
@@ -129,6 +197,30 @@
       "dhw_active": {
         "name": "DHW active"
       }
+    }
+  },
+  "services": {
+    "record_adjustment": {
+      "name": "Record adjustment",
+      "description": "Record a change you have already made. This action does not change heating settings. Notes remain in private integration storage.",
+      "fields": {
+        "note": {
+          "name": "Note",
+          "description": "What changed and why (up to 500 characters)."
+        },
+        "kind": {
+          "name": "Kind",
+          "description": "Type of change."
+        },
+        "room_id": {
+          "name": "Room ID",
+          "description": "Optional stable room ID from get_report; omit for system-wide changes."
+        }
+      }
+    },
+    "get_report": {
+      "name": "Get heating report",
+      "description": "Return historical metrics, coverage, adjustment notes and recent controller context. No AI or device commands are called."
     }
   }
 }

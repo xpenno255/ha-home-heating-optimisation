@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 — historical analytics
+
+- Optional shared history, background Recorder backfill and bounded private storage.
+- Coverage-gated comfort/demand metrics, observed recoveries and matched comparisons.
+- Daily comparison, adjustment journal and structured report actions.
+- Optional OT/boiler decision context, isolated from measured comfort metrics.
+- Corrected selected-demand activity, independent expiry and Recorder boundary handling.
+- Prior source era retained; corrupt/unsupported history preserved without overwrite.
+- Legacy engine parity on 12,061 observations, nine rooms and four window sizes.
+
+This version remains observation-only and makes no AI calls.
+
 ## 0.1.0 — observation foundation
 
 - One setup/options flow for room and optional boiler/system sources.

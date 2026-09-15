@@ -6,7 +6,10 @@ from collections import Counter
 async def async_get_config_entry_diagnostics(hass, entry):
     snapshot = entry.runtime_data.data
     return {
-        "version": 1,
+        "version": 2,
+        "analytics": entry.runtime_data.analytics.quality()
+        if entry.runtime_data.analytics
+        else {"enabled": False},
         "operation": "observation_only",
         "room_count": len(snapshot.rooms),
         "input_quality_counts": dict(
