@@ -1,0 +1,18 @@
+# Room command confirmation
+
+The room controller records four separate stages for a radiator-zone command:
+
+- `requested_target` is the target selected by the policy.
+- `sent_target` means the `ramses_cc.set_zone_mode` service call completed without an error.
+- `pending_target` remains until a qualifying primary-thermostat report confirms it or a later successful command replaces it.
+- `confirmed_target` is set only when that fresh report matches the sent target within the thermostat's 0.1 °C resolution.
+
+`write_status` and `readback_status` make the current result visible on the room decision sensor and in `get_control_report` (with sampled context in `get_report`). A command can be `readback_no_echo`, `readback_different`, `readback_stale` (a report older than five minutes), `readback_unavailable`, `readback_error`, or `matching_readback_unverified`. The last status means a compatible new report arrived but does not prove this command caused it. These outcomes leave the command unconfirmed. `readback_timed_out` becomes true after three minutes even if the current diagnostic is unavailable, stale, mismatched, or unverified, so a pending command never appears indefinitely current. Evaluation runs on controller refresh, so the flag becomes visible on the next refresh after the threshold. It resets only when a command is confirmed or another command is sent. `confirmed_at` records when HHO evaluated a matching report; `readback_at` records the thermostat report timestamp. `requested_at`, `sent_at`, and `pending_since` describe the command lifecycle.
+
+A completed Home Assistant service call is transport acceptance only. It is not evidence that a radiator valve, boiler, or room temperature changed. A report must have a `last_reported` timestamp after the send boundary; The entity timestamp alone is insufficient because a heartbeat or unrelated attribute update can also refresh it; the transition checks below are required. For a temporary override, confirmation requires either a setpoint transition from the fresh pre-send primary setpoint or a transition in the primary RAMSES `mode.mode` field to `temporary_override`. HHO also recognises the equivalent `status.mode` field used by some source versions. A same-target heartbeat without either transition stays `matching_readback_unverified`.
+
+A `follow_schedule` release is stricter: the primary thermostat must freshly report `mode.mode: follow_schedule` (or its source-version `status.mode` equivalent), and that mode must differ from the captured pre-send primary mode. A matching setpoint while it still reports `temporary_override` cannot confirm the handback. Backup-cloud schedule information is useful for choosing a release target, but never acts as a device acknowledgement. These checks are conservative when an integration does not expose a usable primary command-mode field: same-target commands remain unconfirmed. Confirmation still does not prove that the thermostat applied the setting to physical equipment; it only reports what that primary entity exposed.
+
+Acknowledgement state is intentionally held only in runtime memory. Shadow-mode decisions never create a command acknowledgement, and a reload starts with no pending or confirmed command even if persistent policy memory contains a previous setpoint. That prevents old thermostat state from being presented as an acknowledgement for a command this process did not send.
+
+The analytics decision context records the allowlisted command lifecycle alongside the schedule source, model version, current decision state, reason, action, and mode. It remains controller-reported provenance rather than a measurement or proof of physical actuation.

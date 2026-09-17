@@ -39,3 +39,9 @@ get_advisor_reports:
     report_id:
       selector:
         text:
+
+preview_control_import:
+import_controls:
+get_control_report:
+handover_controls:
+rollback_controls:

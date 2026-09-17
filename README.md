@@ -5,10 +5,15 @@
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
-**Version 0.5.1 is observation-only, with optional historical analytics.** It publishes
-sensors, structured reports and a private adjustment journal. Existing
-OT Thermostat Control, Boiler Flow Control and Radiator Analytics continue operating.
-An optional Heating Advisor generates reports through selected Home Assistant AI Task profiles. Control migration remains a future milestone.
+**Version 0.6.1 includes consolidated comfort and boiler control**, with an explicit
+legacy import and exclusive handover. Imported controllers start in shadow. It
+replaces OT Thermostat Control and Boiler Flow Control after handover, while keeping
+RAMSES/Evohome and EMS-ESP as the device connections. Observation, history and the
+optional Heating Advisor remain available independently.
+
+See [control setup and handover](docs/control-and-handover.md),
+[controller configuration](docs/control-configuration.md), and
+[commissioning](docs/commissioning.md). Version 0.6.1 is a commissioning prerelease: software validation is complete, but physical heating performance still requires a supervised trial. New setup and import both start in shadow.
 
 ## Install
 
@@ -27,7 +32,7 @@ Home Assistant's `custom_components` directory.
 
 1. Open **HACS → ⋮ → Custom repositories**.
 2. Add `https://github.com/xpenno255/ha-home-heating-optimisation` with type **Integration**.
-3. Find **Home Heating Optimisation**, download release **v0.5.1**, then restart Home Assistant.
+3. Find **Home Heating Optimisation**, select a published release, then restart Home Assistant.
 4. Go to **Settings → Devices & services → Add integration** and select
    **Home Heating Optimisation**.
 
@@ -35,10 +40,9 @@ This repository supports HACS custom-repository installation; it is not included
 in HACS's default catalogue. It includes standard and high-resolution local brand
 icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
 
-HACS installs the component from the selected release tag. The attached
-`home_heating_optimisation-0.5.1.zip` is an alternative for manual installation.
-Keep the existing heating integrations enabled: this release observes them and
-makes no thermostat or boiler commands.
+HACS installs the component from the selected release tag. The release ZIP is an alternative for manual installation. The v0.6.1 prerelease is available for explicit installation; enable prerelease visibility in HACS if required. It is not a claim of completed physical commissioning.
+Keep the existing controllers installed until the control import, shadow comparison
+and handover have been verified. The published v0.5.x releases are observation-only.
 
 ## Configure
 
@@ -59,9 +63,8 @@ The observer does not infer DHW from aggregate demand. Select a space-heating si
 with the intended meaning; flame/burner activity alone can also include hot water.
 
 Configure options through the integration's cogwheel. You can add/remove rooms,
-rename them and clear optional mappings. Existing observation entity IDs are retained
-for a room-name change or an optional-sensor change. Source entity ID renames require
-reconfiguration; automatic source rename tracking is a later enhancement.
+rename them and clear optional mappings. Controlled room removal/rebinding requires deliberate control configuration and ownership review. Existing observation entity IDs are retained
+for a room-name change or an optional-sensor change. Configured source entity ID renames are followed through the HA entity registry; see [source identity](docs/source-identity.md). References written only in survey YAML still need manual updates.
 
 ## Entities
 
@@ -125,7 +128,7 @@ physical sampling. The prior recent-change expiry policy remains selectable. Con
 
 ## House survey (`house.yaml`)
 
-Version 0.5.1 can read the existing OT Thermostat Control survey: `house.yaml` and
+The integration can read the existing OT Thermostat Control survey: `house.yaml` and
 `rooms/*.yaml`. In the system options, set **House survey directory**, then confirm
 which survey room belongs to each thermostat. Unique survey climate bindings are
 suggested; mappings never change your selected sensors or controller settings.
@@ -137,10 +140,9 @@ custom_components/ot_thermostat_control/house
 ```
 
 Use your OT hub's configured survey directory if you already use an override. The
-folder must be inside HA's configuration directory. Files stay in their current
-location and are read only. For long-term storage, a user-owned folder outside
+folder must be inside HA's configuration directory. Observation survey reads do not change source files. For long-term storage, a user-owned folder outside
 `custom_components` avoids replacement by updates to the integration that bundles
-them; this release does not move the files.
+them; control import copies the survey to an independent user-owned directory while retaining the originals.
 
 The **House model status** sensor shows import/mapping status and counts.
 `home_heating_optimisation.get_house_model` returns thermal/layout context even when
@@ -148,18 +150,18 @@ analytics is disabled. `get_report` includes the same context alongside historic
 metrics. After editing survey files, run `reload_house_model` to refresh the model.
 
 See [house survey documentation](docs/house-survey.md) for validation, privacy,
-confidence labels and limitations. The optional advisor can use this survey context; control migration remains future work.
+confidence labels and limitations. The optional advisor can use this survey context; control import and handover are described in [control setup](docs/control-and-handover.md).
 
 ## Roadmap and AI
 
 See the [implementation plan](docs/implementation-plan.md),
 [migration design](docs/migration-plan.md) and [design notes](docs/design-notes.md).
 
-Planned modules: operative-temperature comfort control, boiler supervision and an
-optional Heating Advisor. The advisor will select Home
+The integration includes operative-temperature comfort control, boiler supervision and an
+optional Heating Advisor. The advisor selects Home
 Assistant AI Task profiles per task. Extended OpenAI Conversation manages local
 Gemma; the built-in Anthropic integration manages Claude credentials, model and
-supported effort settings. See [Heating Advisor setup and limits](docs/heating-advisor.md) for profile selection, scheduled reviews and report actions. AI calls require explicit enablement.
+supported effort settings. See [Heating Advisor setup and limits](docs/heating-advisor.md) for profile selection, scheduled reviews and report actions. AI calls require explicit enablement. AI cannot activate the controller or issue actuator commands.
 
 ## Development
 
@@ -174,7 +176,7 @@ python3.14 -m venv .venv
 
 Tests use an isolated Home Assistant instance. They cover configuration, units,
 quality, activity states, source expiry, options, entity identity, unload/reload,
-absence of device-service calls, historical calculations, storage failures, real
+shadow-mode absence of actuator writes, active-controller service calls, command readback, ownership, failure isolation, historical calculations, storage failures, real
 Recorder replay, journal actions and package contents. The GitHub workflow also runs
 hassfest and HACS validation. The observer and analytics have been verified on the live installation. Advisor provider evaluation is documented separately.
 
@@ -184,6 +186,7 @@ hassfest and the test suite. Package tests verify the MIT licence and bundled ic
 Brand artwork is in `assets/icon.svg`. To regenerate its PNGs, install the optional
 development dependency `CairoSVG==2.8.2` and run `python scripts/build_icon.py`.
 
-Remove the integration through Settings → Devices & services. It owns only its
-observation entities and private history/journal storage; source controls and the three existing integrations remain
-independent.
+Before removing an active consolidated controller, use the documented rollback to
+restore the previous owner. Source device integrations remain independent.
+
+Read the [readiness decisions and remaining scope](docs/readiness-decisions-2026-09-17.md) before the supervised trial. Full advisor conversations, experiments, coordinated learning, and legacy history/registry transfer remain later work.

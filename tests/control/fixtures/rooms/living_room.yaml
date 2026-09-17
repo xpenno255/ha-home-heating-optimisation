@@ -1,0 +1,66 @@
+# Synthetic fixture. No household survey or device identifiers.
+room:
+  id: living_room
+  name: Example living room
+geometry:
+  floor_area_m2: 24
+  height_m: 2.4
+boundaries:
+  faces:
+  - face: west
+    boundary: outside
+    construction: external_wall_main
+    gross_area_m2: 16
+    adjacent: null
+  - face: north
+    boundary: outside
+    construction: external_wall_extension
+    gross_area_m2: 12
+    adjacent: null
+  - face: south
+    boundary: outside
+    construction: external_wall_main
+    gross_area_m2: 12
+    adjacent: null
+  - face: east
+    boundary: heated_room
+    construction: null
+    gross_area_m2: 16
+    adjacent: utility
+  - face: floor
+    boundary: ground
+    construction: ground_floor_suspended
+    gross_area_m2: 24
+    adjacent: null
+  - face: roof
+    boundary: roof
+    construction: roof_extension
+    gross_area_m2: 8
+    adjacent: null
+  - face: ceiling
+    boundary: heated_room
+    construction: null
+    gross_area_m2: 16
+    adjacent: upstairs
+openings:
+  items:
+  - id: bay_french_doors_north
+    type: glazed_door
+    face: north
+    area_m2: 4
+    construction: glazed_door_timber_dg
+  - id: window_south
+    type: window
+    face: south
+    area_m2: 2
+    construction: window_timber_dg
+heating:
+  preferred_air_temperature_entity: sensor.example_living_air
+  zone_id: 01:000001_01
+  climate_primary: climate.example_living
+  climate_backup: climate.example_cloud
+  emitters:
+  - type: radiator
+    output_dt50_w: 1500
+  - type: radiator
+    output_dt50_w: 2000

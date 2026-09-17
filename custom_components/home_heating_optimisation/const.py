@@ -1,10 +1,11 @@
 """Observation-only configuration and source definitions."""
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 DOMAIN = "home_heating_optimisation"
 NAME = "Home Heating Optimisation"
-VERSION = "0.5.1"
+VERSION = "0.6.1"
 ROOMS = "rooms"
 ZONES = "zones"
 ROOM_MAX_AGE = 30 * 60
@@ -31,4 +32,4 @@ SYSTEM_SOURCES = {
 
 def effective_config(entry):
     """Options are a complete replacement, including cleared optional mappings."""
-    return dict(entry.options or entry.data)
+    return deepcopy(dict(entry.options or entry.data))

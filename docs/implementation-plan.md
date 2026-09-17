@@ -30,8 +30,7 @@ it has no runtime imports or dependencies on sibling projects.
 
 Implemented in 0.2.0; see [definitions and validation](historical-analytics.md).
 Live observation, backfill, house mappings and storage migration were verified in 0.4.0. Context currently includes allowlisted controller
-outputs; complete schedule provenance and controller model versions remain future
-work. The optional advisor follows before control ownership migration.
+outputs; v0.6.1 adds sampled room schedule-source, model-version and command lifecycle provenance. A complete event-by-event intervention journal remains future work. The optional advisor follows before control ownership migration.
 
 - Add explicit schedule, operative target, corrected-air target and decision-reason
   records. Associate units, provenance and model version with each field.
@@ -45,6 +44,8 @@ Acceptance: historical and live observations produce consistent metrics; missing
 data remains unknown; source/definition changes cannot be merged silently.
 
 ## Milestone 3 — comfort and boiler control
+
+v0.6.0 implements the existing control engines, independent modes, configuration/survey import and journalled handover. See [control setup](control-and-handover.md). Cold-weather commissioning and physical response evaluation remain outstanding. v0.6.1 adds standalone control options, radiator setpoint readback confirmation and configured-source rename handling. New control entities have separate IDs; legacy registry/history transfer is not implemented.
 
 - Port the pure model/policy code first and run its existing regression suites.
 - Adapt coordinators to the shared input model without changing policy outcomes.

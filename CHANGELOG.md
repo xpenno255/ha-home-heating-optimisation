@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.1 — controller readiness (commissioning prerelease)
+
+- Configure and edit consolidated controllers independently of legacy integrations, with explicit shadow/ownership safeguards and separate observation/control sensor choices.
+- Track requested, sent, pending and confirmed radiator targets using subsequent thermostat readback; distinguish service success, missing echoes and failures.
+- Include command timing, schedule source and model-version provenance in sampled controller history.
+- Follow source entity registry renames across configured observation/control/MQTT references while retaining room identities and rollback snapshots.
+- Validate control continuity through optional Recorder, history-save and AI failures.
+- Publish the consolidated controller regression suites using synthetic survey fixtures, with a documented supervised trial and retained legacy rollback.
+
+This includes the previously local 0.6.0 control consolidation below. Physical commissioning remains outstanding; new setups and imports remain in shadow.
+
+## 0.6.0 — consolidated control (local development release)
+
+- Port the existing comfort and boiler engines with their regression suites.
+- Import room sensors, tunables, occupancy settings and surveys into independent shadow control.
+- Add journalled handover, legacy-writer checks, persistent independent modes and rollback.
+- Use actual non-retained EMS-ESP MQTT payload receipt for telemetry freshness.
+- Retry missing RAMSES schedules and bound offline schedule-cache use.
+- Keep original observation measurements separate from selected comfort-control room air.
+
+
 ## 0.5.2 — consistent advisor report requirements
 
 - Share report limits between prompt instructions, schema field descriptions and local validation, including the 12-reference limit per finding and required follow-up checks.

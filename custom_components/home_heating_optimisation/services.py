@@ -124,3 +124,31 @@ def async_register_services(hass):
         schema=vol.Schema({vol.Optional("report_id"): cv.string}),
         supports_response=SupportsResponse.ONLY,
     )
+
+    from .control.migration import handover, import_controls, preview, rollback
+
+    async def control_preview(call):
+        return preview(hass, heating().config_entry)
+
+    async def control_import(call):
+        return await import_controls(hass, heating().config_entry)
+
+    async def control_report(call):
+        return heating().controls.report()
+
+    async def control_handover(call):
+        return await handover(heating().controls)
+
+    async def control_rollback(call):
+        return await rollback(heating().controls)
+
+    for name, handler in (
+        ("preview_control_import", control_preview),
+        ("import_controls", control_import),
+        ("get_control_report", control_report),
+        ("handover_controls", control_handover),
+        ("rollback_controls", control_rollback),
+    ):
+        hass.services.async_register(
+            DOMAIN, name, handler, schema=vol.Schema({}), supports_response=SupportsResponse.ONLY
+        )

@@ -11,7 +11,7 @@
       },
       "room": {
         "title": "Configure {room}",
-        "description": "Optionally select an independent air sensor and a zone demand sensor. Otherwise the thermostat attributes are used. This does not change the sensor used by your thermostat.",
+        "description": "Select observation sources. These do not change thermostat or comfort-control inputs. Current control air source: {control_source}.",
         "data": {
           "name": "Room name",
           "air_sensor": "Independent air temperature",
@@ -27,7 +27,7 @@
       },
       "system": {
         "title": "System observations",
-        "description": "All inputs are optional. Select measured flow/return temperatures. For DHW, use a resolved signal such as Boiler Flow Control DHW Active. Unknown activity remains unknown.",
+        "description": "All observation inputs are optional and do not change control sources. Select measured flow/return temperatures. For DHW, use a resolved signal such as Boiler Flow Control DHW Active. Unknown activity remains unknown.",
         "data": {
           "outdoor_temperature": "Outdoor temperature",
           "flow_temperature": "Actual boiler flow temperature",
@@ -63,7 +63,8 @@
       "invalid_source": "Choose a valid source outside this integration.",
       "invalid_name": "Enter a room name.",
       "invalid_survey": "Cannot load this survey. Check its path, YAML format, room IDs and numeric values. Files must be inside the Home Assistant configuration directory.",
-      "invalid_survey_mapping": "Choose an existing survey room; each room can only be mapped once."
+      "invalid_survey_mapping": "Choose an existing survey room; each room can only be mapped once.",
+      "controlled_rooms_locked": "Controlled rooms cannot be removed or rebound through observation options. Restore legacy ownership and review the control import first."
     },
     "abort": {
       "already_configured": "Only one heating system can be configured."
@@ -75,12 +76,13 @@
         "title": "Heating options",
         "menu_options": {
           "mapping": "Room, system and survey mappings",
+          "control": "Comfort and boiler control",
           "advisor": "Heating Advisor"
         }
       },
       "room": {
         "title": "Configure {room}",
-        "description": "Optionally select an independent air sensor and a zone demand sensor. Otherwise the thermostat attributes are used. This does not change the sensor used by your thermostat.",
+        "description": "Select observation sources. These do not change thermostat or comfort-control inputs. Current control air source: {control_source}.",
         "data": {
           "name": "Room name",
           "air_sensor": "Independent air temperature",
@@ -96,7 +98,7 @@
       },
       "system": {
         "title": "System observations",
-        "description": "All inputs are optional. Select measured flow/return temperatures. For DHW, use a resolved signal such as Boiler Flow Control DHW Active. Unknown activity remains unknown.",
+        "description": "All observation inputs are optional and do not change control sources. Select measured flow/return temperatures. For DHW, use a resolved signal such as Boiler Flow Control DHW Active. Unknown activity remains unknown.",
         "data": {
           "outdoor_temperature": "Outdoor temperature",
           "flow_temperature": "Actual boiler flow temperature",
@@ -128,9 +130,110 @@
       },
       "mapping": {
         "title": "Observe your heating",
-        "description": "Select the room thermostats to observe. This version only reads data; existing heating controls continue to operate.",
+        "description": "Select room thermostats to observe. Thermostats already bound to comfort control must remain selected; additional observation-only rooms may be added. Observation sensors stay independent from control sensors.",
         "data": {
           "zones": "Room thermostats"
+        }
+      },
+      "control": {
+        "title": "Control configuration",
+        "menu_options": {
+          "control_hub": "House and shared sources",
+          "control_boiler": "Boiler sources and limits",
+          "control_rooms": "Room comfort controls"
+        }
+      },
+      "control_hub": {
+        "title": "House and shared control sources",
+        "description": "Configure the thermal survey and shared inputs used by comfort control. These selections are independent from observation mappings. Saving remains in shadow and does not claim actuator ownership.",
+        "data": {
+          "house_dir": "Control survey directory",
+          "global_enabled": "Enable comfort-control calculations",
+          "outdoor_temp_sensor": "Control outdoor temperature",
+          "flow_temp_entity": "Control boiler flow temperature",
+          "weather_entity": "Weather entity (optional)",
+          "irradiance_sensor": "Solar irradiance (optional)",
+          "manual_flow_temp": "Fallback flow temperature",
+          "ground_temp": "Ground temperature"
+        },
+        "data_description": {
+          "house_dir": "Directory containing house.yaml and rooms/*.yaml. This is the control model; change observation survey mappings separately.",
+          "global_enabled": "Individual room enable switches still apply.",
+          "manual_flow_temp": "Used only when a trustworthy measured space-heating flow temperature is unavailable."
+        }
+      },
+      "control_boiler": {
+        "title": "Boiler control sources and limits",
+        "description": "Select the boiler setpoint actuator, measurements and safety limits. The controller remains in shadow after saving. Changing the actuator revokes ownership until Claim ownership is run again.",
+        "data": {
+          "enabled": "Enable boiler-control calculations",
+          "flow_setpoint_entity": "Boiler flow setpoint actuator",
+          "outdoor_temp_entity": "Outdoor temperature",
+          "current_flow_entity": "Measured flow temperature (optional)",
+          "return_temp_entity": "Measured return temperature (optional)",
+          "heating_active_entity": "Space-heating active (optional)",
+          "burner_power_entity": "Burner power (optional)",
+          "heat_demand_entity": "Aggregate heat demand (optional)",
+          "hw_relay_demand_entity": "Hot-water relay demand (optional)",
+          "cylinder_temp_entity": "Cylinder temperature (optional)",
+          "cylinder_target_entity": "Cylinder target (optional)",
+          "max_flow_entity": "Boiler maximum flow limit (optional)",
+          "boiler_relay_entity": "Boiler relay state (optional)",
+          "zone_demand_entities": "Zone demand sources (optional)",
+          "room_climate_entities": "Room thermostat feedback (optional)",
+          "flow_min": "Minimum heating flow",
+          "flow_max": "Maximum heating flow",
+          "dhw_flow_min": "Minimum hot-water flow",
+          "dhw_flow_max": "Maximum hot-water flow",
+          "dhw_return_ceiling": "Hot-water return ceiling",
+          "min_hold_minutes": "Minimum setpoint hold",
+          "manual_hold_minutes": "Manual-change hold",
+          "dhw_target": "Hot-water cylinder target",
+          "dhw_progress_minutes": "Hot-water progress interval",
+          "dhw_timeout_minutes": "Hot-water charge timeout",
+          "input_freshness_minutes": "Input freshness limit",
+          "outdoor_freshness_minutes": "Outdoor freshness limit",
+          "dhw_fallback_flow": "Hot-water fallback flow"
+        },
+        "data_description": {
+          "enabled": "Disables boiler writes and calculations without removing the configuration.",
+          "manual_hold_minutes": "How long an external setpoint change suspends automatic boiler writes."
+        }
+      },
+      "control_rooms": {
+        "title": "Comfort control: {room}",
+        "description": "Select this room's control inputs and limits. Observation currently measures air from {observer_source}; the control air source below is deliberately independent and changes only when you submit this form.",
+        "data": {
+          "enabled": "Enable this room controller",
+          "occupancy_enabled": "Apply occupancy offsets",
+          "primary_climate": "Controlled thermostat",
+          "room_id": "Control survey room ID",
+          "backup_climate": "Schedule backup thermostat (optional)",
+          "air_temp_sensor": "Control air temperature override (optional)",
+          "occupancy_sensor": "Occupancy source (optional)",
+          "zone_setpoint_min": "Minimum controlled thermostat setpoint",
+          "zone_setpoint_max": "Maximum controlled thermostat setpoint",
+          "manual_hold_minutes": "Manual-change hold",
+          "preheat_release_minutes": "Preheat release window",
+          "override_duration": "Temporary override duration",
+          "window_open_delay": "Window-open detection delay",
+          "window_delay": "Window-close recovery delay",
+          "window_setpoint": "Open-window setpoint",
+          "time_window_enabled": "Restrict occupancy offsets by time",
+          "time_window_start": "Occupancy offset start time",
+          "time_window_end": "Occupancy offset end time",
+          "unoccupied_duration": "Unoccupied confirmation delay",
+          "weekday_morning_offset": "Weekday morning occupancy offset",
+          "weekday_afternoon_offset": "Weekday afternoon occupancy offset",
+          "weekday_evening_offset": "Weekday evening occupancy offset",
+          "weekend_morning_offset": "Weekend morning occupancy offset",
+          "weekend_afternoon_offset": "Weekend afternoon occupancy offset",
+          "weekend_evening_offset": "Weekend evening occupancy offset",
+          "asymmetry_mode": "Room asymmetry model"
+        },
+        "data_description": {
+          "air_temp_sensor": "Leave empty to use the survey's preferred air source, then thermostat fallbacks. This does not follow the observation sensor automatically; the control sensor reports the source actually selected.",
+          "manual_hold_minutes": "How long a manual thermostat change suspends comfort writes."
         }
       },
       "advisor": {
@@ -155,9 +258,27 @@
       "invalid_name": "Enter a room name.",
       "invalid_survey": "Cannot load this survey. Check its path, YAML format, room IDs and numeric values. Files must be inside the Home Assistant configuration directory.",
       "invalid_survey_mapping": "Choose an existing survey room; each room can only be mapped once.",
+      "controlled_rooms_locked": "A thermostat bound to comfort control cannot be removed or rebound here. Edit its actuator in Control configuration; additional observation-only rooms are allowed.",
+      "controlled_survey_locked": "The active control model uses this survey directory. Edit the control survey explicitly before changing the observation survey.",
+      "control_required_source": "Select every required control source.",
+      "control_required_survey": "Enter the thermal survey directory used by control.",
+      "control_required_survey_room": "Enter a survey room ID that exists in the selected control survey.",
+      "control_invalid_survey": "The control survey cannot be loaded. Check its path, YAML and room files; it must be inside the Home Assistant configuration directory.",
+      "control_duplicate_room": "Each controlled thermostat and survey room can only be selected once.",
+      "control_no_rooms": "Configure at least one observed room before setting up control.",
+      "control_invalid_time": "Enter each time as HH:MM or HH:MM:SS.",
+      "control_invalid_policy": "Choose a supported comfort policy option.",
+      "control_invalid_limits": "Review the control limits. Minimums must be below maximums and all values must be within the supported range.",
+      "control_unsupported_schema": "This control configuration version cannot be edited here.",
+      "control_active": "Return every consolidated controller to shadow before editing configuration.",
       "advisor_needs_analytics": "Enable historical analytics before the advisor.",
       "invalid_ai_profile": "Select an available Extended OpenAI or Anthropic AI Task profile with Home Assistant APIs and all tools disabled. For Extended OpenAI, set Functions to [].",
       "missing_ai_profile": "Select a profile for each scheduled task."
+    },
+    "abort": {
+      "control_active": "Return every consolidated controller to shadow before editing configuration.",
+      "control_state_save_failed": "Controller state could not be saved safely, so configuration was not changed.",
+      "control_no_rooms": "Configure at least one observed room before setting up control."
     }
   },
   "entity": {
@@ -310,6 +431,32 @@
           "description": "Optional ID from the report list."
         }
       }
+    },
+    "preview_control_import": {
+      "name": "Preview controller import",
+      "description": "Read legacy room, boiler and sensor mappings without changing them."
+    },
+    "import_controls": {
+      "name": "Import controllers",
+      "description": "Copy existing controllers and survey into consolidated shadow control."
+    },
+    "get_control_report": {
+      "name": "Get control report",
+      "description": "Read shadow decisions and ownership diagnostics."
+    },
+    "handover_controls": {
+      "name": "Hand over / claim control ownership",
+      "description": "For imports, disable retained legacy controllers; for standalone setup, verify no legacy conflict. Then journal consolidated ownership while remaining in shadow."
+    },
+    "rollback_controls": {
+      "name": "Restore legacy controllers",
+      "description": "Stop consolidated writes and re-enable the retained legacy controllers."
+    }
+  },
+  "issues": {
+    "dhw_charge_problem": {
+      "title": "Hot-water charge needs review",
+      "description": "The boiler controller reported: {reason}. Check the cylinder and heating system."
     }
   }
 }
