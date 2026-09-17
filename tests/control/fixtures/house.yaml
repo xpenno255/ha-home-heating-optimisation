@@ -1,0 +1,32 @@
+# Synthetic fixture. No household survey or device identifiers.
+house:
+  name: Synthetic test house
+  front_elevation_bearing_deg: 195
+  face_bearings_deg:
+    N: 15
+    E: 105
+    S: 195
+    W: 285
+constructions:
+  external_wall_main:
+    u_value: 1.5
+  external_wall_extension:
+    u_value: 0.6
+  wall_to_unheated:
+    u_value: 1.5
+  window_timber_dg:
+    u_value: 1.4
+  glazed_door_timber_dg:
+    u_value: 1.5
+  glazed_door_alu_dg:
+    u_value: 1.6
+  external_door_solid:
+    u_value: 3
+  roof_extension:
+    u_value: 0.6
+  ground_floor_suspended:
+    u_value: 0.8
+  ground_floor_solid_1980s:
+    u_value: 0.8
+heating:
+  optimum_start_enabled: true

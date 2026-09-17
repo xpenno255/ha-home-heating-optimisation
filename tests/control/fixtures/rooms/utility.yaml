@@ -1,0 +1,44 @@
+# Synthetic fixture. No household survey or device identifiers.
+room:
+  id: utility
+  name: Example utility
+geometry:
+  floor_area_m2: 10
+  height_m: 2.4
+boundaries:
+  faces:
+  - face: north
+    boundary: outside
+    construction: external_wall_extension
+    gross_area_m2: 8
+    adjacent: null
+  - face: east
+    boundary: unheated_space
+    construction: wall_to_unheated
+    gross_area_m2: 10
+    adjacent: garage
+  - face: south
+    boundary: heated_room
+    construction: null
+    gross_area_m2: 8
+    adjacent: living_room
+  - face: west
+    boundary: outside
+    construction: external_wall_extension
+    gross_area_m2: 10
+    adjacent: null
+  - face: floor
+    boundary: ground
+    construction: ground_floor_solid_1980s
+    gross_area_m2: 10
+    adjacent: null
+  - face: roof
+    boundary: roof
+    construction: roof_extension
+    gross_area_m2: 10
+    adjacent: null
+heating:
+  zone_id: 01:000001_02
+  emitters:
+  - type: radiator
+    output_dt50_w: 1000

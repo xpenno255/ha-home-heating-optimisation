@@ -8,6 +8,10 @@ PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
+    from .control.entities import ControlDHW
+
+    if entry.runtime_data.controls.boiler:
+        async_add_entities([ControlDHW(entry.runtime_data.controls)])
     async_add_entities(
         [
             HeatingBinarySensor(entry.runtime_data, entry, key)

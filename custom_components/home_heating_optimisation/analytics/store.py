@@ -41,6 +41,7 @@ def source_signature(config, unit):
             not in (
                 "rooms",
                 "advisor",
+                "control",
                 "survey_directory",
                 "survey_rooms",
                 "analytics_enabled",

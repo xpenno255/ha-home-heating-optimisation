@@ -108,6 +108,38 @@ def test_decision_context_is_allowlisted_and_does_not_change_measurements(config
     }
 
 
+def test_decision_context_keeps_command_and_model_provenance(config):
+    config["rooms"][0]["decision_sensor"] = "sensor.ot"
+    states = {
+        "sensor.ot": state(
+            "sensor.ot",
+            "active",
+            reason="comfort satisfied",
+            action="write",
+            schedule_source="ramses",
+            model_version="steady_state_ot_v2",
+            requested_target=20.5,
+            sent_target=20.5,
+            pending_target=20.5,
+            write_status="pending_readback",
+            requested_at="2026-09-12T00:00:00+00:00",
+            secret="must not be retained",
+        )
+    }
+    context = snapshot(states, BASE, config, "°C")["intent"]["rooms"]["study"]["decision_sensor"]
+    assert context["attributes"] == {
+        "reason": "comfort satisfied",
+        "action": "write",
+        "requested_target": 20.5,
+        "sent_target": 20.5,
+        "pending_target": 20.5,
+        "write_status": "pending_readback",
+        "requested_at": "2026-09-12T00:00:00+00:00",
+        "schedule_source": "ramses",
+        "model_version": "steady_state_ot_v2",
+    }
+
+
 async def test_storage_roundtrip_mapping_eras_and_live_precedence(hass, config):
     signature = source_signature(config, "°C")
     store = HistoryStore(hass, "test")

@@ -1,4 +1,4 @@
-"""Home Heating Optimisation: observation-only foundation."""
+"""Consolidated comfort and boiler control, observations and optional advice."""
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -9,26 +9,46 @@ from homeassistant.helpers import entity_registry as er
 from .advisor.coordinator import Advisor
 from .analytics.coordinator import AnalyticsCoordinator
 from .const import DOMAIN
+from .control.runtime import Controls
 from .coordinator import HeatingCoordinator
+from .observations import watched_entities
 from .services import async_register_services
+from .source_identity import async_register_source_identity
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
+PLATFORMS = [
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.SELECT,
+    Platform.NUMBER,
+    Platform.SWITCH,
+    Platform.BUTTON,
+]
 type HeatingEntry = ConfigEntry[HeatingCoordinator]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_services(hass)
+    async_register_source_identity(hass)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator = HeatingCoordinator(hass, entry)
     entry.runtime_data = coordinator
+    coordinator.controls = Controls(hass, entry, coordinator)
+    coordinator.controls.wire_config()
+    entry.async_on_unload(coordinator.controls.stop)
+    coordinator.sources = watched_entities(coordinator.config)
+    await coordinator.telemetry.start()
+    entry.async_on_unload(coordinator.telemetry.stop)
+    await coordinator.controls.initialise()
     await coordinator.async_config_entry_first_refresh()
     await coordinator.load_house()
     if coordinator.config.get("analytics_enabled", False):
-        coordinator.analytics = AnalyticsCoordinator(hass, entry, coordinator.config)
+        coordinator.analytics = AnalyticsCoordinator(
+            hass, entry, coordinator.config, coordinator.telemetry.get
+        )
         await coordinator.analytics.initialise()
     coordinator.advisor = Advisor(hass, entry, coordinator)
     await coordinator.advisor.initialise()
@@ -43,6 +63,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
                 registry.async_remove(entity.entity_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.start(entry)
+    coordinator.telemetry.listeners.append(lambda: coordinator.changed(None))
+    await coordinator.controls.start()
     coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()
@@ -55,6 +77,7 @@ async def async_reload(hass: HomeAssistant, entry: HeatingEntry) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
+    await entry.runtime_data.controls.stop()
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded and entry.runtime_data.advisor:
         await entry.runtime_data.advisor.stop()

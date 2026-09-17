@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN, effective_config
 from .observations import make_snapshot, watched_entities
 from .survey import async_load_survey, evidence
+from .telemetry import Telemetry
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,10 +19,12 @@ LOGGER = logging.getLogger(__name__)
 class HeatingCoordinator(DataUpdateCoordinator):
     def __init__(self, hass, entry):
         super().__init__(hass, LOGGER, name=DOMAIN, config_entry=entry)
+        self.controls = None
         self.analytics = None
         self.advisor = None
         self.survey = {"status": "not_configured", "rooms": {}, "bindings": {}, "warnings": []}
         self.config = effective_config(entry)
+        self.telemetry = Telemetry(hass, self.config.get("mqtt_sources", []))
         self.sources = watched_entities(self.config)
 
     async def load_house(self):
@@ -34,7 +37,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
 
     def snapshot(self):
         return make_snapshot(
-            {e: s for e in self.sources if (s := self.hass.states.get(e)) is not None},
+            {e: s for e in self.sources if (s := self.telemetry.get(e)) is not None},
             self.config,
             dt_util.utcnow(),
             self.hass.config.units.temperature_unit,

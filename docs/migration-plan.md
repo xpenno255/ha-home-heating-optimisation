@@ -1,6 +1,6 @@
 # Migration and control handover design
 
-Status: design only. Version 0.3.0 does not migrate or alter legacy integrations.
+Status: the original design below is partially implemented in v0.6.1. See [implemented import and handover](control-and-handover.md). Configuration/survey import and exclusive ownership are available; legacy entity/history transfer and a general-purpose importer are not claimed.
 
 ## Existing identities and storage
 
@@ -26,7 +26,7 @@ A future import must validate house/room schemas, preserve unknown fields and
 provenance, preview room matches and retain originals for rollback. AI evidence
 should contain only relevant selected thermal properties, excluding unrelated
 household/network details. Sharing survey data does not itself transfer actuator
-ownership. Read-only survey loading and explicit mappings are implemented in 0.3.0. File migration and actuator transfer are not implemented.
+ownership. Read-only survey loading and explicit mappings are implemented in 0.3.0. Control import now copies the survey and the handover service transfers controller ownership; observer-only setup remains read-only.
 
 ## Proposed importer
 
@@ -55,8 +55,7 @@ ownership. Read-only survey loading and explicit mappings are implemented in 0.3
 - Test user-renamed IDs, disabled entities, dashboard references, long-term statistics,
   restart midway through migration and a repeated importer run.
 - A source entity rename must preserve its room mapping through the registry identity
-  in the migration implementation. The initial observer requires reconfiguration for
-  renamed source entity IDs; it does not yet implement automatic source rename tracking.
+  in the migration implementation. Version 0.6.1 follows configured source references through registry rename events. Survey-file-only references and legacy output registry/history transfer are outside that listener.
 
 ## Exclusive actuator handover
 

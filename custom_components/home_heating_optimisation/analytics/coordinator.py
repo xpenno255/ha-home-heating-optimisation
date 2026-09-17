@@ -51,8 +51,9 @@ def calculate(points, notes, config, now, timezone):
 
 
 class AnalyticsCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass, entry, config):
+    def __init__(self, hass, entry, config, state_reader=None):
         super().__init__(hass, LOGGER, name=f"{DOMAIN} history", config_entry=entry)
+        self.state_reader = state_reader or hass.states.get
         self.entry = entry
         self.config = config
         self.sources = watched_entities(config)
@@ -79,7 +80,7 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
         if self.closed:
             return
         now = dt_util.utcnow()
-        states = {e: s for e in self.sources if (s := self.hass.states.get(e)) is not None}
+        states = {e: s for e in self.sources if (s := self.state_reader(e)) is not None}
         changed = {_event.data["entity_id"]} if hasattr(_event, "data") else set()
         before = self.source_states
         self.source_states = states
@@ -170,7 +171,9 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
                     "coverage": "Known recorded state duration; not proof of fresh physical samples. Recent-change coverage is reported separately.",
                     "context_sampling_seconds": 60,
                     "decision_context": "reported controller intent and estimates; not measured room comfort",
-                    "control": "observation_only",
+                    "control": "configured_controllers"
+                    if self.config.get("control")
+                    else "observation_only",
                 },
             }
         )

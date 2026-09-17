@@ -32,12 +32,22 @@ INTENT_ATTRIBUTES = (
     "would_write",
     "requested_target",
     "sent_target",
+    "pending_target",
     "confirmed_target",
     "write_status",
+    "readback_status",
+    "readback_timed_out",
+    "requested_at",
+    "sent_at",
+    "pending_since",
+    "confirmed_at",
+    "readback_at",
     "room_correction",
     "room_error",
     "schedule_setpoint",
     "occupancy_offset",
+    "schedule_source",
+    "model_version",
 )
 
 
