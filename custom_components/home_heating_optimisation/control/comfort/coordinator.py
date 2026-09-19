@@ -97,7 +97,6 @@ from .const import (
     MORNING_END,
     MORNING_START,
     OUTDOOR_CACHE_MAX_AGE_H,
-    SCHEDULE_FETCH_INTERVAL_H,
     THERMOSTAT_STEP,
 )
 from .core.geometry import RoomGeometry, load_house, load_room
@@ -121,6 +120,7 @@ from .core.policy import (
     decide,
 )
 from .hub import OTHubData
+from .schedule_fetch import ScheduleFetcher
 from .store import OTStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -254,6 +254,13 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._readback_timed_out = False
         self._pre_send_setpoint: float | None = None
         self._pre_send_mode: str | None = None
+        self._pre_send_until: datetime | str | None = None
+        self._pre_send_owned = False
+        self._service_echo_state: tuple[float, str | None, datetime | str | None] | None = None
+        self._owned_command_state: tuple[float, str | None, datetime | str | None] | None = None
+        self._service_completed_at: datetime | None = None
+        self._command_reverted = False
+        self._reversion_retry_used = False
         self._pending_action: Action | None = None
         self._enabled: bool = True
         self._occupancy_enabled: bool = True
@@ -261,6 +268,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._geometry: RoomGeometry | None = None
         self._geometry_error: str | None = None
         self._retry_cancel = None
+        self._schedule_fetcher = ScheduleFetcher(hass, store)
         self._schedule_source = "none"
         self._restore_complete: bool = False  # set by setup once restored entity states are in
         self._tunables: dict[str, float] = {}
@@ -595,28 +603,14 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         return cached if fresh and isinstance(cached, list) and cached else None
 
     async def _maybe_fetch_ramses_schedule(self, entity_id: str | None) -> None:
-        """Ask ramses_cc to pull the zone schedule over RF about once a day, so the offline
-        fallback stays current. Staggered naturally by each room's own cycle timing."""
-        if not entity_id:
-            return
-        # A failed fetch must not prevent retrying an absent schedule for a whole day.
-        available = self._ramses_schedule(entity_id) is not None
-        retry = timedelta(hours=SCHEDULE_FETCH_INTERVAL_H) if available else timedelta(minutes=5)
-        last = self._store.get("ramses_schedule_requested_at")
-        if last:
-            parsed = dt_util.parse_datetime(str(last))
-            if parsed and dt_util.utcnow() - dt_util.as_utc(parsed) < retry:
-                return
-        try:
-            await self.hass.services.async_call(
-                "ramses_cc", "get_zone_schedule", {"entity_id": entity_id}, blocking=False
+        """Refresh the fallback without blocking control or flooding a failing radio."""
+        hub = self._hub()
+        if entity_id and hub is not None:
+            self._schedule_fetcher.request(
+                entity_id,
+                hub.schedule_fetch_lock,
+                lambda: self._ramses_schedule(entity_id) is not None,
             )
-        except Exception:  # noqa: BLE001
-            # Not recorded as requested: retry on the next cycle rather than in a day.
-            _LOGGER.debug("OT %s: ramses_cc.get_zone_schedule unavailable", self.room_name)
-            return
-        self._store.set("ramses_schedule_requested_at", dt_util.utcnow().isoformat())
-        _LOGGER.debug("OT %s: requested zone schedule over RF", self.room_name)
 
     def _schedule_from_ramses(self, entity_id: str | None) -> float | None:
         schedule = self._ramses_schedule(entity_id)
@@ -892,6 +886,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         if self._retry_cancel is not None:
             self._retry_cancel()
             self._retry_cancel = None
+        await self._schedule_fetcher.stop()
         await super().async_shutdown()
 
     # ------------------------------------------------------------------
@@ -912,10 +907,22 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         return None
 
     @staticmethod
-    def _primary_status_mode(state) -> str | None:
-        """Return explicit ramses command mode, never generic climate state."""
+    def _canonical_until(value: Any) -> datetime | str | None:
+        """Make an exposed RAMSES expiry comparable without guessing its timezone."""
+        parsed = value if isinstance(value, datetime) else None
+        if parsed is None and isinstance(value, str):
+            parsed = dt_util.parse_datetime(value)
+        if parsed is not None and parsed.tzinfo is not None:
+            return dt_util.as_utc(parsed)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value if isinstance(value, str) else None
+
+    @classmethod
+    def _primary_status(cls, state) -> tuple[str | None, datetime | str | None]:
+        """Return explicit RAMSES command mode and expiry, never generic climate state."""
         if state is None:
-            return None
+            return None, None
         attrs = state.attributes
         # RAMSES zones expose `mode: {mode, setpoint, until}`.  Some source
         # versions expose the equivalent field under `status`; both are
@@ -923,45 +930,51 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         for container in (attrs.get("mode"), attrs.get("status")):
             mode = container.get("mode") if isinstance(container, dict) else None
             if isinstance(mode, str):
-                return mode
+                return mode, cls._canonical_until(container.get("until"))
         params = attrs.get("params")
         nested = params.get("mode") if isinstance(params, dict) else None
         mode = nested.get("mode") if isinstance(nested, dict) else None
         if isinstance(mode, str):
-            return mode
-        return nested if isinstance(nested, str) else None
+            return mode, cls._canonical_until(nested.get("until"))
+        return (nested, None) if isinstance(nested, str) else (None, None)
+
+    @classmethod
+    def _primary_status_mode(cls, state) -> str | None:
+        """Return the explicit RAMSES command mode for compatibility callers."""
+        return cls._primary_status(state)[0]
 
     def _primary_setpoint_observation(
         self,
-    ) -> tuple[float | None, datetime | None, str, str | None]:
+    ) -> tuple[float | None, datetime | None, str, str | None, datetime | str | None]:
         """Read the current primary setpoint and its source-specific mode evidence."""
         primary = self._config.get(CONF_PRIMARY_CLIMATE)
         st = self._state(primary)
         if st is None or st.state in UNAVAILABLE:
-            return None, None, "readback_unavailable", None
+            return None, None, "readback_unavailable", None, None
         reported = getattr(st, "last_reported", None)
         if not isinstance(reported, datetime):
-            return None, None, "readback_error", None
+            return None, None, "readback_error", None, None
         try:
             reported = dt_util.as_utc(reported)
             age = dt_util.utcnow() - reported
         except TypeError, ValueError:
-            return None, None, "readback_error", None
+            return None, None, "readback_error", None, None
+        mode, until = self._primary_status(st)
         if age < timedelta(0) or age > READBACK_MAX_AGE:
-            return None, reported, "readback_stale", None
+            return None, reported, "readback_stale", mode, until
         value = self._temperature_attr(primary, "temperature")
         if value is None:
-            return None, reported, "readback_error", None
-        return value, reported, "readback_observed", self._primary_status_mode(st)
+            return None, reported, "readback_error", mode, until
+        return value, reported, "readback_observed", mode, until
 
     def _read_primary_setpoint(
         self, sent_at: datetime
-    ) -> tuple[float | None, datetime | None, str, str | None]:
+    ) -> tuple[float | None, datetime | None, str, str | None, datetime | str | None]:
         """Read a fresh primary-thermostat setpoint for command confirmation."""
-        value, reported, status, mode = self._primary_setpoint_observation()
+        value, reported, status, mode, until = self._primary_setpoint_observation()
         if status == "readback_observed" and reported <= sent_at:
-            return None, reported, "readback_no_echo", mode
-        return value, reported, status, mode
+            return None, reported, "readback_no_echo", mode, until
+        return value, reported, status, mode, until
 
     def _has_command_evidence(self, value: float, mode: str | None) -> bool:
         """Require a compatible transition after sending, not just a heartbeat."""
@@ -984,14 +997,79 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             return changed_target or changed_mode
         return False
 
+    @staticmethod
+    def _same_command_state(
+        left: tuple[float, str | None, datetime | str | None] | None,
+        right: tuple[float, str | None, datetime | str | None] | None,
+    ) -> bool:
+        return bool(
+            left is not None
+            and right is not None
+            and abs(left[0] - right[0]) <= THERMOSTAT_STEP / 2
+            and left[1:] == right[1:]
+        )
+
+    @staticmethod
+    def _override_is_in_force(
+        state: tuple[float, str | None, datetime | str | None] | None, now: datetime
+    ) -> bool:
+        return bool(
+            state is not None
+            and state[1] == "temporary_override"
+            and isinstance(state[2], datetime)
+            and state[2] > now
+        )
+
+    def _is_command_reversion(
+        self,
+        value: float,
+        mode: str | None,
+        until: datetime | str | None,
+        now: datetime,
+    ) -> bool:
+        """Recognise only an exact return to a still-valid command HHO had confirmed."""
+        current = (value, mode, until)
+        pre_send = (
+            (self._pre_send_setpoint, self._pre_send_mode, self._pre_send_until)
+            if self._pre_send_setpoint is not None
+            else None
+        )
+        return (
+            self._pre_send_owned
+            and self._service_echo_state is not None
+            and self._override_is_in_force(pre_send, now)
+            and not self._same_command_state(self._service_echo_state, pre_send)
+            and self._same_command_state(current, pre_send)
+        )
+
     def _refresh_readback(self, now: datetime) -> None:
         """Advance only a command already accepted by the HA service layer."""
         if self._sent_at is None:
             return
+        boundary = self._service_completed_at or self._sent_at
+        value, reported, status, mode, until = self._read_primary_setpoint(boundary)
+        self._readback_at = reported
+        if status == "readback_observed":
+            if self._is_command_reversion(value, mode, until, now):
+                self._command_reverted = True
+                self._confirmed_target = None
+                self._confirmed_at = None
+                self._pending_target = self._sent_target
+                self._pending_since = self._sent_at
+                pre_send = (
+                    self._pre_send_setpoint,
+                    self._pre_send_mode,
+                    self._pre_send_until,
+                )
+                self._owned_command_state = pre_send
+                self._readback_timed_out = now - self._sent_at >= READBACK_TIMEOUT
+                self._readback_status = "readback_reverted"
+                self.write_status = "readback_reverted"
+                return
+            self._command_reverted = False
         if self._pending_target is None:
-            # Confirmation is a fact about the command/report pair.  A later
-            # thermostat change may be a user or schedule action, so it must
-            # not retroactively erase that acknowledgement.
+            # Confirmation remains a fact unless the exact owned pre-send state
+            # returns after a different service-local projection (handled above).
             if self._confirmed_target is not None:
                 self._readback_status = "confirmed"
                 self.write_status = "confirmed"
@@ -1001,16 +1079,16 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._readback_timed_out = bool(
             self._pending_since is not None and now - self._pending_since >= READBACK_TIMEOUT
         )
-        value, reported, status, mode = self._read_primary_setpoint(self._sent_at)
-        self._readback_at = reported
         if status == "readback_observed":
             if abs(value - self._pending_target) <= THERMOSTAT_STEP / 2:
                 if self._has_command_evidence(value, mode):
                     self._confirmed_target = self._pending_target
                     self._confirmed_at = now
+                    self._owned_command_state = (value, mode, until)
                     self._pending_target = None
                     self._pending_since = None
-                    self._pending_action = None
+                    self._command_reverted = False
+                    self._reversion_retry_used = False
                     self._readback_timed_out = False
                     self._readback_status = "confirmed"
                     self.write_status = "confirmed"
@@ -1231,6 +1309,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             memory=self._memory(),
             any_window_open=self._any_on(window_ids),
             any_adjacent_door_open=self._any_on(door_ids),
+            command_reverted=self._command_reverted,
+            retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
             params=self._policy_params(),
         )
         decision = decide(inputs)
@@ -1257,22 +1337,65 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             self._requested_target = target
             self._requested_at = now
             self.write_status = "requested"
-            # Mark the send boundary immediately before the blocking call.  An
-            # integration may synchronously publish its new thermostat state
-            # before the call returns; that report is still a valid echo.
+            # Keep the actual send/start time for provenance, but require a
+            # report newer than service completion.  RAMSES may project its
+            # transmitted packet into HA state while this call is still running;
+            # that local projection is transport evidence, not a readback.
             sent_at = dt_util.utcnow()
-            pre_value, _, pre_status, pre_mode = self._primary_setpoint_observation()
+            pre_value, _, pre_status, pre_mode, pre_until = self._primary_setpoint_observation()
+            pre_state = (
+                (pre_value, pre_mode, pre_until)
+                if pre_status == "readback_observed" and pre_value is not None
+                else None
+            )
+            policy_memory = inputs.memory
+            manual_standing = bool(
+                policy_memory.manual_detected_at is not None
+                and policy_memory.manual_release_at is not None
+                and sent_at < policy_memory.manual_release_at
+            )
+            memory_owned = bool(
+                policy_memory.last_written_setpoint is not None
+                and policy_memory.last_written_at is not None
+                and timedelta(0)
+                <= sent_at - policy_memory.last_written_at
+                < timedelta(minutes=inputs.params.override_minutes)
+                and pre_state is not None
+                and abs(pre_state[0] - policy_memory.last_written_setpoint) <= THERMOSTAT_STEP / 2
+            )
+            pre_owned = bool(
+                not manual_standing
+                and (memory_owned or inputs.retry_reverted_command)
+                and self._same_command_state(pre_state, self._owned_command_state)
+                and self._override_is_in_force(pre_state, sent_at)
+            )
             if await self._perform(decision):
+                service_completed_at = dt_util.utcnow()
+                echo_value, _, echo_status, echo_mode, echo_until = (
+                    self._primary_setpoint_observation()
+                )
+                service_echo = (
+                    (echo_value, echo_mode, echo_until)
+                    if echo_status == "readback_observed" and echo_value is not None
+                    else None
+                )
                 # A successful service call is only a send.  Discard any older
                 # acknowledgement, including one for an identical retry, until
-                # this command has a thermostat report newer than `sent_at`.
+                # this command has a thermostat report newer than completion.
                 self._sent_target = target
                 self._sent_at = sent_at
+                self._service_completed_at = service_completed_at
                 self._pending_target = target
                 self._pending_since = sent_at
                 self._pending_action = decision.action
                 self._pre_send_setpoint = pre_value if pre_status == "readback_observed" else None
                 self._pre_send_mode = pre_mode if pre_status == "readback_observed" else None
+                self._pre_send_until = pre_until if pre_status == "readback_observed" else None
+                self._pre_send_owned = pre_owned
+                self._service_echo_state = service_echo
+                self._command_reverted = False
+                if inputs.retry_reverted_command and decision.action is Action.WRITE:
+                    self._reversion_retry_used = True
                 self._confirmed_target = None
                 self._confirmed_at = None
                 self._readback_at = None

@@ -1,6 +1,7 @@
 """Real HA control setup, service writes, restoration and exclusive ownership."""
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,9 @@ from custom_components.home_heating_optimisation.control.comfort.core.policy imp
     Action,
     Decision,
     State,
+)
+from custom_components.home_heating_optimisation.control.comfort.core.policy import (
+    decide as policy_decide,
 )
 from custom_components.home_heating_optimisation.control.migration import handover, rollback
 from custom_components.home_heating_optimisation.observations import read
@@ -186,6 +190,243 @@ async def test_room_command_is_confirmed_only_by_a_fresh_thermostat_echo(
     assert published.attributes["confirmed_target"] == target
     assert published.attributes["sent_at"] == room.data.sent_at.isoformat()
     assert published.attributes["confirmed_at"] == room.data.confirmed_at.isoformat()
+
+
+async def test_room_service_local_projection_waits_for_a_post_service_report(
+    hass, controlled, sources, freezer
+):
+    _, c, _ = await start(hass, controlled)
+
+    async def optimistic(call):
+        target = call.data["setpoint"]
+        hass.states.async_set(
+            "climate.study",
+            "auto",
+            {
+                "current_temperature": 18,
+                "temperature": target,
+                "mode": {
+                    "mode": "temporary_override",
+                    "setpoint": target,
+                    "until": (dt_util.utcnow() + timedelta(hours=2)).isoformat(),
+                },
+            },
+            context=call.context,
+        )
+
+    hass.services.async_register("ramses_cc", "set_zone_mode", optimistic)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    target = room.data.pending_target
+    assert target is not None
+    assert room.data.write_status == "readback_no_echo"
+    assert room.data.confirmed_target is None
+    projected = hass.states.get("climate.study").attributes
+
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set("climate.study", "auto", projected)
+    await room.async_refresh()
+    assert room.data.write_status == "confirmed"
+
+
+async def test_same_target_expiry_change_alone_remains_unverified(
+    hass, controlled, sources, freezer
+):
+    _, c, _ = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    target = room.data.pending_target
+    first_until = dt_util.utcnow() + timedelta(hours=2)
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": target,
+                "until": first_until.isoformat(),
+            },
+        },
+    )
+    await room.async_refresh()
+    assert room.data.write_status == "confirmed"
+
+    freezer.tick(timedelta(minutes=46))
+    hass.states.async_set("sensor.air", 18, {"unit_of_measurement": "°C"})
+    current = hass.states.get("climate.study").attributes
+    hass.states.async_set("climate.study", "auto", current)
+    await room.async_refresh()
+    assert room.data.action == "write"
+    assert room.data.pending_target == target
+    second_until = dt_util.utcnow() + timedelta(hours=2)
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": target,
+                "until": second_until.isoformat(),
+            },
+        },
+    )
+    await room.async_refresh()
+    assert room.data.write_status == "matching_readback_unverified"
+    assert room.data.confirmed_target is None
+
+
+async def test_exact_owned_state_reversion_revokes_confirmation(hass, controlled, sources, freezer):
+    _, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    old_target = room.data.pending_target
+    old_until = dt_util.utcnow() + timedelta(hours=2)
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": old_target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": old_target,
+                "until": old_until.isoformat(),
+            },
+        },
+    )
+    await room.async_refresh()
+    assert room.data.confirmed_target == old_target
+
+    new_target = old_target + 0.1
+    new_until = dt_util.utcnow() + timedelta(hours=2, minutes=15)
+
+    async def optimistic(call):
+        calls.append(("ramses", dict(call.data)))
+        hass.states.async_set(
+            "climate.study",
+            "auto",
+            {
+                "current_temperature": 18,
+                "temperature": call.data["setpoint"],
+                "mode": {
+                    "mode": "temporary_override",
+                    "setpoint": call.data["setpoint"],
+                    "until": new_until.isoformat(),
+                },
+            },
+            context=call.context,
+        )
+
+    hass.services.async_register("ramses_cc", "set_zone_mode", optimistic)
+    memory = replace(
+        room._memory(), last_written_setpoint=new_target, last_written_at=dt_util.utcnow()
+    )
+    forced = Decision(State.ACTIVE, Action.WRITE, new_target, "forced change", memory)
+    with patch(
+        "custom_components.home_heating_optimisation.control.comfort.coordinator.decide",
+        return_value=forced,
+    ):
+        await room.async_refresh()
+    assert room.data.write_status == "readback_no_echo"
+
+    freezer.tick(timedelta(seconds=1))
+    projected = hass.states.get("climate.study").attributes
+    hass.states.async_set("climate.study", "auto", projected)
+    room._refresh_readback(dt_util.utcnow())
+    assert room._confirmed_target == new_target
+
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": old_target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": old_target,
+                "until": (old_until + timedelta(minutes=1)).isoformat(),
+            },
+        },
+    )
+    room._refresh_readback(dt_util.utcnow())
+    assert not room._command_reverted
+    assert room._confirmed_target == new_target
+
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": old_target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": old_target,
+                "until": old_until.isoformat(),
+            },
+        },
+    )
+    room._refresh_readback(dt_util.utcnow())
+    assert room._readback_status == "readback_reverted"
+    assert room._confirmed_target is None
+    assert room._pending_target == new_target
+    assert room._command_reverted
+    assert not room._is_command_reversion(
+        old_target, "temporary_override", old_until, old_until + timedelta(seconds=1)
+    )
+
+    # The exact owned-state reconciliation permits one recovery write.  If it
+    # returns again, ownership remains known but the retry budget stays spent.
+    with patch(
+        "custom_components.home_heating_optimisation.control.comfort.coordinator.decide",
+        return_value=forced,
+    ):
+        await room.async_refresh()
+    assert room._reversion_retry_used
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": old_target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": old_target,
+                "until": old_until.isoformat(),
+            },
+        },
+    )
+    room._refresh_readback(dt_util.utcnow())
+    assert room._readback_status == "readback_reverted"
+    assert room._command_reverted
+    assert room._reversion_retry_used
+
+    writes = len([kind for kind, _ in calls if kind == "ramses"])
+
+    def stable_desired(inputs):
+        return policy_decide(replace(inputs, computed_setpoint=new_target))
+
+    with patch(
+        "custom_components.home_heating_optimisation.control.comfort.coordinator.decide",
+        side_effect=stable_desired,
+    ):
+        await room.async_refresh()
+    assert room.data.state == "active"
+    assert room.data.action == "none"
+    assert room.data.readback_status == "readback_reverted"
+    assert len([kind for kind, _ in calls if kind == "ramses"]) == writes
 
 
 async def test_room_same_target_refresh_needs_primary_mode_transition(
@@ -571,14 +812,14 @@ async def test_missing_schedule_fetch_retries_in_five_minutes(hass, controlled, 
 
     hass.services.async_register("ramses_cc", "get_zone_schedule", fetch)
     await room._maybe_fetch_ramses_schedule("climate.study")
-    await hass.async_block_till_done()
+    await room._schedule_fetcher.task
     assert len(calls) == 1
     freezer.tick(timedelta(minutes=4))
     await room._maybe_fetch_ramses_schedule("climate.study")
     assert len(calls) == 1
     freezer.tick(timedelta(minutes=2))
     await room._maybe_fetch_ramses_schedule("climate.study")
-    await hass.async_block_till_done()
+    await room._schedule_fetcher.task
     assert len(calls) == 2
 
 
@@ -595,7 +836,7 @@ async def test_expired_offline_schedule_cannot_be_used(hass, controlled, sources
     assert room._ramses_schedule("climate.study") is None
 
 
-async def test_synchronous_echo_confirmation_time_follows_report(
+async def test_synchronous_report_during_service_waits_for_later_readback(
     hass, controlled, sources, freezer
 ):
     _, controls, _ = await start(hass, controlled)
@@ -615,6 +856,16 @@ async def test_synchronous_echo_confirmation_time_follows_report(
 
     hass.services.async_register("ramses_cc", "set_zone_mode", echo)
     await controls.set_mode("study", "active")
-    data = controls.rooms["study"].data
+    room = controls.rooms["study"]
+    data = room.data
+    assert data.confirmed_target is None
+    assert data.pending_target == data.sent_target
+    assert data.write_status == "readback_no_echo"
+
+    freezer.tick(timedelta(seconds=1))
+    current = hass.states.get("climate.study")
+    hass.states.async_set("climate.study", current.state, current.attributes)
+    await room.async_refresh()
+    data = room.data
     assert data.confirmed_target == data.sent_target
-    assert data.sent_at < data.readback_at <= data.confirmed_at
+    assert data.sent_at < room._service_completed_at < data.readback_at <= data.confirmed_at

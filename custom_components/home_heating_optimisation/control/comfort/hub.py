@@ -7,6 +7,7 @@ Persisted through `OTStore` so restarts do not lose the running mean.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -24,6 +25,7 @@ class OTHubData:
     global_enabled: bool = True
     restore_complete: bool = False  # set by setup once the global-enable switch has restored
     store: OTStore | None = None
+    schedule_fetch_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     # Flow temperature: last value seen while DHW was not active.
     flow_temp_used: float | None = None
     flow_temp_source: str = "none"

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2 — radio fault recovery (commissioning prerelease)
+
+- Exclude state projected during a thermostat service call from command confirmation.
+- Recognise a return to an exact previous, still-owned override separately from a new manual adjustment, with a bounded recovery retry.
+- Keep same-temperature renewals explicitly unverified when the source cannot prove acknowledgement; an expiry change alone is insufficient.
+- Serialize optional radio schedule downloads in the background, skip unavailable zones, and back off repeated failures from five minutes to an hour.
+- Refresh the offline cache timestamp after a successful download even when the schedule is unchanged.
+
 ## 0.6.1 — controller readiness (commissioning prerelease)
 
 - Configure and edit consolidated controllers independently of legacy integrations, with explicit shadow/ownership safeguards and separate observation/control sensor choices.
