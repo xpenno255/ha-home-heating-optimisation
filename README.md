@@ -66,6 +66,39 @@ Configure options through the integration's cogwheel. You can add/remove rooms,
 rename them and clear optional mappings. Controlled room removal/rebinding requires deliberate control configuration and ownership review. Existing observation entity IDs are retained
 for a room-name change or an optional-sensor change. Configured source entity ID renames are followed through the HA entity registry; see [source identity](docs/source-identity.md). References written only in survey YAML still need manual updates.
 
+## Estimated boiler efficiency
+
+In **Controller configuration > Boiler sources and limits**, optionally select
+**British Gas 430/i - natural gas (estimated)** as the efficiency profile. It is
+**disabled by default**, including for existing/imported configurations. This adds
+an **Estimated boiler efficiency** diagnostic; it never changes boiler control.
+Configure measured return temperature, burner modulation (%) and heating-active
+inputs whose off/on transitions represent boiler burns.
+
+This is a **gross-basis, full-load reference**, not measured efficiency or an
+estimate corrected for actual burner load. Between 30 and 60 C return temperature:
+
+`efficiency_percent = 100 * 0.901 * (31.8 - 1.8 * (return_c - 30) / 30) / 30.9`
+
+The whole-percent display is about 93% at 30 C, 90% at 45 C and 87% at 60 C.
+The [430/i manual, page 6](https://www.freeboilermanuals.com/assets/pdf/British-Gas/BG-430i-Jun.pdf)
+provides the 50/30 and 80/60 C full-load test points (20 K differential).
+Linear interpolation, ignoring actual temperature differential and part-load
+behaviour, is an approximation. The 0.901 natural-gas net-to-gross factor is
+[indicative, not measured fuel composition](https://files.bregroup.com/bre-co-uk-file-library-copy/filelibrary/SAP/2016/CALCM-02---SAP-2016-SEASONAL-EFFICIENCY-VALUES-FOR-BOILERS--ALL-FUELS----DRAFT8.pdf).
+
+A value needs an observed uninterrupted burn of at least five minutes, firing
+confirmation and return/modulation readings reported within five minutes and
+since ignition. Five minutes excludes startup; it does not prove steady state.
+Off, unavailable/stale inputs and temperatures outside 30-60 C show **unknown**,
+with a reason in the sensor's `status` attribute. Restarting mid-burn waits for the
+next observed ignition, as does a gap after valid firing evidence, including
+during startup. This is not combustion analysis, daily/seasonal efficiency or
+verified energy savings. There
+is no invented cycling-loss penalty or confidence interval; actual efficiency
+can differ by several percentage points. Long-term-statistics averaging is not
+enabled because a mean of these estimates is not fuel-weighted efficiency.
+
 ## Entities
 
 | Scope | Sensors |

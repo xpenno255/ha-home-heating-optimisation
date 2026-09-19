@@ -20,6 +20,7 @@ from .boiler.const import (
     DEFAULT_MIN_HOLD_MINUTES,
     DEFAULT_OUTDOOR_FRESHNESS_MINUTES,
 )
+from .boiler.core.efficiency import CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED, PROFILES
 from .comfort.const import (
     DEFAULT_CAP,
     DEFAULT_MANUAL_FLOW_TEMP,
@@ -50,6 +51,7 @@ HUB_DEFAULTS: dict[str, Any] = {
     "ground_temp": 10.0,
 }
 BOILER_DEFAULTS: dict[str, Any] = {
+    CONF_EFFICIENCY_PROFILE: PROFILE_DISABLED,
     "enabled": True,
     "flow_min": DEFAULT_FLOW_MIN,
     "flow_max": DEFAULT_FLOW_MAX,
@@ -257,6 +259,9 @@ def boiler_values(control: dict[str, Any]) -> dict[str, Any]:
 
 def update_boiler(control: dict[str, Any], values: dict[str, Any]) -> None:
     """Validate boiler sources, bounds and manual-intervention policy."""
+    profile = values.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED)
+    if profile not in PROFILES:
+        raise ControlConfigError("control_invalid_policy")
     flow_min = _number(values, "flow_min", 20, 80, DEFAULT_FLOW_MIN)
     flow_max = _number(values, "flow_max", 25, 90, DEFAULT_FLOW_MAX)
     dhw_min = _number(values, "dhw_flow_min", 30, 90, DEFAULT_DHW_FLOW_MIN)
@@ -294,6 +299,7 @@ def update_boiler(control: dict[str, Any], values: dict[str, Any]) -> None:
     config.update(
         {
             "flow_min": flow_min,
+            CONF_EFFICIENCY_PROFILE: profile,
             "flow_max": flow_max,
             "dhw_flow_min": dhw_min,
             "dhw_flow_max": dhw_max,

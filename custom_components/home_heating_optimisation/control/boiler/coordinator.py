@@ -82,6 +82,17 @@ from .core.curve import (
     heating_curve,
     return_ceiling_step,
 )
+from .core.efficiency import (
+    CONF_EFFICIENCY_PROFILE,
+    PROFILE_DISABLED,
+    STARTUP_MINUTES,
+    STATUS_AWAITING_IGNITION,
+    STATUS_BURNER_UNAVAILABLE,
+    STATUS_DISABLED,
+    STATUS_OFF,
+    STATUS_RETURN_UNAVAILABLE,
+    estimate,
+)
 from .core.model import (
     CurveParams,
     DhwCyclingState,
@@ -164,6 +175,10 @@ class BFCCoordinatorData:
     room_correction: float = 0.0
     room_error: float | None = None
     # Diagnostics
+    estimated_running_efficiency: int | None = None
+    efficiency_status: str = STATUS_DISABLED
+    efficiency_profile: str = PROFILE_DISABLED
+    efficiency_return_temperature: float | None = None
     disabled_features: list[str] = field(default_factory=list)
 
 
@@ -215,6 +230,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._return_filter_at: datetime | None = None
         self._manual_hold_state = ManualHoldState()
         self._prev_mode: Mode = Mode.OFF
+        self._efficiency_interrupted_start: datetime | None = None
+        self._efficiency_seen_start: datetime | None = None
+        self._efficiency_observed_inputs = False
         super().__init__(
             hass,
             _LOGGER,
@@ -452,9 +470,31 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         entity_id = self._config.get(CONF_HEATING_ACTIVE_ENTITY)
         if not entity_id:
             return None
-        return async_track_state_change_event(
+        stop_heating = async_track_state_change_event(
             self.hass, entity_id, self._handle_heating_active_event
         )
+        if self._config.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED) == PROFILE_DISABLED:
+            return stop_heating
+        sources = list(
+            dict.fromkeys(
+                self._config[key]
+                for key in (CONF_RETURN_TEMP_ENTITY, CONF_BURNER_POWER_ENTITY)
+                if self._config.get(key)
+            )
+        )
+        stop_sources = (
+            async_track_state_change_event(self.hass, sources, self._handle_efficiency_event)
+            if sources
+            else None
+        )
+
+        @callback
+        def unsubscribe():
+            stop_heating()
+            if stop_sources:
+                stop_sources()
+
+        return unsubscribe
 
     @callback
     def _handle_heating_active_event(self, event) -> None:
@@ -470,6 +510,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         now = dt_util.utcnow()
         if new_state is None or new_state.state not in ("on", "off"):
             self._hub.burn_started_at = None
+            self._publish_efficiency()
             return
         if old_state is None or old_state.state not in ("on", "off"):
             return
@@ -488,6 +529,78 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 ),
                 self._float_state(self._config.get(CONF_FLOW_SETPOINT_ENTITY), temperature=True),
             )
+
+        self._publish_efficiency()
+
+    @callback
+    def _handle_efficiency_event(self, event) -> None:
+        self._publish_efficiency()
+
+    @callback
+    def _publish_efficiency(self) -> None:
+        if (
+            self.data is not None
+            and self._config.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED) != PROFILE_DISABLED
+        ):
+            self._update_efficiency(self.data, dt_util.utcnow())
+            # Publishing diagnostics must not run another actuator/control cycle.
+            self.async_update_listeners()
+
+    def _update_efficiency(self, data: BFCCoordinatorData, now: datetime) -> None:
+        profile = self._config.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED)
+        data.efficiency_profile = profile
+        data.estimated_running_efficiency = None
+        data.efficiency_return_temperature = None
+        if profile == PROFILE_DISABLED:
+            data.efficiency_status = STATUS_DISABLED
+            return
+        start = self._hub.burn_started_at
+        if start != self._efficiency_seen_start:
+            self._efficiency_seen_start = start
+            self._efficiency_interrupted_start = None
+            self._efficiency_observed_inputs = False
+        active = self._is_on(self._config.get(CONF_HEATING_ACTIVE_ENTITY))
+        power_id = self._config.get(CONF_BURNER_POWER_ENTITY)
+        return_id = self._config.get(CONF_RETURN_TEMP_ENTITY)
+        power = self._float_state(power_id, freshness=5, now=now)
+        ret = self._float_state(return_id, temperature=True, freshness=5, now=now)
+        elapsed = (now - start).total_seconds() if start else None
+        status = None
+        if active is None or power is None or not 0 <= power <= 100:
+            status = STATUS_BURNER_UNAVAILABLE
+        elif active is False or power == 0:
+            status = STATUS_OFF
+        elif ret is None:
+            status = STATUS_RETURN_UNAVAILABLE
+        if status:
+            # Allow initial source arrival ordering, not a gap after valid
+            # firing evidence (even if that gap occurs during warmup).
+            if start and (
+                self._efficiency_observed_inputs
+                or (elapsed is not None and elapsed >= STARTUP_MINUTES * 60)
+            ):
+                self._efficiency_interrupted_start = start
+            data.efficiency_status = status
+            return
+        if start is None or start == self._efficiency_interrupted_start:
+            data.efficiency_status = STATUS_AWAITING_IGNITION
+            return
+        for entity_id in (power_id, return_id):
+            state = self._state(entity_id)
+            if (state.last_reported or state.last_updated) < start:
+                data.efficiency_status = "awaiting_current_burn_readings"
+                return
+        self._efficiency_observed_inputs = True
+        result = estimate(
+            profile,
+            heating_active=active,
+            burner_power=power,
+            return_c=ret,
+            burn_seconds=elapsed,
+        )
+        data.estimated_running_efficiency = result.percent
+        data.efficiency_status = result.status
+        data.efficiency_return_temperature = ret
 
     def async_subscribe_dhw(self):
         entity = self._config.get(CONF_HW_RELAY_DEMAND_ENTITY)
@@ -519,7 +632,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
     async def _async_update_data(self) -> BFCCoordinatorData:
         try:
             async with self._cycle_lock:
-                return await self._cycle()
+                data = await self._cycle()
+                # Source events can arrive while control writes or storage await.
+                self._update_efficiency(data, dt_util.utcnow())
+                return data
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("BFC: update failed")
             raise UpdateFailed(str(exc)) from exc
@@ -641,6 +757,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._hub.last_stop_reason,
         )
         d.cycling_status = "frequent_starts_diagnostic_only" if d.cycles_10min >= 3 else "normal"
+
+        self._update_efficiency(d, now)
 
         if d.live_setpoint is None:
             d.mode, d.no_boiler, d.reason = (

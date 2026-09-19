@@ -173,6 +173,7 @@
           "return_temp_entity": "Measured return temperature (optional)",
           "heating_active_entity": "Space-heating active (optional)",
           "burner_power_entity": "Burner power (optional)",
+          "efficiency_profile": "Estimated boiler efficiency profile",
           "heat_demand_entity": "Aggregate heat demand (optional)",
           "hw_relay_demand_entity": "Hot-water relay demand (optional)",
           "cylinder_temp_entity": "Cylinder temperature (optional)",
@@ -197,6 +198,7 @@
         },
         "data_description": {
           "enabled": "Disables boiler writes and calculations without removing the configuration.",
+          "efficiency_profile": "Optional guidance only. British Gas 430/i natural gas: full-load reference, not measured or load-adjusted efficiency. Requires measured return temperature, burner modulation and heating-active inputs. Unknown while off, warming up or outside the model range.",
           "manual_hold_minutes": "How long an external setpoint change suspends automatic boiler writes."
         }
       },
