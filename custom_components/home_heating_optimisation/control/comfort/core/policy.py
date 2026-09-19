@@ -94,6 +94,12 @@ class PolicyInputs:
     memory: OverrideMemory
     any_window_open: bool = False
     any_adjacent_door_open: bool = False
+    # The primary thermostat returned to the exact, still-valid HHO command
+    # captured before our latest write.  The coordinator only sets this after
+    # observing a different service-local projection first, so the return is a
+    # command reconciliation rather than evidence that somebody moved the dial.
+    command_reverted: bool = False
+    retry_reverted_command: bool = False
     params: PolicyParams = field(default_factory=PolicyParams)
 
 
@@ -187,6 +193,8 @@ def _window_override_active(m: OverrideMemory, inp: PolicyInputs) -> bool:
 def _manual_override(inp: PolicyInputs) -> bool:
     """Zone setpoint differs from both what we wrote and the schedule: someone touched the dial."""
     z, m, p = inp.zone, inp.memory, inp.params
+    if inp.command_reverted:
+        return False
     if z.current_setpoint is None or z.schedule_setpoint is None:
         return False  # without a schedule reference we cannot tell manual from scheduled
     tol = p.step / 2 + 1e-6
@@ -240,6 +248,8 @@ def _manual_override(inp: PolicyInputs) -> bool:
 
 def _write_needed(target: float, m: OverrideMemory, inp: PolicyInputs) -> bool:
     p = inp.params
+    if inp.retry_reverted_command:
+        return True
     if m.last_written_setpoint is None:
         return True
     if abs(target - m.last_written_setpoint) >= p.step - 1e-6:
@@ -274,6 +284,8 @@ def _write(
     if bounded != target:
         reason += f"; clamped {target} to zone bounds -> {bounded}"
         target = bounded
+    if inp.retry_reverted_command:
+        reason += "; retrying command after prior state returned"
     if not _write_needed(target, m, inp):
         return Decision(state, Action.NONE, None, reason + "; unchanged, override still valid", m)
     new_m = replace(m, last_written_setpoint=target, last_written_at=inp.now)

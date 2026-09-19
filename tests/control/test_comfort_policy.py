@@ -169,6 +169,80 @@ def test_zone_at_our_value_is_not_manual():
     assert d.state is State.ACTIVE
 
 
+def test_exact_prior_command_reversion_is_not_attributed_to_a_person():
+    m = held(19.6, minutes_ago=1)
+    d = decide(
+        inputs(
+            memory=m,
+            computed_setpoint=19.6,
+            zone=ZoneState(19.5, 19.0),
+            command_reverted=True,
+            retry_reverted_command=False,
+        )
+    )
+    assert d.state is State.ACTIVE
+    assert d.action is Action.NONE
+    assert d.memory.manual_detected_at is None
+
+
+def test_exact_prior_command_reversion_can_request_one_coordinator_bounded_retry():
+    m = held(19.6, minutes_ago=1)
+    d = decide(
+        inputs(
+            memory=m,
+            computed_setpoint=19.6,
+            zone=ZoneState(19.5, 19.0),
+            command_reverted=True,
+            retry_reverted_command=True,
+        )
+    )
+    assert d.state is State.ACTIVE
+    assert d.action is Action.WRITE
+    assert d.setpoint == 19.6
+    assert "retrying command" in d.reason
+
+
+def test_different_readback_without_reversion_provenance_remains_manual():
+    d = decide(
+        inputs(
+            memory=held(19.6, minutes_ago=1),
+            computed_setpoint=19.6,
+            zone=ZoneState(19.5, 19.0),
+        )
+    )
+    assert d.state is State.MANUAL
+
+
+def test_reversion_flag_does_not_override_a_standing_manual_hold():
+    manual = OverrideMemory(
+        manual_detected_at=T0 - timedelta(minutes=5),
+        manual_release_at=T0 + timedelta(minutes=30),
+        manual_setpoint=21.0,
+    )
+    d = decide(
+        inputs(
+            memory=manual,
+            zone=ZoneState(21.0, 19.0),
+            command_reverted=True,
+            retry_reverted_command=True,
+        )
+    )
+    assert d.state is State.MANUAL
+    assert d.action is Action.NONE
+
+
+def test_reversion_flag_does_not_override_zone_off_protection():
+    d = decide(
+        inputs(
+            zone=ZoneState(5.0, 19.0),
+            command_reverted=True,
+            retry_reverted_command=True,
+        )
+    )
+    assert d.state is State.OFF
+    assert d.action is Action.NONE
+
+
 # --- window / door -----------------------------------------------------------
 
 
