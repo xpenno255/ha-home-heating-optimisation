@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — radio fault recovery
+## 0.6.2 — radio fault recovery (commissioning prerelease)
 
 - Exclude state projected during a thermostat service call from command confirmation.
 - Recognise a return to an exact previous, still-owned override separately from a new manual adjustment, with a bounded recovery retry.
