@@ -13,6 +13,11 @@ from .advisor.evidence import TASKS
 from .advisor.profiles import profile_info
 from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, NAME, SYSTEM_SOURCES, effective_config
+from .control.boiler.core.efficiency import (
+    CONF_EFFICIENCY_PROFILE,
+    PROFILE_BG430I_NATURAL_GAS,
+    PROFILE_DISABLED,
+)
 from .control.configuration import (
     BOILER_DEFAULTS,
     HUB_DEFAULTS,
@@ -524,6 +529,22 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         ):
             marker, validator = number_field(key, current, default, low, high)
             fields[marker] = validator
+        fields[
+            vol.Optional(
+                CONF_EFFICIENCY_PROFILE,
+                default=current.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    {"value": PROFILE_DISABLED, "label": "Disabled"},
+                    {
+                        "value": PROFILE_BG430I_NATURAL_GAS,
+                        "label": "British Gas 430/i - natural gas (estimated)",
+                    },
+                ]
+            )
+        )
         return self.async_show_form(
             step_id="control_boiler", errors=errors, data_schema=vol.Schema(fields)
         )

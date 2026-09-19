@@ -7,9 +7,17 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from ..const import DOMAIN, NAME, VERSION
+from .boiler.core.efficiency import (
+    GROSS_CONVERSION_FACTOR,
+    MODEL_VERSION,
+    RETURN_MAX_C,
+    RETURN_MIN_C,
+    STARTUP_MINUTES,
+)
 from .runtime import BOILER_SENSORS, ROOM_SENSORS
 
 
@@ -78,6 +86,33 @@ class ControlSensor(ControlEntity, SensorEntity):
         return {}
 
 
+class BoilerEfficiencySensor(ControlSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, controls):
+        super().__init__(controls, "boiler", "estimated_running_efficiency", "%")
+        self._attr_name = "Estimated boiler efficiency"
+
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        if not data:
+            return {}
+        return {
+            "status": data.efficiency_status,
+            "profile": data.efficiency_profile,
+            "model_version": MODEL_VERSION,
+            "method": "manufacturer_full_load_reference_not_load_adjusted",
+            "energy_basis": "gross",
+            "net_to_gross_factor": GROSS_CONVERSION_FACTOR,
+            "return_temperature": data.efficiency_return_temperature,
+            "minimum_return_temperature": RETURN_MIN_C,
+            "maximum_return_temperature": RETURN_MAX_C,
+            "startup_exclusion_minutes": STARTUP_MINUTES,
+        }
+
+
 class ControlDHW(ControlEntity, BinarySensorEntity):
     def __init__(self, controls):
         super().__init__(controls, "boiler", "dhw")
@@ -111,10 +146,12 @@ class ControlMode(ControlEntity, SelectEntity):
 def sensors(controls):
     if not controls.boiler:
         return []
-    return [
-        ControlSensor(controls, "boiler", key, unit) for key, unit in BOILER_SENSORS.items()
-    ] + [
-        ControlSensor(controls, rid, key, unit)
-        for rid in controls.rooms
-        for key, unit in ROOM_SENSORS.items()
-    ]
+    return (
+        [BoilerEfficiencySensor(controls)]
+        + [ControlSensor(controls, "boiler", key, unit) for key, unit in BOILER_SENSORS.items()]
+        + [
+            ControlSensor(controls, rid, key, unit)
+            for rid in controls.rooms
+            for key, unit in ROOM_SENSORS.items()
+        ]
+    )

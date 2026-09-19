@@ -4,6 +4,7 @@ import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.home_heating_optimisation.const import DOMAIN
@@ -50,7 +51,10 @@ async def choose_control(hass, item):
     )
 
 
-async def test_standalone_setup_builds_runtime_schema_in_shadow(hass, config, survey_files):
+@pytest.mark.parametrize("efficiency_profile", [None, "bg430i_natural_gas"])
+async def test_standalone_setup_builds_runtime_schema_in_shadow(
+    hass, config, survey_files, efficiency_profile
+):
     hass.config.config_dir = str(survey_files.parent)
     config = deepcopy(config)
     config["survey_directory"] = "house"
@@ -86,6 +90,7 @@ async def test_standalone_setup_builds_runtime_schema_in_shadow(hass, config, su
             "dhw_flow_max": 68,
             "dhw_return_ceiling": 57,
             "manual_hold_minutes": 45,
+            **({"efficiency_profile": efficiency_profile} if efficiency_profile else {}),
         },
     )
     assert flow["step_id"] == "control_rooms"
@@ -106,6 +111,7 @@ async def test_standalone_setup_builds_runtime_schema_in_shadow(hass, config, su
     assert control["legacy_entries"] == []
     assert control["boiler"]["config"]["flow_min"] == 32
     assert control["boiler"]["config"]["manual_hold_minutes"] == 45
+    assert control["boiler"]["config"]["efficiency_profile"] == (efficiency_profile or "disabled")
     assert control["rooms"]["study"]["config"]["air_temp_sensor"] == "sensor.control_air"
     assert control["rooms"]["study"]["config"]["mode"] == "shadow"
     assert control["rooms"]["study"]["config"]["zone_setpoint_min"] == 9
