@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3 - restart ownership reconciliation (commissioning prerelease)
+
+- Preserve room policy ownership, manual holds and window timers until room and hub restoration finish, including decisions that would send no command.
+- Reconcile saved ownership/manual history only after a two-minute startup settling interval and a fresh primary thermostat report at or after that interval, with a readable schedule reference.
+- Keep rooms awaiting reconciliation in `no_data` with an explicit reason, no actuator commands and a retry every minute; missing or stale inputs keep the room deferred.
+- Preserve genuine manual changes, off settings and existing hold deadlines; retain runtime-only command acknowledgements.
+- Do not automatically clear previously saved manual holds, which cannot safely be distinguished from genuine user adjustments.
+
 ## 0.6.2 — radio fault recovery (commissioning prerelease)
 
 - Exclude state projected during a thermostat service call from command confirmation.
