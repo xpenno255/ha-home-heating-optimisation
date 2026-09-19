@@ -138,6 +138,7 @@ ZONE_SETPOINT_MAX = 35.0
 # device state into an acknowledgement for a command this coordinator did not
 # send.
 READBACK_TIMEOUT = timedelta(minutes=3)
+STARTUP_SETTLE_TIME = timedelta(minutes=2)
 READBACK_MAX_AGE = timedelta(minutes=5)
 COMFORT_MODEL_VERSION = "steady_state_ot_v2"
 
@@ -271,6 +272,17 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._schedule_fetcher = ScheduleFetcher(hass, store)
         self._schedule_source = "none"
         self._restore_complete: bool = False  # set by setup once restored entity states are in
+        self._startup_reconciliation_pending = any(
+            store.get(key) is not None
+            for key in (
+                "last_written_setpoint",
+                "last_written_at",
+                "manual_detected_at",
+                "manual_release_at",
+                "manual_setpoint",
+            )
+        )
+        self._startup_reconcile_after: datetime | None = None
         self._tunables: dict[str, float] = {}
         hub_cfg = (hass.data.get(DOMAIN, {}).get("hub") or {}).get("config") or {}
         for key, default in (
@@ -1175,7 +1187,24 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
     def mark_restore_complete(self) -> None:
         """Called by setup after entity platforms (and their restored states) are loaded."""
+        if not self._restore_complete and self._startup_reconciliation_pending:
+            self._startup_reconcile_after = dt_util.utcnow() + STARTUP_SETTLE_TIME
         self._restore_complete = True
+
+    def _startup_ready(self, now: datetime, zone: ZoneState) -> bool:
+        """Wait for settled source data before reconciling persisted policy ownership."""
+        if not self._startup_reconciliation_pending:
+            return True
+        deadline = self._startup_reconcile_after
+        if deadline is None or now < deadline or zone.schedule_setpoint is None:
+            return False
+        _, reported, status, _, _ = self._primary_setpoint_observation()
+        # A recently restored HA state can contain a partial/cached RAMSES target.
+        # Require a primary report after the settling interval, not just fresh age.
+        if status != "readback_observed" or reported is None or reported < deadline:
+            return False
+        self._startup_reconciliation_pending = False
+        return True
 
     async def _async_update_data(self) -> OTCoordinatorData:
         try:
@@ -1313,7 +1342,26 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
             params=self._policy_params(),
         )
-        decision = decide(inputs)
+        restored = self._restore_complete and hub_data is not None and hub_data.restore_complete
+        if not restored:
+            decision = Decision(
+                State.NO_DATA,
+                Action.NONE,
+                None,
+                "deferred: awaiting hub/restored state",
+                inputs.memory,
+            )
+        elif not self._startup_ready(now, zone):
+            decision = Decision(
+                State.NO_DATA,
+                Action.NONE,
+                None,
+                "deferred: awaiting startup thermostat reconciliation",
+                inputs.memory,
+            )
+            self._schedule_retry()
+        else:
+            decision = decide(inputs)
         d.state, d.reason, d.action = decision.state.value, decision.reason, decision.action.value
         d.would_write = (
             decision.would_write if decision.state is State.SHADOW else decision.setpoint
@@ -1325,14 +1373,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.fallbacks = fallbacks
 
         memory = decision.memory
-        # Zone actions need this room restored AND a present, restored hub: before hub
-        # registration (or during its reload) global-enable state is unknown, and a
-        # missing hub must not silently count as "enabled".
-        restored = self._restore_complete and hub_data is not None and hub_data.restore_complete
-        if not restored and decision.action is not Action.NONE:
-            memory = inputs.memory
-            d.reason = decision.reason + " (deferred: awaiting hub/restored state)"
-        elif decision.action is not Action.NONE:
+        if decision.action is not Action.NONE:
             target = self._command_target(decision, zone)
             self._requested_target = target
             self._requested_at = now

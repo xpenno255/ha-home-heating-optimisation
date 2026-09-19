@@ -17,4 +17,12 @@ A `follow_schedule` release is stricter: the primary thermostat must freshly rep
 
 Acknowledgement state is intentionally held only in runtime memory. Shadow-mode decisions never create a command acknowledgement, and a reload starts with no pending or confirmed command even if persistent policy memory contains a previous setpoint. That prevents old thermostat state from being presented as an acknowledgement for a command this process did not send.
 
+## Restart reconciliation
+
+Room ownership, manual-hold and window-timer memory stays unchanged until both the room and hub have finished restoring. A room with saved ownership or manual-hold history then waits at least two minutes and requires a fresh primary thermostat report timestamped at or after that settling deadline, plus a readable schedule reference. This avoids treating the initial partial/cached RAMSES setpoint as a manual adjustment and erasing HHO's previous ownership.
+
+During this wait the room decision is `no_data`, its reason is `deferred: awaiting startup thermostat reconciliation`, and it sends no writes or schedule releases. It retries every minute. Two minutes is a minimum, not a timeout: a room without a usable post-deadline report or schedule remains deferred, leaving the device's existing schedule/temporary override alone. Returning to HHO's still-valid saved target permits normal policy operation but does not restore a command acknowledgement. A differing settled target, an expired previous command, a genuine off setting, or a standing manual hold goes through the existing policy protections.
+
+This is a startup guard, not proof of RF packet provenance; it cannot identify every late cached update. Existing saved manual holds are retained, including holds that an older version may have misclassified. HHO cannot distinguish those from genuine user adjustments after ownership was erased. They end through the normal policy deadline or a return to the scheduled target.
+
 The analytics decision context records the allowlisted command lifecycle alongside the schedule source, model version, current decision state, reason, action, and mode. It remains controller-reported provenance rather than a measurement or proof of physical actuation.

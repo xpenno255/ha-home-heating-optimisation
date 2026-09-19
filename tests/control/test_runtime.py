@@ -641,6 +641,192 @@ async def test_room_acknowledgement_is_not_restored_or_created_in_shadow(hass, c
     assert restored.data.pending_target is None
 
 
+async def test_restart_transient_target_does_not_create_manual_hold(
+    hass, controlled, sources, freezer
+):
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    memory = c.rooms["study"]._memory()
+    target = memory.last_written_setpoint
+    freezer.tick(timedelta(minutes=8))
+    hass.states.async_set(
+        "climate.study", "auto", {"current_temperature": 18, "temperature": target - 0.1}
+    )
+    calls.clear()
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    room = entry.runtime_data.controls.rooms["study"]
+    assert room._memory() == memory
+    assert room.data.state == "no_data"
+    assert "startup thermostat reconciliation" in room.data.reason
+    assert room.data.action == "none"
+    assert calls == []
+
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set(
+        "climate.study", "auto", {"current_temperature": 18, "temperature": target}
+    )
+    await room.async_refresh()
+    assert room._memory() == memory
+    assert room.data.state == "no_data"
+
+    freezer.tick(timedelta(minutes=1))
+    await room.async_refresh()
+    assert room._memory() == memory
+    assert room.data.state == "no_data"  # The +1 minute report predates settling.
+    assert calls == []
+
+    # The first post-settling report restores policy ownership, not a command ACK.
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set(
+        "climate.study", "auto", {"current_temperature": 18, "temperature": target}
+    )
+    await room.async_refresh()
+    assert room._memory() == memory
+    assert room.data.state == "active"
+    assert room.data.confirmed_target is None
+    assert room.data.sent_target is None
+    assert room.data.pending_target is None
+    assert calls == []
+
+
+async def test_initial_refresh_preserves_manual_hold_before_restoration(
+    hass, controlled, sources, freezer
+):
+    now = dt_util.utcnow()
+    seed = {
+        "manual_detected_at": (now - timedelta(minutes=10)).isoformat(),
+        "manual_release_at": (now + timedelta(minutes=110)).isoformat(),
+        "manual_setpoint": 23.0,
+    }
+    controlled["control"]["rooms"]["study"]["seed"] = seed
+    # The initial cached schedule target must not erase an existing manual hold.
+    _, c, calls = await start(hass, controlled)
+    room = c.rooms["study"]
+    assert room._memory().manual_setpoint == 23.0
+    assert room._memory().manual_release_at == now + timedelta(minutes=110)
+    assert room.data.state == "no_data"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("target", "age_minutes", "expected"),
+    [(23.0, 8, "manual"), (18.2, 70, "manual"), (5.0, 8, "off"), (20.0, 8, "active")],
+)
+async def test_restart_reconciles_manual_off_schedule_and_expired_ownership(
+    hass, controlled, sources, freezer, target, age_minutes, expected
+):
+    controlled["control"]["rooms"]["study"]["seed"] = {
+        "last_written_setpoint": 18.2,
+        "last_written_at": (dt_util.utcnow() - timedelta(minutes=age_minutes)).isoformat(),
+    }
+    hass.states.async_set(
+        "climate.study", "auto", {"current_temperature": 18, "temperature": target}
+    )
+    _, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    assert room.data.state == "no_data"
+    assert calls == []
+    freezer.tick(timedelta(minutes=3))
+    hass.states.async_set(
+        "climate.study", "auto", {"current_temperature": 18, "temperature": target}
+    )
+    await room.async_refresh()
+    assert room.data.state == expected
+    if expected == "manual":
+        assert room._memory().manual_setpoint == target
+        assert room._memory().last_written_setpoint is None
+    if expected != "active":
+        assert calls == []
+    else:
+        assert any(kind == "ramses" for kind, _ in calls)
+
+
+@pytest.mark.parametrize("final_target", [23.0, 24.0, 20.0])
+async def test_restart_preserves_or_reconciles_existing_manual_hold(
+    hass, controlled, sources, freezer, final_target
+):
+    now = dt_util.utcnow()
+    deadline = now + timedelta(minutes=110)
+    controlled["control"]["rooms"]["study"]["seed"] = {
+        "manual_detected_at": (now - timedelta(minutes=10)).isoformat(),
+        "manual_release_at": deadline.isoformat(),
+        "manual_setpoint": 23.0,
+    }
+    _, c, calls = await start(hass, controlled)
+    room = c.rooms["study"]
+    freezer.tick(timedelta(minutes=3))
+    hass.states.async_set(
+        "climate.study", "auto", {"current_temperature": 18, "temperature": final_target}
+    )
+    await room.async_refresh()
+    if final_target == 20:
+        assert room.data.state == "shadow"
+        assert room._memory().manual_detected_at is None
+    else:
+        assert room.data.state == "manual"
+        assert room._memory().manual_setpoint == final_target
+        assert room._memory().manual_release_at == (
+            deadline if final_target == 23 else dt_util.utcnow() + timedelta(minutes=120)
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("missing", ["new_report", "primary", "valid_target", "schedule"])
+async def test_restart_waits_for_usable_post_settling_inputs(
+    hass, controlled, sources, freezer, missing
+):
+    controlled["control"]["rooms"]["study"]["seed"] = {
+        "last_written_setpoint": 18.2,
+        "last_written_at": (dt_util.utcnow() - timedelta(minutes=8)).isoformat(),
+    }
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    memory = room._memory()
+    freezer.tick(timedelta(minutes=3))
+    if missing == "primary":
+        hass.states.async_set("climate.study", "unavailable")
+    elif missing == "valid_target":
+        hass.states.async_set("climate.study", "auto", {"temperature": "invalid"})
+    elif missing == "schedule":
+        hass.states.async_set("climate.study", "auto", {"temperature": 18.2})
+        hass.states.async_set("climate.cloud", "unavailable")
+    await room.async_refresh()
+    assert room.data.state == "no_data"
+    assert room.data.action == "none"
+    assert room._memory() == memory
+    assert calls == []
+    assert room._retry_cancel is not None
+
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set("climate.study", "auto", {"temperature": 23.0})
+    hass.states.async_set("climate.cloud", "auto", {"status": {"setpoints": {"this_sp_temp": 20}}})
+    await room.async_refresh()
+    assert room.data.state == "manual"
+    assert calls == []
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert room._retry_cancel is None
+
+
+@pytest.mark.parametrize("field", ["last_written_setpoint", "manual_release_at", "manual_setpoint"])
+async def test_partial_restart_history_still_requires_source_reconciliation(
+    hass, controlled, sources, field
+):
+    controlled["control"]["rooms"]["study"]["seed"] = {
+        field: dt_util.utcnow().isoformat() if field.endswith("_at") else 23.0
+    }
+    _, c, calls = await start(hass, controlled)
+    assert c.rooms["study"].data.state == "no_data"
+    assert "startup thermostat reconciliation" in c.rooms["study"].data.reason
+    assert calls == []
+
+
 async def test_lower_limits_and_dhw_transition(hass, controlled, sources):
     _, c, calls = await start(hass, controlled)
     await handover(c)
