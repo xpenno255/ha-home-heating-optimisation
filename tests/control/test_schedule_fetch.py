@@ -3,6 +3,7 @@
 import asyncio
 from datetime import timedelta
 
+from homeassistant.core import SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.home_heating_optimisation.control.comfort.schedule_fetch import (
@@ -117,9 +118,11 @@ async def test_successful_cached_schedule_uses_daily_refresh(hass, freezer):
         nonlocal cached
         calls.append(call)
         cached = True
-        hass.states.async_set("climate.test", "heat", {"schedule": [{"day_of_week": 0}]})
+        return {"climate.test": {"schedule": [{"day_of_week": 0}]}}
 
-    hass.services.async_register("ramses_cc", "get_zone_schedule", fetch)
+    hass.services.async_register(
+        "ramses_cc", "get_zone_schedule", fetch, supports_response=SupportsResponse.OPTIONAL
+    )
     hass.states.async_set("climate.test", "heat")
     fetcher = ScheduleFetcher(hass, MemoryStore())
     lock = asyncio.Lock()
@@ -135,6 +138,40 @@ async def test_successful_cached_schedule_uses_daily_refresh(hass, freezer):
     await fetcher.task
     assert len(calls) == 2
     assert fetcher.store.get("ramses_schedule_saved_at") != first_saved_at
+
+
+async def test_successful_service_without_new_schedule_does_not_refresh_old_cache(hass, freezer):
+    async def empty_fetch(call):
+        pass
+
+    hass.services.async_register("ramses_cc", "get_zone_schedule", empty_fetch)
+    hass.states.async_set("climate.test", "heat", {"schedule": [{"day_of_week": 0}]})
+    freezer.tick(timedelta(hours=1))
+    fetcher = ScheduleFetcher(hass, MemoryStore())
+    fetcher.request("climate.test", asyncio.Lock(), lambda: False)
+    await fetcher.task
+    assert fetcher.store.get("ramses_schedule_saved_at") is None
+    assert fetcher.store.get("ramses_schedule_failures") == 1
+
+
+async def test_bad_optional_fetch_metadata_cannot_abort_room_cycle(hass):
+    async def fail(call):
+        raise HomeAssistantError("radio unavailable")
+
+    hass.services.async_register("ramses_cc", "get_zone_schedule", fail)
+    hass.states.async_set("climate.test", "heat")
+    fetcher = ScheduleFetcher(hass, MemoryStore())
+    fetcher.store.set("ramses_schedule_failures", "invalid")
+    lock = asyncio.Lock()
+    fetcher.request("climate.test", lock, lambda: False)
+    await fetcher.task
+    assert fetcher.store.get("ramses_schedule_failures") == 1
+
+    def broken_cache():
+        raise ValueError("bad optional cache")
+
+    fetcher.request("climate.test", lock, broken_cache)  # Must not propagate into control.
+    assert fetcher.task.done()
 
 
 async def test_slow_rf_schedule_does_not_delay_radiator_command(hass, controlled, sources):
