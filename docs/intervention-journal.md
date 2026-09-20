@@ -68,7 +68,9 @@ The store keeps at most 20,000 events and 30 days; older events are pruned at sa
 time and `truncated` is reported when the cap dropped events. On load the file is
 validated; an unreadable or unsupported file is preserved untouched and the journal
 runs read-only for that session (`storage_read_only`). A failed save keeps events in
-memory and retries at the next save (`save_failed`). Recording is synchronous and
+memory (`save_failed`) and is retried with doubling delays (30 s, 1, 2, 4, 8 min
+cap); after ten consecutive failures retries stop until the next record, and a
+successful save resets the count. Recording is synchronous and
 never raises; every producer hook is wrapped so a journal fault cannot block a
 heating decision or a command. Restart is idempotent: events are appended with fresh
 ids and nothing is re-recorded from the file.

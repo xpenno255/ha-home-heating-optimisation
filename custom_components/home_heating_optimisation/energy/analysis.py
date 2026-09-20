@@ -105,6 +105,7 @@ def summarise_period(days, slugs, expected_days=None):
     if not days:
         return {
             "days": 0,
+            "expected_days": int(expected_days) if expected_days else 0,
             "kwh": dict.fromkeys(slugs),
             "degree_hours": 0.0,
             "coverage_percent": 0.0,

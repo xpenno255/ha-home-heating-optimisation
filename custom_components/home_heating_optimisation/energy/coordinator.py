@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import callback
@@ -375,16 +375,25 @@ class EnergyEvidence(DataUpdateCoordinator):
         return comparability(a, b, self.slugs, expected_days=length)
 
     def report(self, days=7):
-        recent = self.days(days)
-        half = max(1, len(recent) // 2)
+        """Calendar window of *days* ending today against the equal-length window before.
+
+        Coverage and comparability are measured against the requested calendar span,
+        so wholly missing days count; both windows carry ``expected_days``.
+        """
+        days = int(days)
+        now = dt_util.utcnow()
+        recent, previous, length = since_periods(
+            self.days(), now - timedelta(days=days - 1), now, self.hass.config.time_zone
+        )
         return {
             "quality": self.quality(),
             "meters": meter_signature(self.specs),
+            "expected_days": length,
+            "observed_days": len(recent),
+            "previous_observed_days": len(previous),
             "days": recent,
-            "summary": summarise_period(recent, self.slugs),
-            "recent_vs_previous": comparability(recent[half:], recent[:half], self.slugs)
-            if len(recent) >= 2
-            else None,
+            "summary": summarise_period(recent, self.slugs, expected_days=length),
+            "recent_vs_previous": comparability(recent, previous, self.slugs, expected_days=length),
             "definitions": {
                 "kwh": "Metered input energy from the selected counter; not delivered heat unless a delivered_heat meter is configured separately.",
                 "heating_degree_hours": "Sum over five-minute buckets of max(0, 15.5 - outdoor) hours; weather context only.",

@@ -29,6 +29,7 @@ from .const import (
     EVALUABLE_STATES,
     EVIDENCE_TYPE,
     EXCLUDED_NOTE,
+    INTERRUPTED_START_SECONDS,
     MAX_COMFORT_FLOOR_C,
     MAX_DURATION_HOURS,
     MAX_ROLLBACK_ATTEMPTS,
@@ -391,7 +392,10 @@ class Trials:
         Order matters: the trial is saved as ``starting`` (with baseline, rollback
         value and expiry) before the controller store changes, so a crash between the
         two leaves a supervised trial that the next startup rolls back, never an
-        unsupervised changed value.
+        unsupervised changed value. The apply-and-persist section is shielded from
+        cancellation and re-checks readiness and the baseline under the controls lock
+        immediately before the write; if the caller is cancelled after the write, the
+        baseline is restored at once.
         """
         async with self.lock:
             trial = self.writable(trial_id)
@@ -428,23 +432,61 @@ class Trials:
                 raise ServiceValidationError(
                     "Trial state could not be persisted; nothing was changed"
                 )
+            written = []
+            inner = asyncio.ensure_future(
+                self._activate(trial, coordinator, scope, parameter, before, target, written)
+            )
             try:
-                async with self.controls.lock:
-                    await self._tuning_write(scope, parameter, target)
-                    after = float(coordinator.get_tunable(parameter))
+                await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                # The caller went away; let the shielded section finish so nothing is
+                # half-done, then restore the baseline rather than leave it applied.
+                try:
+                    await inner
+                except Exception:  # noqa: BLE001
+                    pass
+                if written and trial["state"] in APPLIED_STATES:
+                    await self._rollback(trial, "stopped", "interrupted_start")
+                    await self.store.save()
+                raise
             except Exception as err:
+                if not written:
+                    raise
                 # Restore immediately and refuse; the trial never reaches running.
                 await self._rollback(trial, "stopped", "start_failed", origin="controller")
                 await self.store.save()
                 raise HomeAssistantError(f"Trial start failed; baseline restored: {err}") from err
-            self.transition(
-                trial,
-                "running",
-                "user",
-                applied={"before": before, "after": after, "control_store_saved": True},
-            )
-            await self.persist()
         return self.public(trial)
+
+    async def _activate(self, trial, coordinator, scope, parameter, before, target, written):
+        """Recheck under the controls lock, write, verify, persist ``running``.
+
+        *written* is appended to the moment a write is attempted so the caller knows a
+        rollback may be needed. A recheck failure ends the saved intent as ``stopped``
+        (reason ``conditions_changed``) and writes nothing.
+        """
+        async with self.controls.lock:
+            reason = self.readiness(trial)
+            current = float(coordinator.get_tunable(parameter))
+            if reason is None and abs(current - before) > TOLERANCE:
+                reason = "current value changed since the start was requested"
+            if reason:
+                trial["stop_reason"] = "conditions_changed"
+                trial["stop_detail"] = {"reason": reason}
+                trial["ended_at"] = dt_util.utcnow().isoformat()
+                self.transition(trial, "stopped", "controller")
+                await self.store.save()
+                raise ServiceValidationError(f"Trial not started; conditions changed: {reason}")
+            written.append(True)
+            await self._tuning_write(scope, parameter, target)
+            after = float(coordinator.get_tunable(parameter))
+        self.transition(
+            trial,
+            "running",
+            "user",
+            applied={"before": before, "after": after, "control_store_saved": True},
+        )
+        await self.persist()
 
     # Tuning write gate ---------------------------------------------------------
 
@@ -492,8 +534,14 @@ class Trials:
         try:
             async with self.lock:
                 changed = False
-                for trial in [t for t in self.store.trials if t["state"] == "running"]:
+                now = dt_util.utcnow()
+                for trial in [t for t in self.store.trials if t["state"] in APPLIED_STATES]:
+                    # A starting trial is supervised exactly like a running one.
                     changed = await self._check(trial) or changed
+                    if trial["state"] == "starting" and self.start_interrupted(trial, now):
+                        changed = (
+                            await self._rollback(trial, "stopped", "interrupted_start") or changed
+                        )
                 for trial in [t for t in self.store.trials if t["state"] == "rollback_failed"]:
                     if trial.get("rollback_attempts", 0) >= MAX_ROLLBACK_ATTEMPTS:
                         continue  # give up retrying; the Repairs issue stays until stopped
@@ -504,6 +552,11 @@ class Trials:
                     await self.store.save()
         except Exception:
             LOGGER.exception("Trial supervision tick failed")
+
+    def start_interrupted(self, trial, now):
+        """A trial left ``starting`` past the grace period never finished its start."""
+        started = _parse(trial.get("started_at"))
+        return started is None or (now - started).total_seconds() > INTERRUPTED_START_SECONDS
 
     async def _check(self, trial):
         """Roll back on the first breached condition; DHW activity is only noted."""
@@ -559,7 +612,9 @@ class Trials:
             if not trial.get("dhw_active_observed"):
                 trial["dhw_active_observed"] = True
                 trial["updated_at"] = now.isoformat()
-                self.journal(trial, "running", "running", "controller", note="dhw_active_noted")
+                self.journal(
+                    trial, trial["state"], trial["state"], "controller", note="dhw_active_noted"
+                )
                 return True
         return False
 

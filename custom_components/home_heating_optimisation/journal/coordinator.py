@@ -17,7 +17,16 @@ from homeassistant.util import dt as dt_util
 
 from ..const import VERSION
 from ..control.configuration import actuator_fingerprint
-from .const import KINDS, ORIGINS, PRIVATE_KEYS, SAVE_DELAY_SECONDS, SCHEMA_VERSION, UNKNOWN
+from .const import (
+    KINDS,
+    MAX_SAVE_FAILURES,
+    ORIGINS,
+    PRIVATE_KEYS,
+    SAVE_BACKOFF_MAX_SECONDS,
+    SAVE_DELAY_SECONDS,
+    SCHEMA_VERSION,
+    UNKNOWN,
+)
 from .store import JournalStore
 
 LOGGER = logging.getLogger(__name__)
@@ -85,6 +94,7 @@ class Journal:
         self.enabled = bool(heating.config.get("journal_enabled", True))
         self.closed = False
         self._save_cancel = None
+        self._save_failures = 0
         self._era = config_era(heating.config)
         self._control_schema = (heating.config.get("control") or {}).get("schema")
 
@@ -188,21 +198,38 @@ class Journal:
         }
 
     @callback
-    def _schedule_save(self):
+    def _schedule_save(self, delay=SAVE_DELAY_SECONDS):
         if self._save_cancel is not None or self.closed:
             return
         self._save_cancel = async_call_later(
-            self.hass, SAVE_DELAY_SECONDS, HassJob(self._flush, cancel_on_shutdown=True)
+            self.hass, delay, HassJob(self._flush, cancel_on_shutdown=True)
         )
+
+    def backoff(self):
+        """Retry delay after the current run of consecutive save failures."""
+        return min(SAVE_DELAY_SECONDS * 2 ** (self._save_failures - 1), SAVE_BACKOFF_MAX_SECONDS)
 
     async def _flush(self, _now=None):
         self._save_cancel = None
         self.store.prune(dt_util.utcnow().timestamp())
         if self.store.dirty:
             await self.store.save()
-        if self.store.dirty and not self.closed:
+        if self.store.status == "ready":
+            self._save_failures = 0
+        if not self.store.dirty or self.closed:
+            return
+        if self.store.status == "ready":
             # Events recorded while the write was in flight are still unsaved.
             self._schedule_save()
+            return
+        self._save_failures += 1
+        if self._save_failures >= MAX_SAVE_FAILURES:
+            LOGGER.warning(
+                "Heating journal save failed %d times; retrying only after the next event",
+                self._save_failures,
+            )
+            return
+        self._schedule_save(self.backoff())
 
     async def flush(self):
         """Persist now; used by tests and shutdown."""

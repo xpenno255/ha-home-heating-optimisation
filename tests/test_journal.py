@@ -15,6 +15,7 @@ from custom_components.home_heating_optimisation.diagnostics import (
 from custom_components.home_heating_optimisation.journal.const import (
     KINDS,
     MAX_EVENTS,
+    MAX_SAVE_FAILURES,
     QUERY_MAX_EVENTS,
     RETENTION_SECONDS,
     SAVE_DELAY_SECONDS,
@@ -241,6 +242,47 @@ async def test_save_failure_is_reported_and_keeps_events(hass, config, sources):
     assert journal.record("decision") is not None
     await journal.flush()
     assert journal.status == "ready"
+
+
+async def test_persistent_save_failure_backs_off_and_stops_retrying(
+    hass, config, sources, hass_storage
+):
+    entry = await setup(hass, config)
+    journal = entry.runtime_data.journal
+    delays = []
+    module = "custom_components.home_heating_optimisation.journal.coordinator.async_call_later"
+    from homeassistant.helpers.event import async_call_later as real_call_later
+
+    def call_later(hass_, delay, job):
+        delays.append(delay)
+        return real_call_later(hass_, delay, job)
+
+    with (
+        patch(module, side_effect=call_later),
+        patch.object(journal.store.backend, "async_save", side_effect=OSError("disk full")),
+    ):
+        first = journal.record("decision", data={"which": "first"})
+        assert delays == [SAVE_DELAY_SECONDS]
+        for _ in range(MAX_SAVE_FAILURES + 3):
+            if journal._save_cancel is None:
+                break
+            await journal.flush()
+        assert journal.status == "save_failed" and first["id"] in {
+            e["id"] for e in journal.store.events
+        }
+        assert journal._save_cancel is None, "retries must stop after repeated failures"
+        assert journal._save_failures == MAX_SAVE_FAILURES
+    # First timer from record, then 30 s, 1, 2, 4, 8 min and capped at 8 min.
+    assert delays == [30, 30, 60, 120, 240, 480, 480, 480, 480, 480]
+    # A later record schedules again and a successful save resets the counter.
+    with patch(module, side_effect=call_later):
+        second = journal.record("decision", data={"which": "second"})
+    assert delays[-1] == SAVE_DELAY_SECONDS and journal._save_cancel is not None
+    await journal.flush()
+    assert journal.status == "ready" and journal._save_failures == 0
+    saved = {e["id"] for e in hass_storage[key(entry)]["data"]["events"]}
+    assert {first["id"], second["id"]} <= saved
+    assert not journal.store.dirty
 
 
 async def test_bounds_and_retention(hass, config, sources):

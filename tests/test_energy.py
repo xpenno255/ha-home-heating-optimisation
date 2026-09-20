@@ -307,7 +307,9 @@ async def test_buckets_report_and_entities(hass, config, sources, freezer):
     )
     assert report["summary"]["kwh"]["fuel_input"] == pytest.approx(1.0)
     assert report["days"][0]["date"] == "2026-09-14"
-    assert report["recent_vs_previous"] is None
+    assert report["expected_days"] == 2 and report["observed_days"] == 1
+    assert report["recent_vs_previous"]["conclusion"] == "insufficient"
+    assert "period_b_no_data" in report["recent_vs_previous"]["hard_limits"]
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(
             DOMAIN, "get_energy_report", {"days": 91}, blocking=True, return_response=True
@@ -317,6 +319,34 @@ async def test_buckets_report_and_entities(hass, config, sources, freezer):
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert diagnostics["energy"]["meter_count"] == 1
     assert "sensor." not in str(diagnostics)
+
+
+async def test_report_measures_coverage_over_the_requested_calendar_window(
+    hass, config, sources, freezer
+):
+    """One observed day in an eight-day report window is 12.5% coverage, not 100%."""
+    await hass.config.async_set_time_zone("UTC")
+    freeze(hass, freezer, at="2026-09-22T10:00:00+00:00")
+    set_meter(hass, 1000.0)
+    entry = await setup(hass, metered(config))
+    energy = entry.runtime_data.energy
+    energy.store.buckets = day_buckets(1)  # the whole of 2026-09-15 only
+    report = energy.report(8)
+    assert report["expected_days"] == 8 and report["observed_days"] == 1
+    assert report["previous_observed_days"] == 0
+    assert [d["date"] for d in report["days"]] == ["2026-09-15"]
+    assert report["summary"]["expected_days"] == 8
+    assert report["summary"]["coverage_percent"] == pytest.approx(12.5)
+    comparison = report["recent_vs_previous"]
+    assert comparison["conclusion"] == "insufficient"
+    assert "period_a_coverage_below_80" in comparison["hard_limits"]
+    assert "period_b_no_data" in comparison["hard_limits"]
+    assert comparison["periods"]["a"]["coverage_percent"] == pytest.approx(12.5)
+    assert comparison["periods"]["b"]["expected_days"] == 8
+    service = await hass.services.async_call(
+        DOMAIN, "get_energy_report", {"days": 8}, blocking=True, return_response=True
+    )
+    assert service["expected_days"] == 8 and service["observed_days"] == 1
 
 
 async def test_bucket_spanning_journal_command_is_flagged_as_intervention(

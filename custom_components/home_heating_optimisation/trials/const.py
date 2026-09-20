@@ -47,11 +47,14 @@ STATES = (
 ACTIVE_STATES = ("starting", "running", "rollback_failed")
 # A failed rollback is retried once per supervision tick, at most this many times.
 MAX_ROLLBACK_ATTEMPTS = 10
+# A trial still ``starting`` this long after ``started_at`` was interrupted mid-start
+# (task cancelled, crash between the two saves) and is rolled back by supervision.
+INTERRUPTED_START_SECONDS = 120
 EVALUABLE_STATES = ("completed", "stopped", "rolled_back", "expired")
 TRANSITIONS = {
     "proposed": {"approved", "rejected"},
     "approved": {"starting", "rejected"},
-    "starting": {"running", "stopped", "rolled_back", "rollback_failed"},
+    "starting": {"running", "stopped", "rolled_back", "expired", "rollback_failed"},
     "running": {"completed", "stopped", "rolled_back", "expired", "rollback_failed"},
     "rollback_failed": {"rolled_back"},
     "rejected": set(),

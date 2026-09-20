@@ -54,7 +54,15 @@ time; approve, start and stop run under one lock so concurrent calls cannot race
    that save to succeed before anything changes; if it cannot be persisted the start
    is refused and nothing is written. Only then is the target applied via the tuning
    write gate under the controls lock, read back and the trial saved as `running`.
-4. Supervision runs every 60 s while running. First breached condition wins:
+   Readiness and the baseline are re-checked under that lock immediately before the
+   write; if either changed, the saved intent ends `stopped` (reason
+   `conditions_changed`) and nothing is written. The apply-and-persist step is
+   shielded from cancellation; a start cancelled after the write is rolled back at
+   once (reason `interrupted_start`).
+4. Supervision runs every 60 s while starting or running (a `starting` trial is
+   supervised exactly like a running one). A trial still `starting` more than two
+   minutes after `started_at` was interrupted mid-start and is rolled back with
+   reason `interrupted_start`. First breached condition wins:
    controls unavailable, expiry (→ `expired`), mode left active/auto, manual
    override (room `manual_setpoint` present, or boiler `manual_hold_active`; the
    hold itself is never touched), any `guard_reason`, comfort floor on measured air,

@@ -19,6 +19,7 @@ from custom_components.home_heating_optimisation.control.runtime import Controls
 from custom_components.home_heating_optimisation.control.store import ControlStore
 from custom_components.home_heating_optimisation.trials.const import (
     ALLOWED_PARAMETERS,
+    INTERRUPTED_START_SECONDS,
     MAX_ROLLBACK_ATTEMPTS,
 )
 from custom_components.home_heating_optimisation.trials.coordinator import ISSUE_ROLLBACK_FAILED
@@ -786,3 +787,129 @@ async def test_approve_and_start_refused_while_boiler_manual_hold_active(hass, c
         await call(hass, "start_trial", trial_id=trial_id, confirm=True)
     assert c.boiler.get_tunable("design_flow") == 55.0
     assert c.boiler.data.manual_hold_active is True
+
+
+# Second review round: interrupted and racing starts ------------------------------
+
+
+async def test_cancelled_start_mid_persist_never_leaves_target_applied_unsupervised(
+    hass, controlled, sources
+):
+    entry, c, calls = await live(hass, controlled)
+    trial_id = await propose(hass)
+    await call(hass, "approve_trial", trial_id=trial_id, confirm=True)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    real_save = trials.store.backend.async_save
+    gate, entered = asyncio.Event(), asyncio.Event()
+
+    async def save(data):
+        if any(t["state"] == "running" for t in data["trials"]):
+            entered.set()
+            await gate.wait()
+        await real_save(data)
+
+    with patch.object(trials.store.backend, "async_save", side_effect=save):
+        task = hass.loop.create_task(trials.start_trial(trial_id))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert room.get_tunable("trust_k") == 0.6  # applied, persistence in flight
+        task.cancel()
+        await asyncio.sleep(0)
+        gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    trial = trials.find(trial_id)
+    assert trial["state"] == "stopped" and trial["stop_reason"] == "interrupted_start"
+    assert trial["rollback_verified"] is True
+    assert room.get_tunable("trust_k") == 0.8 and room._store.get("trust_k") == 0.8
+    assert [h["state"] for h in trial["history"]][-3:] == ["starting", "running", "stopped"]
+    assert calls == []
+
+
+async def test_stale_starting_trial_is_rolled_back_by_the_next_tick(hass, controlled, sources):
+    entry, c, calls, trial_id = await running(hass, controlled)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    trial = trials.find(trial_id)
+    # Simulate a start interrupted after the write: state starting, value applied.
+    trial["state"] = "starting"
+    trial["started_at"] = dt_util.utcnow().isoformat()
+    await trials._tick()
+    assert trials.find(trial_id)["state"] == "starting", "fresh start is left alone"
+    assert room.get_tunable("trust_k") == 0.6
+    trial["started_at"] = (
+        dt_util.utcnow() - timedelta(seconds=INTERRUPTED_START_SECONDS + 1)
+    ).isoformat()
+    await trials._tick()
+    trial = trials.find(trial_id)
+    assert trial["state"] == "stopped" and trial["stop_reason"] == "interrupted_start"
+    assert trial["rollback_verified"] is True
+    assert room.get_tunable("trust_k") == 0.8 and room._store.get("trust_k") == 0.8
+    assert calls == []
+
+
+async def test_expired_starting_trial_is_rolled_back_by_the_tick(
+    hass, controlled, sources, freezer
+):
+    entry, c, calls, trial_id = await running(hass, controlled)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    trials.find(trial_id)["state"] = "starting"
+    freezer.tick(timedelta(hours=2, seconds=1))
+    await trials._tick()
+    trial = trials.find(trial_id)
+    assert trial["state"] == "expired" and trial["stop_reason"] == "duration_elapsed"
+    assert room.get_tunable("trust_k") == 0.8
+
+
+async def test_starting_trial_stops_on_every_running_criterion(hass, controlled, sources):
+    entry, c, calls, trial_id = await running(hass, controlled)
+    trials = entry.runtime_data.trials
+    trials.find(trial_id)["state"] = "starting"
+    c.rooms["study"]._store.set("manual_setpoint", 23.0)
+    await trials._tick()
+    trial = trials.find(trial_id)
+    assert trial["state"] == "stopped" and trial["stop_reason"] == "manual_override"
+    assert c.rooms["study"].get_tunable("trust_k") == 0.8
+
+
+async def test_start_rechecks_readiness_under_the_controls_lock(hass, controlled, sources):
+    entry, c, calls = await live(hass, controlled)
+    trial_id = await propose(hass)
+    await call(hass, "approve_trial", trial_id=trial_id, confirm=True)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    with (
+        patch.object(trials, "readiness", side_effect=[None, "room must already be active"]),
+        patch.object(room, "set_tunable") as set_tunable,
+    ):
+        with pytest.raises(ServiceValidationError, match="conditions changed"):
+            await call(hass, "start_trial", trial_id=trial_id, confirm=True)
+    assert not set_tunable.called
+    assert room.get_tunable("trust_k") == 0.8
+    trial = trials.find(trial_id)
+    assert trial["state"] == "stopped" and trial["stop_reason"] == "conditions_changed"
+    assert trial["stop_detail"] == {"reason": "room must already be active"}
+    assert [h["state"] for h in trial["history"]] == ["proposed", "approved", "starting", "stopped"]
+
+
+async def test_start_rechecks_baseline_under_the_controls_lock(hass, controlled, sources):
+    entry, c, calls = await live(hass, controlled)
+    trial_id = await propose(hass)
+    await call(hass, "approve_trial", trial_id=trial_id, confirm=True)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    real_get = room.get_tunable
+    reads = []
+
+    def get_tunable(key):
+        reads.append(key)
+        # The value moves between the unlocked check and the locked recheck.
+        return 0.5 if len(reads) == 2 else real_get(key)
+
+    with patch.object(room, "get_tunable", side_effect=get_tunable):
+        with pytest.raises(ServiceValidationError, match="conditions changed"):
+            await call(hass, "start_trial", trial_id=trial_id, confirm=True)
+    trial = trials.find(trial_id)
+    assert trial["state"] == "stopped" and trial["stop_reason"] == "conditions_changed"
+    assert room.get_tunable("trust_k") == 0.8 and room._store.get("trust_k") in (None, 0.8)
