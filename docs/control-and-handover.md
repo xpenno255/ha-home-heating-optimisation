@@ -14,7 +14,7 @@ Run `home_heating_optimisation.import_controls`. It copies configuration, live t
 
 The survey is copied into `home_heating_optimisation/house` beneath the HA configuration directory. Existing differing destination files are preserved and block import. Original files and integrations remain intact for rollback. A repeated import returns `already_imported` rather than overwriting the consolidated configuration.
 
-Both engines start in shadow. `get_control_report` returns per-room predictions and boiler targets, with ownership blockers. Control sensors expose selected room air separately from the original thermostat-air observations: the two measurements are not assumed identical. Existing HHO observation entity IDs are retained. New control entities have their own IDs; legacy entity IDs and their history are not transferred or deleted. Update any external dashboards or automations using legacy controller outputs before removing the legacy integrations.
+Both engines start in shadow. `get_control_report` returns per-room predictions and boiler targets, with ownership blockers. Control sensors expose selected room air separately from the original thermostat-air observations: the two measurements are not assumed identical. Existing HHO observation entity IDs are retained. New control entities start with their own IDs; legacy entity IDs and their history are not transferred or deleted by import. After handover, the optional [identity migration](#identity-migration) can move compatible legacy output IDs onto the consolidated entities.
 
 ## Boiler telemetry freshness
 
@@ -31,6 +31,24 @@ Each room has a shadow/active select. The boiler has shadow/auto/hold. Active se
 There are independent room/boiler enable switches, occupancy switches, a global comfort switch, comfort trust/cap numbers, boiler design/return/DHW tuning numbers and a DHW diagnostic reset button. Mode and enable settings are saved before taking effect. A restart restores active selections only after completed ownership and initialization; interrupted handovers and corrupt/unwritable controller storage cannot grant permission to write.
 
 Run `home_heating_optimisation.rollback_controls` to stop new writes and restore the legacy entries disabled by handover. Legacy settings remain as they were; if they were in shadow, rollback restores shadow. An in-flight actuator call is allowed to settle before the old owner can be restored. Retain the old integrations until the active trial is complete.
+
+## Identity migration
+
+Status: implemented 2026-09-20 ([#23](https://github.com/xpenno255/ha-home-heating-optimisation/issues/23)); not yet run on a live installation.
+
+Identity migration is separate from actuator activation. It runs only after `handover_controls` has recorded `ownership: ready`, while every legacy entry is disabled and unloaded and the consolidated controls are in shadow. It never changes ownership, modes or actuator settings, and the one-writer handover guards are unchanged.
+
+`preview_identity_migration` (read-only) lists every registry entity belonging to a supported legacy entry (OT v2, BFC v1) with an explicit mapping:
+
+- `transfer`: the physical meaning, unit and statistics semantics are unchanged. Room `state`, `air_setpoint`, `would_write`, `air_temp`, `schedule_setpoint` and `flow_temp_used`; boiler `mode`, `flow_setpoint`, `return_temperature_used`, `cycles_10min`, `cycling_status`, `dhw_status` and the DHW active binary sensor.
+- `archive`: estimated or revised metrics (`target_ot`, `operative_temp`, `offset_final`), metrics with no consolidated equivalent, legacy write memory, and any entity whose registry unit differs from the consolidated one. Their legacy registry entries and history stay exactly as they are under the legacy ID and are never relabelled as the new definition.
+- `skip`: control inputs, legacy entities disabled by the user, rooms without a consolidated match, entities already transferred.
+
+Each mapping shows the legacy and consolidated unique IDs and current entity IDs, whether the legacy ID is held by another entity (`collision`), whether long-term statistics exist for it (`has_statistics`, `null` when the recorder is unavailable) and its known consumers: enabled or disabled loaded automations and scripts, storage and YAML dashboards that can be read, and HHO's own configuration. Consumers are inventoried, never edited; templates and YAML files must be reviewed by hand. An unsupported legacy version reports `status: unsupported` and blocks migration. A user-renamed legacy entity is followed through its registry identity and its current ID is the one transferred.
+
+`migrate_identities` (`confirm: true`) runs only when the preview is `ready` and no collision exists. For each transfer it journals the intent and a snapshot of the legacy registry entry in `home_heating_optimisation.<entry_id>.identity_migration` (schema 1, bounded, read-only on corruption), removes the legacy registry entry, and renames the consolidated entity onto the legacy entity ID with the standard registry API. Home Assistant's recorder moves states and long-term statistics with an entity ID rename, so the legacy series continues under the transferred ID without a gap in the statistics table. Progress is journalled per item and to the migration journal where available; an interrupted run resumes from the recorded stage and a repeated run reports `nothing_to_transfer` rather than creating duplicates. The integration reloads once after a transfer so its own references follow the new IDs; ownership and shadow modes are retained across the reload.
+
+`rollback_identity_migration` renames the consolidated entities back to their previous IDs and recreates the legacy registry entries from the snapshots (name, area, labels, icon and device). Rolled-back items may be migrated again. Retain the legacy integrations until the transferred IDs have been checked on dashboards and in history.
 
 ## Schedule fallback and commissioning
 

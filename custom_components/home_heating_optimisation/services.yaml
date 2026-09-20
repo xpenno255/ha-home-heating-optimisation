@@ -352,3 +352,11 @@ get_trials:
       default: false
       selector:
         boolean:
+preview_identity_migration:
+migrate_identities:
+  fields:
+    confirm:
+      required: true
+      selector:
+        boolean:
+rollback_identity_migration:
