@@ -47,7 +47,7 @@ TRANSITIONS = {
     "proposed": {"approved", "rejected"},
     "approved": {"running", "rejected"},
     "running": {"completed", "stopped", "rolled_back", "expired", "rollback_failed"},
-    "rollback_failed": {"stopped"},
+    "rollback_failed": {"rolled_back"},
     "rejected": set(),
     "completed": set(),
     "stopped": set(),

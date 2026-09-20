@@ -437,6 +437,9 @@ class Trials:
         scope = trial["scope"]
         if controls is None or controls.closed or not controls.ready:
             return await self._rollback(trial, "stopped", "controls_unavailable")
+        expires = _parse(trial.get("expires_at"))
+        if expires is not None and now >= expires:
+            return await self._rollback(trial, "expired", "duration_elapsed")
         coordinator = controls.boiler if scope == "boiler" else controls.rooms.get(scope)
         if coordinator is None:
             return await self._rollback(trial, "stopped", "scope_removed")
@@ -452,9 +455,6 @@ class Trials:
                 return await self._rollback(trial, "stopped", "manual_override")
         if reason := controls.guard_reason(scope):
             return await self._rollback(trial, "stopped", f"guard: {reason}")
-        expires = _parse(trial.get("expires_at"))
-        if expires is not None and now >= expires:
-            return await self._rollback(trial, "expired", "duration_elapsed")
         rooms = self.rooms_for(trial)
         floor = trial.get("comfort_floor_c")
         if floor is not None:

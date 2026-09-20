@@ -22,7 +22,7 @@
           "decision_sensor": "OT decision state (optional context)"
         },
         "data_description": {
-          "demand_sensor": "Percentage (0–100 %) or unitless fraction (0–1)."
+          "demand_sensor": "Percentage (0\u2013100 %) or unitless fraction (0\u20131)."
         }
       },
       "system": {
@@ -39,7 +39,7 @@
           "analytics_enabled": "Enable historical analytics",
           "analysis_window_days": "Analysis window (days)",
           "update_interval_minutes": "Report interval (minutes)",
-          "comfort_tolerance": "Comfort band tolerance (°C)",
+          "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
           "history_state_policy": "Historical state coverage"
@@ -93,7 +93,7 @@
           "decision_sensor": "OT decision state (optional context)"
         },
         "data_description": {
-          "demand_sensor": "Percentage (0–100 %) or unitless fraction (0–1)."
+          "demand_sensor": "Percentage (0\u2013100 %) or unitless fraction (0\u20131)."
         }
       },
       "system": {
@@ -110,7 +110,7 @@
           "analytics_enabled": "Enable historical analytics",
           "analysis_window_days": "Analysis window (days)",
           "update_interval_minutes": "Report interval (minutes)",
-          "comfort_tolerance": "Comfort band tolerance (°C)",
+          "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
           "history_state_policy": "Historical state coverage"
@@ -573,7 +573,7 @@
           "description": "1 to 168 hours; the trial rolls back automatically when this elapses."
         },
         "comfort_floor_c": {
-          "name": "Comfort floor (°C)",
+          "name": "Comfort floor (\u00b0C)",
           "description": "Optional measured room air temperature below which the trial stops and rolls back."
         },
         "recommendation_id": {
