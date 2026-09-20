@@ -30,6 +30,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.extend(create_sensors(coordinator.analytics, entry))
     entities.append(AdvisorSensor(coordinator, entry))
     entities.append(RecommendationsSensor(coordinator, entry))
+    entities.append(TrialsSensor(coordinator, entry))
     entities.append(HouseModelSensor(coordinator, entry))
     from .control.entities import sensors
 
@@ -128,5 +129,38 @@ class RecommendationsSensor(HeatingEntity, SensorEntity):
             **{f"{state}_count": n for state, n in quality["counts"].items()},
             "latest_id": quality["latest_id"],
             "eligible_for_evaluation": quality["eligible_for_evaluation"],
+            "evidence_type": "association",
+        }
+
+
+class TrialsSensor(HeatingEntity, SensorEntity):
+    """Running-trial count; rationale and notes stay in the private store and read service."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "trials")
+
+    def _quality(self):
+        trials = self.coordinator.trials
+        return trials.quality() if trials else None
+
+    @property
+    def native_value(self):
+        quality = self._quality()
+        return quality["counts"]["running"] if quality else 0
+
+    @property
+    def extra_state_attributes(self):
+        quality = self._quality()
+        if quality is None:
+            return {"status": "not_configured"}
+        return {
+            "status": quality["status"],
+            **{f"{state}_count": n for state, n in quality["counts"].items()},
+            "running_scope": quality["running_scope"],
+            "running_parameter": quality["running_parameter"],
+            "expires_at": quality["expires_at"],
             "evidence_type": "association",
         }

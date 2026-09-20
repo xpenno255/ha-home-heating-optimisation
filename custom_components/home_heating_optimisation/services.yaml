@@ -130,3 +130,137 @@ import_controls:
 get_control_report:
 handover_controls:
 rollback_controls:
+
+propose_trial:
+  fields:
+    scope:
+      required: true
+      selector:
+        text:
+    parameter:
+      required: true
+      selector:
+        select:
+          options:
+            - trust_k
+            - cap_up
+            - cap_down
+            - design_flow
+            - design_outdoor
+            - return_ceiling
+    target_value:
+      required: true
+      selector:
+        number:
+          min: -15
+          max: 80
+          step: 0.05
+          mode: box
+    rationale:
+      required: true
+      selector:
+        text:
+          multiline: true
+    duration_hours:
+      required: true
+      default: 24
+      selector:
+        number:
+          min: 1
+          max: 168
+          mode: box
+    comfort_floor_c:
+      selector:
+        number:
+          min: 5
+          max: 25
+          step: 0.5
+          mode: box
+    recommendation_id:
+      selector:
+        text:
+approve_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    confirm:
+      required: true
+      default: false
+      selector:
+        boolean:
+reject_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    note:
+      selector:
+        text:
+start_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    confirm:
+      required: true
+      default: false
+      selector:
+        boolean:
+stop_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    complete:
+      default: false
+      selector:
+        boolean:
+    note:
+      selector:
+        text:
+evaluate_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    outcome:
+      required: true
+      selector:
+        select:
+          options:
+            - improved
+            - no_change
+            - worse
+            - inconclusive
+    note:
+      selector:
+        text:
+          multiline: true
+get_trials:
+  fields:
+    state:
+      selector:
+        select:
+          options:
+            - proposed
+            - approved
+            - rejected
+            - running
+            - completed
+            - stopped
+            - rolled_back
+            - expired
+            - rollback_failed
+    scope:
+      selector:
+        text:
+    include_private:
+      default: false
+      selector:
+        boolean:
