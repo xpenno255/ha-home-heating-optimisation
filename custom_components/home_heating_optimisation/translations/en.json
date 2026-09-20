@@ -453,6 +453,24 @@
     "rollback_controls": {
       "name": "Restore legacy controllers",
       "description": "Stop consolidated writes and re-enable the retained legacy controllers."
+    },
+    "preview_identity_migration": {
+      "name": "Preview identity migration",
+      "description": "List legacy output entities, whether each can keep its ID and history under consolidated control, collisions and known dashboard/automation consumers. Changes nothing."
+    },
+    "migrate_identities": {
+      "name": "Migrate legacy output identities",
+      "description": "After handover, move compatible legacy output entity IDs (with their history and statistics) onto the consolidated entities. Incompatible metrics are archived under their legacy IDs. Requires confirm: true.",
+      "fields": {
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true. The integration reloads after a transfer; controls stay in shadow."
+        }
+      }
+    },
+    "rollback_identity_migration": {
+      "name": "Roll back identity migration",
+      "description": "Rename consolidated entities back and recreate the journalled legacy registry entries."
     }
   },
   "issues": {

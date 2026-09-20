@@ -142,7 +142,30 @@ def async_register_services(hass):
     async def control_rollback(call):
         return await rollback(heating().controls)
 
+    from .control import identity_migration
+
+    async def identity_preview(call):
+        heating_ = heating()
+        return await identity_migration.plan(hass, heating_.config_entry)
+
+    async def identity_migrate(call):
+        heating_ = heating()
+        return await identity_migration.execute(hass, heating_.config_entry)
+
+    async def identity_rollback(call):
+        heating_ = heating()
+        return await identity_migration.rollback(hass, heating_.config_entry)
+
+    hass.services.async_register(
+        DOMAIN,
+        "migrate_identities",
+        identity_migrate,
+        schema=vol.Schema({vol.Required("confirm"): True}),
+        supports_response=SupportsResponse.ONLY,
+    )
     for name, handler in (
+        ("preview_identity_migration", identity_preview),
+        ("rollback_identity_migration", identity_rollback),
         ("preview_control_import", control_preview),
         ("import_controls", control_import),
         ("get_control_report", control_report),

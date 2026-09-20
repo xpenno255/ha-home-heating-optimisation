@@ -45,3 +45,11 @@ import_controls:
 get_control_report:
 handover_controls:
 rollback_controls:
+preview_identity_migration:
+migrate_identities:
+  fields:
+    confirm:
+      required: true
+      selector:
+        boolean:
+rollback_identity_migration:
