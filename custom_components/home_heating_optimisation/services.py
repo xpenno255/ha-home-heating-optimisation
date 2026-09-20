@@ -62,6 +62,22 @@ def async_register_services(hass):
         await coordinator.refresh()
         return {**coordinator.report(), "house_model": heating().house_report()}
 
+    async def energy_report(call):
+        energy = heating().energy
+        if energy is None:
+            raise ServiceValidationError("Configure at least one energy meter first")
+        return energy.report(call.data["days"])
+
+    hass.services.async_register(
+        DOMAIN,
+        "get_energy_report",
+        energy_report,
+        schema=vol.Schema(
+            {vol.Optional("days", default=7): vol.All(vol.Coerce(int), vol.Range(min=1, max=90))}
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+
     async def house_report(call):
         return heating().house_report()
 

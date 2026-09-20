@@ -54,6 +54,8 @@ be freshly reported. Low recent-change coverage alone does not prove stale senso
 Commanded air targets are not
 measured operative comfort. Demand is not delivered heat or metered energy.
 Survey estimates and controller intent are not measurements.
+Metered energy (fact energy) is input energy with coverage and comparability limits;
+kwh_per_degree_hour is an association, never a savings figure or a causal effect.
 Overshoot degree hours include all valid target-tracking time, including setback
 or frost/off targets. They do NOT establish heating-induced overheating. Mention
 that limitation alongside any overshoot finding; do not attribute it to heating.
@@ -118,7 +120,34 @@ def encode(value):
     return json.dumps(value, separators=(",", ":"), allow_nan=False, ensure_ascii=False)
 
 
-def build_evidence(report, house, live_quality, task, question=""):
+def energy_facts(energy):
+    """Allowlisted metered-energy summary: coverage and limits, never raw readings."""
+    if not energy:
+        return {
+            "status": "no_meter",
+            "limitations": ["No metered energy configured; no savings conclusion is possible."],
+        }
+    quality = energy.get("quality", {})
+    comparison = energy.get("recent_vs_previous") or {}
+    facts = {
+        "status": quality.get("status"),
+        "meter_kinds": quality.get("meter_kinds", []),
+        "coverage_percent_7d": quality.get("coverage_percent_7d"),
+        "reset_count": quality.get("reset_count"),
+        "allocation_unknown_share": quality.get("allocation_unknown_share"),
+        "comparability_limits": comparison.get("limits", []),
+        "conclusion": comparison.get("conclusion"),
+        "kwh_per_degree_hour": comparison.get("kwh_per_degree_hour"),
+        "confidence": comparison.get("confidence"),
+        "note": comparison.get("note", "association, not causal evidence"),
+        "limitations": [],
+    }
+    if comparison.get("conclusion") != "comparable":
+        facts["limitations"].append("No savings conclusion: metering/context insufficient")
+    return facts
+
+
+def build_evidence(report, house, live_quality, task, question="", energy=None):
     facts = {}
 
     def add(key, value):
@@ -237,6 +266,7 @@ def build_evidence(report, house, live_quality, task, question=""):
                 )
         add(f"house.room.{rid}", compact)
     add("house.constructions", constructions)
+    add("energy", energy_facts(energy))
     evidence = {
         "schema": 1,
         "task": task,

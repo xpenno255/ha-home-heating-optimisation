@@ -18,6 +18,15 @@ record_adjustment:
       selector:
         text:
 get_report:
+get_energy_report:
+  fields:
+    days:
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 90
+          mode: box
 get_house_model:
 reload_house_model:
 run_review:

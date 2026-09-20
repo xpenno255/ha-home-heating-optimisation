@@ -35,6 +35,13 @@ from .control.configuration import (
     validate_control_rooms,
 )
 from .control.store import ControlStore
+from .energy.const import (
+    DEFAULT_CALORIFIC_MJ_M3,
+    DEFAULT_VOLUME_CORRECTION,
+    KINDS,
+    MAX_METERS,
+    UNITS,
+)
 from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
@@ -113,7 +120,7 @@ class MappingFlow:
                     "rooms": [],
                     **{
                         k: self.current[k]
-                        for k in ("advisor", "control", "mqtt_sources")
+                        for k in ("advisor", "control", "mqtt_sources", "energy")
                         if k in self.current
                     },
                 }
@@ -310,7 +317,9 @@ class HeatingConfigFlow(MappingFlow, ConfigFlow, domain=DOMAIN):
 class HeatingOptionsFlow(MappingFlow, OptionsFlow):
     async def async_step_init(self, user_input=None):
         self.current = effective_config(self.config_entry)
-        return self.async_show_menu(step_id="init", menu_options=["mapping", "control", "advisor"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["mapping", "control", "advisor", "energy"]
+        )
 
     async def async_step_mapping(self, user_input=None):
         self.current = effective_config(self.config_entry)
@@ -792,3 +801,68 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         return self.async_show_form(
             step_id="advisor", errors=errors, data_schema=vol.Schema(schema)
         )
+
+    async def async_step_energy(self, user_input=None):
+        """Explicit meter selection; an empty form disables energy evidence."""
+        self.current = effective_config(self.config_entry)
+        old = self.current.get("energy") or {}
+        meters = old.get("meters") or []
+        errors = {}
+        if user_input is not None:
+            selected = []
+            for index in range(1, MAX_METERS + 1):
+                entity = user_input.get(f"meter_{index}_entity")
+                if not entity:
+                    continue
+                state = self.hass.states.get(entity)
+                if (
+                    not entity.startswith("sensor.")
+                    or state is None
+                    or state.attributes.get("device_class") not in ("energy", "gas")
+                ):
+                    errors["base"] = "invalid_energy_meter"
+                    break
+                selected.append(
+                    {
+                        "entity": entity,
+                        "kind": user_input.get(f"meter_{index}_kind", "fuel_input"),
+                        "unit": user_input.get(f"meter_{index}_unit") or None,
+                        "calorific_value_mj_m3": user_input["calorific_value_mj_m3"],
+                        "volume_correction": user_input["volume_correction"],
+                    }
+                )
+            if not errors and len({m["entity"] for m in selected}) != len(selected):
+                errors["base"] = "duplicate_energy_meter"
+            if not errors:
+                energy = {"meters": selected} if selected else {}
+                return self.async_create_entry(title=NAME, data={**self.current, "energy": energy})
+        schema = {}
+        for index in range(1, MAX_METERS + 1):
+            meter = meters[index - 1] if index <= len(meters) else {}
+            key = f"meter_{index}_entity"
+            schema[optional(key, {key: meter.get("entity")})] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["sensor"], device_class=["energy", "gas"])
+            )
+            schema[vol.Optional(f"meter_{index}_kind", default=meter.get("kind", "fuel_input"))] = (
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(KINDS), translation_key="energy_meter_kind"
+                    )
+                )
+            )
+            unit_key = f"meter_{index}_unit"
+            schema[optional(unit_key, {unit_key: meter.get("unit")})] = selector.SelectSelector(
+                selector.SelectSelectorConfig(options=list(UNITS))
+            )
+        first = meters[0] if meters else {}
+        schema.update(
+            dict(
+                (
+                    number_field(
+                        "calorific_value_mj_m3", first, DEFAULT_CALORIFIC_MJ_M3, 30.0, 50.0
+                    ),
+                    number_field("volume_correction", first, DEFAULT_VOLUME_CORRECTION, 0.9, 1.1),
+                )
+            )
+        )
+        return self.async_show_form(step_id="energy", errors=errors, data_schema=vol.Schema(schema))

@@ -1,5 +1,7 @@
 """Consolidated comfort and boiler control, observations and optional advice."""
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -11,10 +13,13 @@ from .analytics.coordinator import AnalyticsCoordinator
 from .const import DOMAIN
 from .control.runtime import Controls
 from .coordinator import HeatingCoordinator
+from .energy.coordinator import EnergyEvidence
+from .energy.meter import meter_specs
 from .observations import watched_entities
 from .services import async_register_services
 from .source_identity import async_register_source_identity
 
+LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [
     Platform.SENSOR,
@@ -52,6 +57,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
         await coordinator.analytics.initialise()
     coordinator.advisor = Advisor(hass, entry, coordinator)
     await coordinator.advisor.initialise()
+    if meter_specs(coordinator.config):
+        try:
+            coordinator.energy = EnergyEvidence(hass, entry, coordinator)
+            await coordinator.energy.initialise()
+        except Exception:
+            # Metered energy is optional evidence; its failure never blocks heating.
+            LOGGER.exception("Energy evidence could not start; continuing without it")
+            coordinator.energy = None
     # Remove only our entities for explicitly removed rooms, retaining all others' IDs.
     registry = er.async_get(hass)
     valid_rooms = {room["id"] for room in coordinator.config["rooms"]}
@@ -68,6 +81,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()
+    if coordinator.energy:
+        try:
+            coordinator.energy.start()
+        except Exception:
+            LOGGER.exception("Energy evidence collection failed to start")
     entry.async_on_unload(entry.add_update_listener(async_reload))
     return True
 
@@ -83,4 +101,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
         await entry.runtime_data.advisor.stop()
     if unloaded and entry.runtime_data.analytics:
         await entry.runtime_data.analytics.stop()
+    if unloaded and entry.runtime_data.energy:
+        await entry.runtime_data.energy.stop()
     return unloaded
