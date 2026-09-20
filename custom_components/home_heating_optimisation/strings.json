@@ -240,7 +240,7 @@
       },
       "advisor": {
         "title": "Heating Advisor",
-        "description": "Select dedicated AI Task profiles from Extended OpenAI or Anthropic with tools disabled. Provider, model and effort are inherited from each profile. Enabling a review sends selected room names, thermal survey details and heating metrics to that provider. Journal note text and raw history are excluded. Schedules are optional; weekly reviews run on Monday. Reports provide advice only.",
+        "description": "Select dedicated AI Task profiles from Extended OpenAI or Anthropic with tools disabled. Provider, model and effort are inherited from each profile. Enabling a review sends selected room names, thermal survey details and heating metrics to that provider. Journal note text and raw history are excluded. Schedules are optional; weekly reviews run on Monday. Reports provide advice only. Notifications are off by default; when enabled they carry the report ID, task, profile and counts only. Choose 'Include finding titles' to add titles; evidence and report text are never sent.",
         "data": {
           "enabled": "Enable Heating Advisor",
           "daily_summary": "Daily summary AI profile",
@@ -250,7 +250,15 @@
           "schedule_weekly_review": "Schedule weekly reviews",
           "schedule_hour": "Review hour (Home Assistant local time)",
           "max_calls_per_day": "Maximum calls in any 24 hours",
-          "timeout_seconds": "Maximum seconds per call"
+          "timeout_seconds": "Maximum seconds per call",
+          "notify_enabled": "Send notifications",
+          "notify_targets": "Notification services",
+          "notify_on": "Notify on",
+          "notify_include_summary": "Include finding titles in notifications"
+        },
+        "data_description": {
+          "notify_targets": "Leave empty to use a Home Assistant persistent notification.",
+          "notify_on": "Failure notifications are sent at most once per task per day; a report is never announced twice."
         }
       }
     },
@@ -275,7 +283,9 @@
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
       "advisor_needs_analytics": "Enable historical analytics before the advisor.",
       "invalid_ai_profile": "Select an available Extended OpenAI or Anthropic AI Task profile with Home Assistant APIs and all tools disabled. For Extended OpenAI, set Functions to [].",
-      "missing_ai_profile": "Select a profile for each scheduled task."
+      "missing_ai_profile": "Select a profile for each scheduled task.",
+      "missing_notify_event": "Select at least one notification event, or turn notifications off.",
+      "invalid_notify_target": "Notification services must be notify.* services."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
@@ -368,6 +378,9 @@
       },
       "advisor": {
         "name": "Advisor status"
+      },
+      "advisor_latest_report": {
+        "name": "Advisor latest report"
       }
     },
     "binary_sensor": {
@@ -453,12 +466,31 @@
     "rollback_controls": {
       "name": "Restore legacy controllers",
       "description": "Stop consolidated writes and re-enable the retained legacy controllers."
+    },
+    "get_advisor_report_summary": {
+      "name": "Get advisor report summary",
+      "description": "Return a readable summary of one retained report (latest by default): task, time, profile, evidence references, coverage, findings, limitations and follow-up actions, plus rendered Markdown text.",
+      "fields": {
+        "report_id": {
+          "name": "Report ID",
+          "description": "Optional ID from the report list; omit for the latest report."
+        }
+      }
     }
   },
   "issues": {
     "dhw_charge_problem": {
       "title": "Hot-water charge needs review",
       "description": "The boiler controller reported: {reason}. Check the cylinder and heating system."
+    }
+  },
+  "selector": {
+    "advisor_notify_on": {
+      "options": {
+        "report_ready": "Report ready",
+        "report_failed": "Report failed (timeout or invalid response)",
+        "provider_failed": "Provider call failed"
+      }
     }
   }
 }

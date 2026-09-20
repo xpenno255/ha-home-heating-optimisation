@@ -64,9 +64,63 @@ response_variable: heating_reports
 The list includes the latest 20 reports and available profile settings. Supply a
 `report_id` to retrieve that report's exact evidence, hash and prompt version.
 The **Advisor status** sensor exposes status/count/timestamp only. Full report text
-stays out of entity attributes and downloadable diagnostics. A dashboard reader,
-notifications and conversational follow-ups are later work; actions provide the
-initial report access and can be used by your own automations.
+stays out of entity attributes and downloadable diagnostics. Conversational
+follow-ups remain later work; the reader and notifications below were added in
+September 2026 (issue #18).
+
+## Reading reports
+
+`get_advisor_report_summary` returns one retained report in readable form. Omit
+`report_id` for the latest report; an unknown or deleted ID returns a validation
+error and never triggers a new AI call.
+
+```yaml
+action: home_heating_optimisation.get_advisor_report_summary
+data:
+  report_id: optional-id-from-get_advisor_reports
+response_variable: heating_report
+```
+
+The response contains rendered Markdown in `text` plus structured fields: task and
+`created_at`, profile name/provider/model/effort, `prompt_version`, `evidence_hash`,
+the fact IDs cited (`evidence_references`), a `coverage` block (analysis window,
+system and per-room coverage percentages, unavailable/suppressed metrics, omitted
+evidence categories), the report's `conclusion` and `summary`, `findings` (title,
+kind, detail, evidence IDs, next check), `limitations` and `follow_up_actions`
+(one per finding). Coverage is described by reference: the summary reports
+percentages and metric names, not the evidence values themselves. Retrieve the full
+evidence with `get_advisor_reports` when you need to check a citation.
+
+Show `{{ heating_report.text }}` in a Markdown card or script, or read the fields in
+an automation. The **Advisor latest report** diagnostic sensor
+(`sensor.home_heating_optimisation_advisor_latest_report`) has the latest report's
+creation time as its state and only `report_id`, `task`, `profile_name`,
+`finding_count`, `limitation_count` and `headline` (the first finding's title,
+at most 120 characters) as attributes. No report text, evidence or private notes
+appear in entity attributes or diagnostics.
+
+## Notifications
+
+Notifications are off by default. In the Heating Advisor options step:
+
+- **Send notifications** enables them.
+- **Notification services** lists the available `notify.*` services (multi-select).
+  Leave it empty to receive a Home Assistant persistent notification instead.
+- **Notify on** selects events: report ready (default), report failed (timeout or
+  rejected response) and provider call failed.
+- **Include finding titles in notifications** adds finding titles only. Details,
+  next checks, limitations, evidence and questions are never sent by default or
+  with this option; the message carries the report ID, task, profile name,
+  conclusion and counts, plus the action name to retrieve the report.
+
+Deduplication is persisted in the advisor store: a report is never announced twice,
+including across restarts, and failure notifications are sent at most once per task
+per local day. A failure notification never causes a retry; the next call happens
+only when you or a schedule requests it. Delivery failures (missing or failing
+notify service, timeout) are logged at warning level and shown as `notify_status`
+on the Advisor status sensor; they never affect the review result or heating
+control. When a journal is enabled, each retained report also records an
+`advisor_report` event with the report ID, task, profile name and finding count.
 
 ## Schedules and limits
 

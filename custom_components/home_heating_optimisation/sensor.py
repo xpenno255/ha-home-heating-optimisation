@@ -2,6 +2,7 @@
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature
+from homeassistant.util import dt as dt_util
 
 from .const import SYSTEM_SOURCES
 from .entity import HeatingEntity
@@ -29,6 +30,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         entities.extend(create_sensors(coordinator.analytics, entry))
     entities.append(AdvisorSensor(coordinator, entry))
+    entities.append(AdvisorLatestReportSensor(coordinator, entry))
     entities.append(HouseModelSensor(coordinator, entry))
     from .control.entities import sensors
 
@@ -104,3 +106,22 @@ class AdvisorSensor(HeatingEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         return self.coordinator.advisor.quality()
+
+
+class AdvisorLatestReportSensor(HeatingEntity, SensorEntity):
+    """Creation time of the latest retained report; identifiers and counts only."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "advisor_latest_report")
+
+    @property
+    def native_value(self):
+        report = self.coordinator.advisor.latest()
+        return dt_util.parse_datetime(report["created_at"]) if report else None
+
+    @property
+    def extra_state_attributes(self):
+        return self.coordinator.advisor.latest_attributes()
