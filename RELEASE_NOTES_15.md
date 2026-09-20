@@ -1,4 +1,0 @@
-- Recorded why an optional RAMSES schedule download failed (`incomplete_fragments`, `transport_timeout`, `parser_error`, `unavailable`, `unknown`) and exposed `schedule_fetch_status`, `schedule_fetch_failure_class`, `schedule_fetch_attempts` and `schedule_next_retry_at` on each room decision sensor; retry timing and cloud/live/cache precedence are unchanged.
-- Added tests pinning background-only bounded retries (5, 10, 20, 40, 60-minute ceiling), cancellation on unload, cloud/live/cache precedence and the 48-hour cache limit during a fault.
-- Documented the 20 September 2026 read-only investigation of the residual `Failed to decompress schedule fragments` and `Conversation ... timed out` warnings, their origin in ramses_rf 0.60.5, a 7-day observation plan and a prepared (unposted) upstream reproducer.
-- Replaced the stale RF schedule warning in the control and handover guide with the new diagnostics and the precedence order.

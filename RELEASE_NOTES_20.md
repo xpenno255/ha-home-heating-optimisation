@@ -1,4 +1,0 @@
-- Added a durable recommendation workflow: every stored advisor finding became a `proposed` recommendation with a stable ID linked to its report, evidence hash, profile and room/system scope.
-- Added `decide_recommendation`, `mark_recommendation_applied`, `evaluate_recommendation` and `get_recommendations` services recording owner decisions and outcomes with timestamps and private notes; accepting a recommendation changed no heating setting.
-- Added association-only follow-up eligibility (7-day minimum, 80% coverage, unchanged configuration era, DHW/weather comparability when available) and journal links for interventions.
-- Added `sensor.home_heating_optimisation_recommendations` (counts only) and a bounded private store (200 items, 365 days) that fell back to read-only on corruption without affecting reports or heating control.

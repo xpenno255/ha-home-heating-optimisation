@@ -1,4 +1,0 @@
-- Added `preview_identity_migration`, a read-only listing of legacy OT/BFC output entities showing which can keep their entity ID, history and long-term statistics under consolidated control, which are archived as revised or estimated metrics, collisions, and known dashboard/automation consumers.
-- Added `migrate_identities` (`confirm: true`), which after handover moves compatible legacy output entity IDs onto the consolidated entities through the standard registry rename, journalled per item so an interrupted run resumes without duplicates.
-- Added `rollback_identity_migration`, restoring the previous consolidated IDs and recreating the legacy registry entries from stored snapshots.
-- Identity migration is refused while legacy entries are enabled, before handover, while any room is active or the boiler is in auto, and when its journal is unreadable; it never changes ownership or modes.
