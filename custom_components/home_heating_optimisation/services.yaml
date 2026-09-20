@@ -87,6 +87,11 @@ get_advisor_reports:
     report_id:
       selector:
         text:
+get_advisor_report_summary:
+  fields:
+    report_id:
+      selector:
+        text:
 
 preview_control_import:
 import_controls:

@@ -175,6 +175,9 @@ def async_register_services(hass):
     async def advisor_reports(call):
         return heating().advisor.report_list(call.data.get("report_id"))
 
+    async def advisor_report_summary(call):
+        return heating().advisor.report_summary(call.data.get("report_id"))
+
     hass.services.async_register(
         DOMAIN,
         "run_review",
@@ -191,6 +194,13 @@ def async_register_services(hass):
         DOMAIN,
         "get_advisor_reports",
         advisor_reports,
+        schema=vol.Schema({vol.Optional("report_id"): cv.string}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_advisor_report_summary",
+        advisor_report_summary,
         schema=vol.Schema({vol.Optional("report_id"): cv.string}),
         supports_response=SupportsResponse.ONLY,
     )

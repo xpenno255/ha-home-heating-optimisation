@@ -1,6 +1,7 @@
 """Isolated, bounded advisor execution and private report retention."""
 
 import asyncio
+import logging
 from copy import deepcopy
 from datetime import timedelta
 from uuid import uuid4
@@ -24,9 +25,13 @@ from .evidence import (
     report_schema,
     validate_response,
 )
+from .notify import EVENTS, FAILURE_EVENTS, deliver, failure_message, report_message
 from .profiles import profile_info, profiles
+from .reports import latest_attributes, summarise
 
+LOGGER = logging.getLogger(__name__)
 MAX_REPORTS = 20
+NOTIFY_DEFAULT = {"last_report_id": None, "failures": {}}
 
 
 async def generate(hass, **kwargs):
@@ -41,8 +46,15 @@ class Advisor:
         self.hass, self.entry, self.heating = hass, entry, heating
         self.config = heating.config.get("advisor", {})
         self.backend = Store(hass, 1, f"home_heating_optimisation.{entry.entry_id}.advisor")
-        self.data = {"schema": 1, "reports": [], "attempts": [], "scheduled": {}}
+        self.data = {
+            "schema": 1,
+            "reports": [],
+            "attempts": [],
+            "scheduled": {},
+            "notify": deepcopy(NOTIFY_DEFAULT),
+        }
         self.status = "disabled" if not self.config.get("enabled") else "ready"
+        self.notify_status = "enabled" if self.config.get("notify_enabled") else "disabled"
         self.error_type = None
         self.storage_ready = True
         self.closed = False
@@ -75,6 +87,14 @@ class Advisor:
                     ):
                         raise ValueError("invalid_report")
                     validate_response(report["report"], report["evidence"])
+                notify = data.get("notify", deepcopy(NOTIFY_DEFAULT))
+                if (
+                    not isinstance(notify, dict)
+                    or not isinstance(notify.get("failures", {}), dict)
+                    or not isinstance(notify.get("last_report_id"), (str, type(None)))
+                ):
+                    raise ValueError("invalid_notify_state")
+                data["notify"] = {**deepcopy(NOTIFY_DEFAULT), **notify}
                 self.data = data
                 self.data["reports"] = self.data["reports"][-MAX_REPORTS:]
         except Exception:
@@ -95,7 +115,27 @@ class Advisor:
             if self.data["reports"]
             else None,
             "running": self.running is not None,
+            "notify_status": self.notify_status,
         }
+
+    def latest(self):
+        return self.data["reports"][-1] if self.data["reports"] else None
+
+    def latest_attributes(self):
+        report = self.latest()
+        return latest_attributes(report) if report else {}
+
+    def report_summary(self, report_id=None):
+        """Rendered text plus allowlisted fields; evidence values are never included."""
+        if report_id:
+            report = next((r for r in self.data["reports"] if r["id"] == report_id), None)
+            if report is None:
+                raise ServiceValidationError("Unknown or deleted advisor report ID")
+        else:
+            report = self.latest()
+            if report is None:
+                raise ServiceValidationError("No advisor report has been retained yet")
+        return summarise(report)
 
     def report_list(self, report_id=None):
         if report_id:
@@ -210,18 +250,22 @@ class Advisor:
             self.data["reports"] = (self.data["reports"] + [report])[-MAX_REPORTS:]
             await self.persist()
             self.changed("ready")
+            self.journal(report)
+            await self.notify_report(report)
             return deepcopy(report)
         except asyncio.CancelledError:
             self.changed("cancelled")
             raise
         except TimeoutError as err:
             self.changed("timeout")
+            await self.notify_failure(task, "timeout")
             raise HomeAssistantError("Heating Advisor timed out; no automatic retry") from err
         except (ValueError, TypeError) as err:
             self.error_type = (
                 err.code if isinstance(err, ReportValidationError) else "invalid_payload"
             )
             self.changed("invalid_response")
+            await self.notify_failure(task, "invalid_response")
             raise HomeAssistantError(
                 f"Heating Advisor rejected invalid evidence or response ({self.error_type})"
             ) from err
@@ -235,6 +279,7 @@ class Advisor:
             )
             if self.storage_ready:
                 self.changed("provider_failed")
+                await self.notify_failure(task, "provider_failed")
             raise HomeAssistantError(
                 f"Heating Advisor failed ({self.error_type}); heating observation continues"
             ) from err
@@ -242,6 +287,90 @@ class Advisor:
             self.running = None
             if not self.closed:
                 self.heating.async_set_updated_data(self.heating.data)
+
+    def journal(self, report):
+        journal = getattr(self.heating, "journal", None)
+        if journal is None:
+            return
+        try:
+            journal.record(
+                "advisor_report",
+                scope="system",
+                origin="advisor",
+                data={
+                    k: v
+                    for k, v in latest_attributes(report).items()
+                    if k in ("report_id", "task", "profile_name", "finding_count")
+                },
+            )
+        except Exception:  # noqa: BLE001 - journal failures never affect the advisor
+            LOGGER.warning("Heating Advisor could not journal report %s", report["id"])
+
+    def notify_wanted(self, event):
+        return (
+            self.config.get("notify_enabled")
+            and event in EVENTS
+            and event in self.config.get("notify_on", ["report_ready"])
+        )
+
+    async def notify_report(self, report):
+        try:
+            await self._notify_report(report)
+        except Exception as err:  # noqa: BLE001 - notifications never affect run()
+            self.notify_status = "error"
+            LOGGER.warning("Heating Advisor notification error: %s", type(err).__name__)
+
+    async def notify_failure(self, task, status):
+        try:
+            await self._notify_failure(task, status)
+        except Exception as err:  # noqa: BLE001 - notifications never affect run()
+            self.notify_status = "error"
+            LOGGER.warning("Heating Advisor notification error: %s", type(err).__name__)
+
+    async def _notify_report(self, report):
+        if not self.notify_wanted("report_ready"):
+            return
+        if self.data["notify"].get("last_report_id") == report["id"]:
+            self.notify_status = "skipped_duplicate"
+            return
+        # Record before delivery so a crash mid-send cannot repeat the notification.
+        self.data["notify"]["last_report_id"] = report["id"]
+        await self.persist_notify_state()
+        title, message = report_message(report, self.config.get("notify_include_summary", False))
+        await self.send(title, message, f"{self.entry.entry_id}_advisor_report")
+
+    async def _notify_failure(self, task, status):
+        event = FAILURE_EVENTS.get(status)
+        if not event or not self.notify_wanted(event):
+            return
+        day = dt_util.as_local(dt_util.utcnow()).date().isoformat()
+        failures = self.data["notify"].setdefault("failures", {})
+        if failures.get(task, {}).get("day") == day:
+            self.notify_status = "skipped_duplicate"
+            return
+        failures[task] = {"status": status, "day": day}
+        await self.persist_notify_state()
+        title, message = failure_message(task, status, self.error_type)
+        await self.send(title, message, f"{self.entry.entry_id}_advisor_failure")
+
+    async def persist_notify_state(self):
+        if not self.storage_ready:
+            return
+        try:
+            await self.backend.async_save(deepcopy(self.data))
+        except Exception:  # noqa: BLE001 - dedupe state is best effort
+            LOGGER.warning("Heating Advisor could not save notification state")
+
+    async def send(self, title, message, notification_id):
+        try:
+            await deliver(
+                self.hass, self.config.get("notify_targets", []), title, message, notification_id
+            )
+        except Exception as err:  # noqa: BLE001 - delivery never affects run() or heating
+            self.notify_status = "delivery_failed"
+            LOGGER.warning("Heating Advisor notification delivery failed: %s", type(err).__name__)
+        else:
+            self.notify_status = "sent"
 
     @callback
     def start(self):

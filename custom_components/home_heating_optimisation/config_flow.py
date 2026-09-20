@@ -10,6 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .advisor.evidence import TASKS
+from .advisor.notify import EVENTS as NOTIFY_EVENTS
 from .advisor.profiles import profile_info
 from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, NAME, SYSTEM_SOURCES, effective_config
@@ -811,6 +812,13 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 for t in ("daily_summary", "weekly_review")
             ):
                 errors["base"] = "missing_ai_profile"
+            elif user_input.get("notify_enabled") and not user_input.get("notify_on"):
+                errors["base"] = "missing_notify_event"
+            elif any(
+                not str(t).startswith("notify.") or len(str(t)) <= len("notify.")
+                for t in user_input.get("notify_targets", [])
+            ):
+                errors["base"] = "invalid_notify_target"
             else:
                 return self.async_create_entry(
                     title=NAME, data={**self.current, "advisor": user_input}
@@ -822,6 +830,8 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             "schedule_hour": 9,
             "max_calls_per_day": 4,
             "timeout_seconds": 120,
+            "notify_enabled": False,
+            "notify_include_summary": False,
         }
         schema = {
             vol.Optional(k, default=old.get(k, default)): bool
@@ -839,6 +849,31 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                     ("max_calls_per_day", 1, 12),
                     ("timeout_seconds", 30, 300),
                 )
+            }
+        )
+        notify_services = sorted(
+            f"notify.{name}" for name in self.hass.services.async_services_for_domain("notify")
+        )
+        # Keep previously chosen targets selectable even if their service is absent now.
+        notify_services = sorted(set(notify_services) | set(old.get("notify_targets", [])))
+        schema.update(
+            {
+                vol.Optional(
+                    "notify_targets", default=list(old.get("notify_targets", []))
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=notify_services, multiple=True, custom_value=True
+                    )
+                ),
+                vol.Optional(
+                    "notify_on", default=list(old.get("notify_on", ["report_ready"]))
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(NOTIFY_EVENTS),
+                        multiple=True,
+                        translation_key="advisor_notify_on",
+                    )
+                ),
             }
         )
         return self.async_show_form(
