@@ -39,6 +39,7 @@ from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
     "analytics_enabled": False,
+    "journal_enabled": True,
     "history_state_policy": "recorded_state",
     "analysis_window_days": 7,
     "update_interval_minutes": 15,
@@ -47,6 +48,7 @@ ANALYTICS_DEFAULTS = {
 }
 ANALYTICS_VALIDATORS = {
     "analytics_enabled": bool,
+    "journal_enabled": bool,
     "history_state_policy": selector.SelectSelector(
         selector.SelectSelectorConfig(
             options=[

@@ -22,6 +22,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.controls = None
         self.analytics = None
         self.advisor = None
+        self.journal = None
         self.survey = {"status": "not_configured", "rooms": {}, "bindings": {}, "warnings": []}
         self.config = effective_config(entry)
         self.telemetry = Telemetry(hass, self.config.get("mqtt_sources", []))

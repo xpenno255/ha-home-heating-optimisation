@@ -1,5 +1,7 @@
 """Consolidated comfort and boiler control, observations and optional advice."""
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -11,10 +13,12 @@ from .analytics.coordinator import AnalyticsCoordinator
 from .const import DOMAIN
 from .control.runtime import Controls
 from .coordinator import HeatingCoordinator
+from .journal.coordinator import Journal
 from .observations import watched_entities
 from .services import async_register_services
 from .source_identity import async_register_source_identity
 
+LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [
     Platform.SENSOR,
@@ -39,6 +43,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator.controls = Controls(hass, entry, coordinator)
     coordinator.controls.wire_config()
     entry.async_on_unload(coordinator.controls.stop)
+    coordinator.journal = Journal(hass, entry, coordinator)
+    try:
+        await coordinator.journal.initialise()
+    except Exception:  # noqa: BLE001
+        # The journal is optional evidence; a storage fault must not block heating control.
+        coordinator.journal.store.status = "storage_read_only"
+        LOGGER.exception("Heating journal unavailable; control continues without it")
+    entry.async_on_unload(coordinator.journal.stop)
     coordinator.sources = watched_entities(coordinator.config)
     await coordinator.telemetry.start()
     entry.async_on_unload(coordinator.telemetry.stop)

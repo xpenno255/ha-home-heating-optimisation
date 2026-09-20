@@ -18,6 +18,45 @@ record_adjustment:
       selector:
         text:
 get_report:
+get_journal:
+  fields:
+    kinds:
+      selector:
+        select:
+          multiple: true
+          options:
+            - decision
+            - command_requested
+            - command_sent
+            - command_result
+            - readback
+            - manual_override
+            - schedule_change
+            - mode_change
+            - handover
+            - rollback
+            - adjustment_note
+            - gateway
+            - energy
+            - recommendation
+            - trial
+            - advisor_report
+            - advisor_followup
+            - migration
+    room_id:
+      selector:
+        text:
+    hours:
+      default: 24
+      selector:
+        number:
+          min: 0
+          max: 720
+          unit_of_measurement: h
+    include_private:
+      default: false
+      selector:
+        boolean:
 get_house_model:
 reload_house_model:
 run_review:

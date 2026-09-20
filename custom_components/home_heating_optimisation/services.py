@@ -9,6 +9,7 @@ from homeassistant.util import dt as dt_util
 from .advisor.evidence import TASKS
 from .analytics.const import MAX_ADJUSTMENTS
 from .const import DOMAIN
+from .journal.const import KINDS, QUERY_DEFAULT_HOURS, QUERY_MAX_EVENTS, QUERY_MAX_HOURS
 
 
 @callback
@@ -52,10 +53,47 @@ def async_register_services(hass):
                 "room_id": room,
             }
         )
+        journal = getattr(heating(), "journal", None)
+        if journal is not None:
+            # Mirror into the event journal; the note text stays under a private key.
+            journal.record(
+                "adjustment_note",
+                room_id=room,
+                scope=room or "system",
+                origin="user",
+                data={
+                    "adjustment_kind": call.data["kind"],
+                    "private_note": note,
+                    "outcome": "reported",
+                },
+            )
         coordinator.capture()
         await coordinator.refresh()
         if coordinator.store.status != "ready":
             raise HomeAssistantError("Adjustment is held in memory but could not be saved")
+
+    async def get_journal(call):
+        journal = getattr(heating(), "journal", None)
+        if journal is None or not journal.enabled:
+            return {"events": [], "count": 0, "truncated": False, "status": "disabled"}
+        kinds = call.data.get("kinds") or None
+        room = call.data.get("room_id")
+        since = dt_util.utcnow().timestamp() - call.data["hours"] * 3600
+        events = journal.export(
+            include_private=call.data["include_private"],
+            kinds=kinds,
+            room_id=room,
+            since=since,
+        )
+        truncated = len(events) > QUERY_MAX_EVENTS
+        if truncated:
+            events = events[-QUERY_MAX_EVENTS:]
+        return {
+            "events": events,
+            "count": len(events),
+            "truncated": truncated,
+            "status": journal.status,
+        }
 
     async def report(call):
         coordinator = analytics()
@@ -97,6 +135,22 @@ def async_register_services(hass):
     )
     hass.services.async_register(
         DOMAIN, "get_report", report, schema=vol.Schema({}), supports_response=SupportsResponse.ONLY
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_journal",
+        get_journal,
+        schema=vol.Schema(
+            {
+                vol.Optional("kinds"): vol.All(cv.ensure_list, [vol.In(KINDS)]),
+                vol.Optional("room_id"): cv.string,
+                vol.Optional("hours", default=QUERY_DEFAULT_HOURS): vol.All(
+                    vol.Coerce(float), vol.Range(min=0, max=QUERY_MAX_HOURS)
+                ),
+                vol.Optional("include_private", default=False): cv.boolean,
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
     )
 
     async def run_review(call):

@@ -16,6 +16,9 @@ async def async_get_config_entry_diagnostics(hass, entry):
         "analytics": entry.runtime_data.analytics.quality()
         if entry.runtime_data.analytics
         else {"enabled": False},
+        "journal": entry.runtime_data.journal.summary()
+        if entry.runtime_data.journal
+        else {"status": "disabled"},
         "operation": "control_configured"
         if entry.runtime_data.controls.config
         else "observation_only",

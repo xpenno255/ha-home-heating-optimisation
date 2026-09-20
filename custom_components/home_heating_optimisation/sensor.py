@@ -30,6 +30,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.extend(create_sensors(coordinator.analytics, entry))
     entities.append(AdvisorSensor(coordinator, entry))
     entities.append(HouseModelSensor(coordinator, entry))
+    entities.append(JournalStatusSensor(coordinator, entry))
     from .control.entities import sensors
 
     entities.extend(sensors(coordinator.controls))
@@ -104,3 +105,26 @@ class AdvisorSensor(HeatingEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         return self.coordinator.advisor.quality()
+
+
+class JournalStatusSensor(HeatingEntity, SensorEntity):
+    """Journal health and counts only; event content stays in private storage."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["ready", "storage_read_only", "save_failed", "disabled"]
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "journal_status")
+
+    @property
+    def native_value(self):
+        journal = self.coordinator.journal
+        return journal.status if journal else "disabled"
+
+    @property
+    def extra_state_attributes(self):
+        journal = self.coordinator.journal
+        if journal is None or not journal.enabled:
+            return {"event_count": 0, "oldest_at": None, "newest_at": None, "counts_by_kind": {}}
+        return journal.attributes()

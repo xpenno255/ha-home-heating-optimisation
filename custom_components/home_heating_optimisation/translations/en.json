@@ -42,12 +42,14 @@
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
-          "history_state_policy": "Historical state coverage"
+          "history_state_policy": "Historical state coverage",
+          "journal_enabled": "Enable intervention journal"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
           "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
-          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy."
+          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy.",
+          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics."
         }
       },
       "survey_rooms": {
@@ -113,12 +115,14 @@
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
-          "history_state_policy": "Historical state coverage"
+          "history_state_policy": "Historical state coverage",
+          "journal_enabled": "Enable intervention journal"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
           "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
-          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy."
+          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy.",
+          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics."
         }
       },
       "survey_rooms": {
@@ -368,6 +372,15 @@
       },
       "advisor": {
         "name": "Advisor status"
+      },
+      "journal_status": {
+        "name": "Intervention journal status",
+        "state": {
+          "ready": "Ready",
+          "storage_read_only": "Storage read-only",
+          "save_failed": "Save failed",
+          "disabled": "Disabled"
+        }
       }
     },
     "binary_sensor": {
@@ -453,6 +466,28 @@
     "rollback_controls": {
       "name": "Restore legacy controllers",
       "description": "Stop consolidated writes and re-enable the retained legacy controllers."
+    },
+    "get_journal": {
+      "name": "Get intervention journal",
+      "description": "Return recent journal events: controller decisions, commands, readbacks, manual changes, mode changes, handovers and notes. Private note text is omitted unless requested.",
+      "fields": {
+        "kinds": {
+          "name": "Kinds",
+          "description": "Optional event kinds to include; all kinds when omitted."
+        },
+        "room_id": {
+          "name": "Room ID",
+          "description": "Optional stable room ID to filter events."
+        },
+        "hours": {
+          "name": "Hours",
+          "description": "Look-back window in hours (default 24, maximum 720)."
+        },
+        "include_private": {
+          "name": "Include private notes",
+          "description": "Include household note text. Off by default."
+        }
+      }
     }
   },
   "issues": {
