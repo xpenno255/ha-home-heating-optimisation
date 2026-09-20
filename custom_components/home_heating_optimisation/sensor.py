@@ -34,6 +34,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
     from .control.entities import sensors
 
     entities.extend(sensors(coordinator.controls))
+    if coordinator.gateways is not None:
+        from .gateway.entities import sensors as gateway_sensors
+
+        entities.extend(gateway_sensors(coordinator.gateways))
     async_add_entities(entities)
 
 

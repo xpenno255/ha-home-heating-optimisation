@@ -8,6 +8,7 @@ This checklist is the remaining physical validation for the consolidated control
 - Review `home_heating_optimisation.get_control_report`: ownership must be ready, with no legacy conflicts or room activation blockers. Check that old controller entries remain disabled. Inspect other automatic writers and any externally scheduled calls; static automation inspection cannot discover every external client.
 - Check incoming temperature/demand reports are fresh. Compare shadow predictions during real demand and a schedule transition, including the selected separate room sensors and unavailable-sensor fallback. Resolve unexplained differences before activating.
 - Identify consumers of the old OT/BFC output entities. Dashboards and automations do not automatically migrate to the new output IDs.
+- Configure gateway monitoring (Options > Gateway monitoring) with each RAMSES gateway's online entity, then confirm every `sensor.home_heating_optimisation_gateway_<slug>` reads `online` before the trial. A repairs issue or notification from it during the trial describes the online entity only; check the gateway link and ramses_cc diagnostics rather than assuming a command failed (see [RF schedule recovery](radio-schedule-recovery.md)).
 
 ## Trial
 

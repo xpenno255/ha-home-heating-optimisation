@@ -79,7 +79,8 @@
         "menu_options": {
           "mapping": "Room, system and survey mappings",
           "control": "Comfort and boiler control",
-          "advisor": "Heating Advisor"
+          "advisor": "Heating Advisor",
+          "gateways": "Gateway monitoring"
         }
       },
       "room": {
@@ -256,6 +257,20 @@
           "max_calls_per_day": "Maximum calls in any 24 hours",
           "timeout_seconds": "Maximum seconds per call"
         }
+      },
+      "gateways": {
+        "title": "Gateway monitoring",
+        "description": "Select the online/availability entities of your RAMSES gateways (for example ramses_cc *_online binary sensors). A gateway is reported unresponsive when its entity has not been on for the threshold. Leave the list empty to disable monitoring. Alerts describe the entity state only; they never claim a radio command failed.",
+        "data": {
+          "gateway_entities": "Gateway online entities",
+          "gateway_offline_minutes": "Unresponsive threshold (minutes)",
+          "gateway_notify": "Send persistent notifications",
+          "gateway_events": "Fire gateway events"
+        },
+        "data_description": {
+          "gateway_offline_minutes": "Off, unavailable, unknown or missing for at least this long raises one repairs issue per gateway. Startup waits at least this long (minimum two minutes) before alerting.",
+          "gateway_events": "Fires home_heating_optimisation_gateway_unresponsive and home_heating_optimisation_gateway_recovered for your own notify automations."
+        }
       }
     },
     "error": {
@@ -381,6 +396,15 @@
           "save_failed": "Save failed",
           "disabled": "Disabled"
         }
+      },
+      "gateway": {
+        "name": "Gateway {gateway}",
+        "state": {
+          "online": "Online",
+          "unresponsive": "Unresponsive",
+          "unconfigured": "Not configured",
+          "unavailable": "Unavailable"
+        }
       }
     },
     "binary_sensor": {
@@ -494,6 +518,10 @@
     "dhw_charge_problem": {
       "title": "Hot-water charge needs review",
       "description": "The boiler controller reported: {reason}. Check the cylinder and heating system."
+    },
+    "gateway_unresponsive": {
+      "title": "Heating gateway not responding",
+      "description": "{entity} has not reported online since {since} ({minutes} minutes). Room and boiler control continue and radio schedules use the cached copy. This is the online entity's state only; it does not show that a radio command failed. Check the gateway's power, USB or network link and the ramses_cc diagnostics."
     }
   }
 }

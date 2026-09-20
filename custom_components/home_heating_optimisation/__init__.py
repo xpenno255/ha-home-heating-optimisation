@@ -13,6 +13,7 @@ from .analytics.coordinator import AnalyticsCoordinator
 from .const import DOMAIN
 from .control.runtime import Controls
 from .coordinator import HeatingCoordinator
+from .gateway.monitor import GatewayMonitor
 from .journal.coordinator import Journal
 from .observations import watched_entities
 from .services import async_register_services
@@ -64,6 +65,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
         await coordinator.analytics.initialise()
     coordinator.advisor = Advisor(hass, entry, coordinator)
     await coordinator.advisor.initialise()
+    coordinator.gateways = GatewayMonitor(hass, entry, coordinator)
+    entry.async_on_unload(coordinator.gateways.stop)
     # Remove only our entities for explicitly removed rooms, retaining all others' IDs.
     registry = er.async_get(hass)
     valid_rooms = {room["id"] for room in coordinator.config["rooms"]}
@@ -80,6 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()
+    coordinator.gateways.start()
     entry.async_on_unload(entry.add_update_listener(async_reload))
     return True
 
