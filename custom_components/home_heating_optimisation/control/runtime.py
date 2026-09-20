@@ -305,7 +305,17 @@ class Controls:
                 for rid, c in self.rooms.items()
                 if c.data
             },
+            "gateways": self.gateway_report(),
         }
+
+    def gateway_report(self):
+        monitor = getattr(self.heating, "gateways", None)
+        if monitor is None:
+            return {"status": "unconfigured"}
+        try:
+            return monitor.report()
+        except Exception as err:  # noqa: BLE001 - monitoring must not break the report
+            return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 
     async def stop(self):
         self.closed = True

@@ -35,6 +35,12 @@ from .control.configuration import (
     validate_control_rooms,
 )
 from .control.store import ControlStore
+from .gateway.monitor import (
+    DEFAULT_OFFLINE_MINUTES,
+    MAX_OFFLINE_MINUTES,
+    MIN_OFFLINE_MINUTES,
+    gateway_config,
+)
 from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
@@ -113,7 +119,7 @@ class MappingFlow:
                     "rooms": [],
                     **{
                         k: self.current[k]
-                        for k in ("advisor", "control", "mqtt_sources")
+                        for k in ("advisor", "control", "mqtt_sources", "gateways")
                         if k in self.current
                     },
                 }
@@ -310,7 +316,9 @@ class HeatingConfigFlow(MappingFlow, ConfigFlow, domain=DOMAIN):
 class HeatingOptionsFlow(MappingFlow, OptionsFlow):
     async def async_step_init(self, user_input=None):
         self.current = effective_config(self.config_entry)
-        return self.async_show_menu(step_id="init", menu_options=["mapping", "control", "advisor"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["mapping", "control", "advisor", "gateways"]
+        )
 
     async def async_step_mapping(self, user_input=None):
         self.current = effective_config(self.config_entry)
@@ -740,6 +748,40 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             return await save()
         async with lock:
             return await save()
+
+    async def async_step_gateways(self, user_input=None):
+        """Optional gateway online entities; an empty selection disables monitoring."""
+        self.current = effective_config(self.config_entry)
+        old = gateway_config(self.current)
+        errors = {}
+        if user_input is not None:
+            entities = list(user_input.get("gateway_entities") or [])
+            if len(entities) != len(set(entities)) or self.invalid_sources(entities):
+                errors["base"] = "invalid_source"
+            else:
+                gateways = gateway_config(
+                    {"gateways": {**user_input, "gateway_entities": entities}}
+                )
+                return self.async_create_entry(
+                    title=NAME, data={**self.current, "gateways": gateways}
+                )
+        schema = {
+            # A suggested value, not a default: an omitted or empty list disables monitoring.
+            vol.Optional(
+                "gateway_entities", description={"suggested_value": old["gateway_entities"]}
+            ): entity_selector(("binary_sensor",), multiple=True),
+            vol.Optional(
+                "gateway_offline_minutes",
+                default=old.get("gateway_offline_minutes", DEFAULT_OFFLINE_MINUTES),
+            ): vol.All(
+                vol.Coerce(int), vol.Range(min=MIN_OFFLINE_MINUTES, max=MAX_OFFLINE_MINUTES)
+            ),
+            vol.Optional("gateway_notify", default=old["gateway_notify"]): bool,
+            vol.Optional("gateway_events", default=old["gateway_events"]): bool,
+        }
+        return self.async_show_form(
+            step_id="gateways", errors=errors, data_schema=vol.Schema(schema)
+        )
 
     async def async_step_advisor(self, user_input=None):
         self.current = effective_config(self.config_entry)
