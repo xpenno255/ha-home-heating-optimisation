@@ -42,12 +42,14 @@
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
-          "history_state_policy": "Historical state coverage"
+          "history_state_policy": "Historical state coverage",
+          "journal_enabled": "Enable intervention journal"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
           "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
-          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy."
+          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy.",
+          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics."
         }
       },
       "survey_rooms": {
@@ -77,7 +79,9 @@
         "menu_options": {
           "mapping": "Room, system and survey mappings",
           "control": "Comfort and boiler control",
-          "advisor": "Heating Advisor"
+          "advisor": "Heating Advisor",
+          "gateways": "Gateway monitoring",
+          "energy": "Metered energy evidence"
         }
       },
       "room": {
@@ -113,12 +117,14 @@
           "comfort_tolerance": "Comfort band tolerance (\u00b0C)",
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
-          "history_state_policy": "Historical state coverage"
+          "history_state_policy": "Historical state coverage",
+          "journal_enabled": "Enable intervention journal"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
           "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
-          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy."
+          "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy.",
+          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics."
         }
       },
       "survey_rooms": {
@@ -240,17 +246,57 @@
       },
       "advisor": {
         "title": "Heating Advisor",
-        "description": "Select dedicated AI Task profiles from Extended OpenAI or Anthropic with tools disabled. Provider, model and effort are inherited from each profile. Enabling a review sends selected room names, thermal survey details and heating metrics to that provider. Journal note text and raw history are excluded. Schedules are optional; weekly reviews run on Monday. Reports provide advice only.",
+        "description": "Select dedicated AI Task profiles from Extended OpenAI or Anthropic with tools disabled. Provider, model and effort are inherited from each profile. Enabling a review sends selected room names, thermal survey details and heating metrics to that provider. Journal note text and raw history are excluded. Schedules are optional; weekly reviews run on Monday. Reports provide advice only. Notifications are off by default; when enabled they carry the report ID, task, profile and counts only. Choose 'Include finding titles' to add titles; evidence and report text are never sent.",
         "data": {
           "enabled": "Enable Heating Advisor",
           "daily_summary": "Daily summary AI profile",
           "weekly_review": "Weekly review AI profile",
           "investigation": "Investigation AI profile",
+          "followup": "Follow-up question AI profile",
           "schedule_daily_summary": "Schedule daily summaries",
           "schedule_weekly_review": "Schedule weekly reviews",
           "schedule_hour": "Review hour (Home Assistant local time)",
           "max_calls_per_day": "Maximum calls in any 24 hours",
-          "timeout_seconds": "Maximum seconds per call"
+          "timeout_seconds": "Maximum seconds per call",
+          "notify_enabled": "Send notifications",
+          "notify_targets": "Notification services",
+          "notify_on": "Notify on",
+          "notify_include_summary": "Include finding titles in notifications"
+        },
+        "data_description": {
+          "notify_targets": "Leave empty to use a Home Assistant persistent notification.",
+          "notify_on": "Failure notifications are sent at most once per task per day; a report is never announced twice."
+        }
+      },
+      "gateways": {
+        "title": "Gateway monitoring",
+        "description": "Select the online/availability entities of your RAMSES gateways (for example ramses_cc *_online binary sensors). A gateway is reported unresponsive when its entity has not been on for the threshold. Leave the list empty to disable monitoring. Alerts describe the entity state only; they never claim a radio command failed.",
+        "data": {
+          "gateway_entities": "Gateway online entities",
+          "gateway_offline_minutes": "Unresponsive threshold (minutes)",
+          "gateway_notify": "Send persistent notifications",
+          "gateway_events": "Fire gateway events"
+        },
+        "data_description": {
+          "gateway_offline_minutes": "Off, unavailable, unknown or missing for at least this long raises one repairs issue per gateway. Startup waits at least this long (minimum two minutes) before alerting.",
+          "gateway_events": "Fires home_heating_optimisation_gateway_unresponsive and home_heating_optimisation_gateway_recovered for your own notify automations."
+        }
+      },
+      "energy": {
+        "title": "Metered energy evidence",
+        "description": "Select up to three cumulative meter sensors. Fuel input is boiler gas or electricity; delivered heat requires a separate heat meter. Readings are stored privately as five-minute buckets with weather and hot-water context for up to 90 days. Leave every meter empty to disable. Metering alone does not prove savings.",
+        "data": {
+          "calorific_value_mj_m3": "Gas calorific value (MJ/m\u00b3) for m\u00b3 meters",
+          "volume_correction": "Gas volume correction factor for m\u00b3 meters",
+          "meter_1_entity": "Meter 1 sensor (energy or gas counter)",
+          "meter_1_kind": "Meter 1 measures",
+          "meter_1_unit": "Meter 1 unit override",
+          "meter_2_entity": "Meter 2 sensor (energy or gas counter)",
+          "meter_2_kind": "Meter 2 measures",
+          "meter_2_unit": "Meter 2 unit override",
+          "meter_3_entity": "Meter 3 sensor (energy or gas counter)",
+          "meter_3_kind": "Meter 3 measures",
+          "meter_3_unit": "Meter 3 unit override"
         }
       }
     },
@@ -275,7 +321,11 @@
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
       "advisor_needs_analytics": "Enable historical analytics before the advisor.",
       "invalid_ai_profile": "Select an available Extended OpenAI or Anthropic AI Task profile with Home Assistant APIs and all tools disabled. For Extended OpenAI, set Functions to [].",
-      "missing_ai_profile": "Select a profile for each scheduled task."
+      "missing_ai_profile": "Select a profile for each scheduled task.",
+      "invalid_energy_meter": "Choose sensor entities with the energy or gas device class that currently have a state.",
+      "duplicate_energy_meter": "Each meter sensor can only be selected once.",
+      "missing_notify_event": "Select at least one notification event, or turn notifications off.",
+      "invalid_notify_target": "Notification services must be notify.* services."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
@@ -368,6 +418,39 @@
       },
       "advisor": {
         "name": "Advisor status"
+      },
+      "journal_status": {
+        "name": "Intervention journal status",
+        "state": {
+          "ready": "Ready",
+          "storage_read_only": "Storage read-only",
+          "save_failed": "Save failed",
+          "disabled": "Disabled"
+        }
+      },
+      "gateway": {
+        "name": "Gateway {gateway}",
+        "state": {
+          "online": "Online",
+          "unresponsive": "Unresponsive",
+          "unconfigured": "Not configured",
+          "unavailable": "Unavailable"
+        }
+      },
+      "energy_status": {
+        "name": "Energy evidence status"
+      },
+      "energy_daily_kwh": {
+        "name": "Energy {meter} today"
+      },
+      "advisor_latest_report": {
+        "name": "Advisor latest report"
+      },
+      "recommendations": {
+        "name": "Recommendations"
+      },
+      "trials": {
+        "name": "Trials"
       }
     },
     "binary_sensor": {
@@ -426,11 +509,39 @@
     },
     "get_advisor_reports": {
       "name": "Get advisor reports",
-      "description": "Return retained reports and profile settings. Supply a report ID to include its full evidence.",
+      "description": "Return retained reports, their follow-up conversation IDs and turn counts, and profile settings. Supply a report ID to include its full evidence.",
       "fields": {
         "report_id": {
           "name": "Report ID",
           "description": "Optional ID from the report list."
+        }
+      }
+    },
+    "ask_advisor_followup": {
+      "name": "Ask advisor follow-up",
+      "description": "Ask one bounded question about a retained report using its saved evidence and the follow-up AI profile. Counts against the daily call limit. Returns the validated answer and conversation ID.",
+      "fields": {
+        "report_id": {
+          "name": "Report ID",
+          "description": "ID of the retained report to ask about."
+        },
+        "question": {
+          "name": "Question",
+          "description": "Follow-up question sent to the selected provider (1-600 characters)."
+        },
+        "conversation_id": {
+          "name": "Conversation ID",
+          "description": "Optional ID to continue an existing conversation about the same report (8 turns maximum)."
+        }
+      }
+    },
+    "get_advisor_followup": {
+      "name": "Get advisor follow-up conversation",
+      "description": "Return the full question and answer text of one retained follow-up conversation.",
+      "fields": {
+        "conversation_id": {
+          "name": "Conversation ID",
+          "description": "ID from a follow-up response or the report list."
         }
       }
     },
@@ -453,12 +564,348 @@
     "rollback_controls": {
       "name": "Restore legacy controllers",
       "description": "Stop consolidated writes and re-enable the retained legacy controllers."
+    },
+    "get_journal": {
+      "name": "Get intervention journal",
+      "description": "Return recent journal events: controller decisions, commands, readbacks, manual changes, mode changes, handovers and notes. Private note text is omitted unless requested.",
+      "fields": {
+        "kinds": {
+          "name": "Kinds",
+          "description": "Optional event kinds to include; all kinds when omitted."
+        },
+        "room_id": {
+          "name": "Room ID",
+          "description": "Optional stable room ID to filter events."
+        },
+        "hours": {
+          "name": "Hours",
+          "description": "Look-back window in hours (default 24, maximum 720)."
+        },
+        "include_private": {
+          "name": "Include private notes",
+          "description": "Include household note text. Off by default."
+        }
+      }
+    },
+    "preview_history_import": {
+      "name": "Preview history import",
+      "description": "Read the Radiator Analytics store without changing it: checksum, zones, proposed room mapping and importable, archived and skipped counts.",
+      "fields": {
+        "mapping": {
+          "name": "Mapping",
+          "description": "Optional legacy zone to room ID overrides as a mapping of legacy climate entity ID to room ID, for example climate.study to study; a null value skips a zone."
+        }
+      }
+    },
+    "import_history": {
+      "name": "Import history",
+      "description": "Copy compatible Radiator Analytics observations and adjustment notes into private storage as a separate imported era. Current analysis is unchanged and the legacy file is never modified.",
+      "fields": {
+        "mapping": {
+          "name": "Mapping",
+          "description": "Optional legacy zone to room ID overrides as a mapping of legacy climate entity ID to room ID, for example climate.study to study; a null value skips a zone."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true after reviewing the preview."
+        }
+      }
+    },
+    "retire_legacy_store": {
+      "name": "Retire legacy history store",
+      "description": "Rename the Radiator Analytics store file after its content has been imported. Requires the legacy integration to be removed and an import matching the file checksum.",
+      "fields": {
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true to rename the file."
+        }
+      }
+    },
+    "get_energy_report": {
+      "name": "Get energy report",
+      "description": "Return metered-energy days with coverage, weather degree hours, hot-water share, configuration eras and comparability limits. No savings figure is produced when context is insufficient.",
+      "fields": {
+        "days": {
+          "name": "Days",
+          "description": "Number of recent local days to include (1 to 90)."
+        }
+      }
+    },
+    "get_advisor_report_summary": {
+      "name": "Get advisor report summary",
+      "description": "Return a readable summary of one retained report (latest by default): task, time, profile, evidence references, coverage, findings, limitations and follow-up actions, plus rendered Markdown text.",
+      "fields": {
+        "report_id": {
+          "name": "Report ID",
+          "description": "Optional ID from the report list; omit for the latest report."
+        }
+      }
+    },
+    "decide_recommendation": {
+      "name": "Decide recommendation",
+      "description": "Record your decision on an advisor recommendation. Accepting changes no heating setting; make any change yourself through the controls and then mark it applied.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID from get_recommendations."
+        },
+        "decision": {
+          "name": "Decision",
+          "description": "accepted, rejected or deferred."
+        },
+        "note": {
+          "name": "Private note",
+          "description": "Optional reason (up to 500 characters), kept in private storage."
+        },
+        "defer_until": {
+          "name": "Defer until",
+          "description": "Optional date/time to revisit a deferred recommendation."
+        }
+      }
+    },
+    "mark_recommendation_applied": {
+      "name": "Mark recommendation applied",
+      "description": "Record that you carried out an accepted recommendation. Optionally link the journal event of the intervention. This action changes no heating setting.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID of an accepted recommendation."
+        },
+        "journal_event_id": {
+          "name": "Journal event ID",
+          "description": "Optional ID of the journal event recording the actual intervention."
+        },
+        "intervention_note": {
+          "name": "Private intervention note",
+          "description": "Optional description of what you changed (up to 500 characters), kept private."
+        }
+      }
+    },
+    "evaluate_recommendation": {
+      "name": "Evaluate recommendation",
+      "description": "Record the follow-up outcome for an applied recommendation over an evaluation window. Outcomes are associations, not causal proof.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID of an applied recommendation."
+        },
+        "outcome": {
+          "name": "Outcome",
+          "description": "improved, no_change, worse, inconclusive or failed."
+        },
+        "window_start": {
+          "name": "Window start",
+          "description": "Start of the evaluation window."
+        },
+        "window_end": {
+          "name": "Window end",
+          "description": "End of the evaluation window."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Optional evaluation note (up to 500 characters)."
+        }
+      }
+    },
+    "get_recommendations": {
+      "name": "Get recommendations",
+      "description": "Return retained recommendations with decision history and follow-up eligibility. Private notes are excluded unless requested.",
+      "fields": {
+        "state": {
+          "name": "State",
+          "description": "Optional state filter."
+        },
+        "report_id": {
+          "name": "Report ID",
+          "description": "Optional advisor report ID filter."
+        },
+        "room_id": {
+          "name": "Room ID",
+          "description": "Optional room ID filter."
+        },
+        "include_private": {
+          "name": "Include private notes",
+          "description": "Include private decision and intervention notes in the response."
+        }
+      }
+    },
+    "propose_trial": {
+      "name": "Propose trial",
+      "description": "Create a reviewable proposal to change one allowlisted tunable for a bounded time. Nothing changes until the owner approves and starts it. DHW protection, modes and enable switches are excluded.",
+      "fields": {
+        "scope": {
+          "name": "Scope",
+          "description": "Controlled room ID or 'boiler'."
+        },
+        "parameter": {
+          "name": "Parameter",
+          "description": "Room: trust_k, cap_up, cap_down. Boiler: design_flow, design_outdoor, return_ceiling."
+        },
+        "target_value": {
+          "name": "Target value",
+          "description": "Value to trial; must be within bounds and within max_step of the current value."
+        },
+        "rationale": {
+          "name": "Rationale",
+          "description": "Private reason for the trial (not exposed by default)."
+        },
+        "duration_hours": {
+          "name": "Duration (hours)",
+          "description": "1 to 168 hours; the trial rolls back automatically when this elapses."
+        },
+        "comfort_floor_c": {
+          "name": "Comfort floor (\u00b0C)",
+          "description": "Optional measured room air temperature below which the trial stops and rolls back."
+        },
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "Optional retained recommendation this trial follows."
+        }
+      }
+    },
+    "approve_trial": {
+      "name": "Approve trial",
+      "description": "Explicitly approve a proposal. Requires ownership ready, the scope already active/auto with no activation blocker, and no other trial running.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Trial to approve."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true."
+        }
+      }
+    },
+    "reject_trial": {
+      "name": "Reject trial",
+      "description": "Reject a proposed or approved trial without applying anything.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Trial to reject."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Private note."
+        }
+      }
+    },
+    "start_trial": {
+      "name": "Start trial",
+      "description": "Apply an approved trial value through the owning controller's tunable. No mode, DHW or actuator command is issued.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Approved trial to start."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true."
+        }
+      }
+    },
+    "stop_trial": {
+      "name": "Stop trial",
+      "description": "Roll a running trial back to its baseline now and verify the readback.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Running trial to stop."
+        },
+        "complete": {
+          "name": "Mark completed",
+          "description": "Record the stop as a planned completion rather than an early stop."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Private note."
+        }
+      }
+    },
+    "evaluate_trial": {
+      "name": "Evaluate trial",
+      "description": "Record an outcome for an ended trial alongside its predeclared criteria and measured metrics. Outcomes are associations, not causal proof.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Ended trial to evaluate."
+        },
+        "outcome": {
+          "name": "Outcome",
+          "description": "improved, no_change, worse or inconclusive."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Private evaluation note."
+        }
+      }
+    },
+    "get_trials": {
+      "name": "Get trials",
+      "description": "Return retained trials with criteria, history and evaluations. Private rationale and notes are excluded unless requested.",
+      "fields": {
+        "state": {
+          "name": "State",
+          "description": "Optional state filter."
+        },
+        "scope": {
+          "name": "Scope",
+          "description": "Optional room ID or 'boiler' filter."
+        },
+        "include_private": {
+          "name": "Include private notes",
+          "description": "Include private rationale and notes in the response."
+        }
+      }
+    },
+    "preview_identity_migration": {
+      "name": "Preview identity migration",
+      "description": "List legacy output entities, whether each can keep its ID and history under consolidated control, collisions and known dashboard/automation consumers. Changes nothing."
+    },
+    "migrate_identities": {
+      "name": "Migrate legacy output identities",
+      "description": "After handover, move compatible legacy output entity IDs (with their history and statistics) onto the consolidated entities. Incompatible metrics are archived under their legacy IDs. Requires confirm: true.",
+      "fields": {
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true. The integration reloads after a transfer; controls stay in shadow."
+        }
+      }
+    },
+    "rollback_identity_migration": {
+      "name": "Roll back identity migration",
+      "description": "Rename consolidated entities back and recreate the journalled legacy registry entries."
     }
   },
   "issues": {
     "dhw_charge_problem": {
       "title": "Hot-water charge needs review",
       "description": "The boiler controller reported: {reason}. Check the cylinder and heating system."
+    },
+    "gateway_unresponsive": {
+      "title": "Heating gateway not responding",
+      "description": "{entity} has not reported online since {since} ({minutes} minutes). Room and boiler control continue and radio schedules use the cached copy. This is the online entity's state only; it does not show that a radio command failed. Check the gateway's power, USB or network link and the ramses_cc diagnostics."
+    },
+    "trial_rollback_failed": {
+      "title": "Heating trial rollback could not be verified",
+      "description": "The {scope} trial of {parameter} could not restore its baseline value {value}. Check the control number entity and set it back manually, then stop the trial."
+    }
+  },
+  "selector": {
+    "energy_meter_kind": {
+      "options": {
+        "fuel_input": "Fuel or electricity input",
+        "delivered_heat": "Delivered heat (heat meter)",
+        "electricity": "Electricity (pumps, controls or heat pump)"
+      }
+    },
+    "advisor_notify_on": {
+      "options": {
+        "report_ready": "Report ready",
+        "report_failed": "Report failed (timeout or invalid response)",
+        "provider_failed": "Provider call failed"
+      }
     }
   }
 }

@@ -140,6 +140,26 @@ ZONE_SETPOINT_MAX = 35.0
 READBACK_TIMEOUT = timedelta(minutes=3)
 STARTUP_SETTLE_TIME = timedelta(minutes=2)
 READBACK_MAX_AGE = timedelta(minutes=5)
+# Same-temperature renewals stay unverified because RAMSES exposes no inbound
+# packet provenance to Home Assistant (docs/renewal-acknowledgement-2026-09-20.md).
+# These hints describe what the status means and what to check.  They must not
+# claim the command was lost or that a valve did or did not move.
+READBACK_HINTS = {
+    "matching_readback_unverified": (
+        "The thermostat reports the requested target, but no setpoint or mode "
+        "transition distinguishes this command from earlier state; an expiry-only "
+        "change is not accepted for a same-temperature renewal. This is an "
+        "unverified acknowledgement, not evidence of a lost command. If the zone "
+        "keeps reporting the target and the override expiry, no action is needed."
+    ),
+    "readback_timed_out": (
+        "No qualifying primary thermostat report arrived within 3 minutes of the "
+        "service call. Unconfirmed is not the same as undelivered: Home Assistant "
+        "attributes cannot show whether a report came from the controller. Check "
+        "the RAMSES gateway status and the zone's reported mode and expiry; HHO "
+        "keeps its normal bounded retry and does not clear manual holds."
+    ),
+}
 COMFORT_MODEL_VERSION = "steady_state_ot_v2"
 
 
@@ -169,10 +189,18 @@ class OTCoordinatorData:
     readback_at: datetime | None = None
     readback_status: str = "not_attempted"
     readback_timed_out: bool = False
+    # Actionable explanation for an unconfirmed outcome.  It never asserts
+    # failed delivery or valve actuation; see docs/command-confirmation.md.
+    readback_hint: str = ""
     write_status: str = "not_attempted"
     # Target
     schedule_setpoint: float | None = None
     schedule_source: str = "none"
+    # Optional RF schedule download diagnostics (never on the control path).
+    schedule_fetch_status: str = "not_attempted"
+    schedule_fetch_failure_class: str | None = None
+    schedule_fetch_attempts: int = 0
+    schedule_next_retry_at: datetime | None = None
     model_version: str = COMFORT_MODEL_VERSION
     target_ot: float | None = None
     adaptive_shift: float = 0.0
@@ -229,10 +257,15 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         config=None,
         state_reader=None,
         write_guard=None,
+        journal=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._entry = entry
         self._store = store
+        self.journal = journal
+        # Stable HHO room id (the control config key); Controls sets it after construction.
+        self.journal_room_id: str | None = None
+        self._journal_last: dict[str, Any] = {}
         self._config: dict[str, Any] = (
             dict(config) if config is not None else {**entry.data, **entry.options}
         )
@@ -1054,8 +1087,68 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             and self._same_command_state(current, pre_send)
         )
 
+    # ------------------------------------------------------------------
+    # Journal hooks: optional, defensive, never affect control
+    # ------------------------------------------------------------------
+
+    def _journal(self, kind: str, data: dict[str, Any], origin: str = "controller") -> None:
+        journal = self.journal
+        if journal is None:
+            return
+        try:
+            room_id = self.journal_room_id or self.room_id
+            journal.record(
+                kind,
+                room_id=room_id,
+                scope=room_id,
+                origin=origin,
+                data=data,
+                provenance={
+                    "model_version": COMFORT_MODEL_VERSION,
+                    "schedule_source": self._schedule_source,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("OT %s: journal hook failed", self.room_name, exc_info=True)
+
+    def _journal_changed(self, key: str, value: Any) -> bool:
+        """True the first time and whenever the tracked value differs from last record."""
+        marker = object()
+        if self._journal_last.get(key, marker) == value:
+            return False
+        self._journal_last[key] = value
+        return True
+
+    def _journal_readback(self) -> None:
+        if self._sent_at is None:
+            return  # nothing has been commanded yet; there is no readback to journal
+        state = (
+            self._readback_status,
+            self._readback_timed_out,
+            self._pending_target,
+            self._confirmed_target,
+        )
+        if self._journal_changed("readback", state):
+            self._journal(
+                "readback",
+                {
+                    "status": self._readback_status,
+                    "timed_out": self._readback_timed_out,
+                    "pending_target": self._pending_target,
+                    "confirmed_target": self._confirmed_target,
+                    "sent_target": self._sent_target,
+                    "readback_at": self._readback_at,
+                    "outcome": self._readback_status,
+                },
+                origin="source",
+            )
+
     def _refresh_readback(self, now: datetime) -> None:
         """Advance only a command already accepted by the HA service layer."""
+        self._advance_readback(now)
+        self._journal_readback()
+
+    def _advance_readback(self, now: datetime) -> None:
         if self._sent_at is None:
             return
         boundary = self._service_completed_at or self._sent_at
@@ -1124,21 +1217,42 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.readback_at = self._readback_at
         d.readback_status = self._readback_status
         d.readback_timed_out = self._readback_timed_out
+        d.readback_hint = self.readback_hint(self._readback_status, self._readback_timed_out)
         d.write_status = self.write_status
+
+    @staticmethod
+    def readback_hint(status: str, timed_out: bool) -> str:
+        """Explain an unconfirmed readback without asserting delivery or actuation."""
+        if status == "confirmed":
+            return ""
+        hint = READBACK_HINTS.get(status, "")
+        if timed_out and status != "readback_reverted":
+            timeout_hint = READBACK_HINTS["readback_timed_out"]
+            hint = f"{hint} {timeout_hint}" if hint else timeout_hint
+        return hint
 
     async def _perform(self, decision: Decision) -> bool:
         """Carry out the decision's action. Returns False when the service call did not
         complete, so the caller must not record the action as done."""
         if decision.action is Action.NONE:
             return True
+        command = {
+            "action": decision.action.value,
+            "setpoint": decision.setpoint,
+            "reason": decision.reason,
+            "service": "ramses_cc.set_zone_mode",
+        }
+        self._journal("command_requested", {**command, "outcome": "requested"})
         if not self._write_guard():
             self.write_status = "blocked"
+            self._journal("command_result", {**command, "outcome": "blocked"})
             return False
         primary = self._config.get(CONF_PRIMARY_CLIMATE)
         if not primary:
             _LOGGER.warning(
                 "OT %s: no primary climate entity; cannot %s", self.room_name, decision.action.value
             )
+            self._journal("command_result", {**command, "outcome": "no_actuator"})
             return False
         if decision.action is Action.WRITE:
             # Bounds are applied in the policy's _write so memory matches the wire; this
@@ -1150,6 +1264,10 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     "OT %s: refusing to write invalid setpoint %s",
                     self.room_name,
                     decision.setpoint,
+                )
+                self._journal(
+                    "command_result",
+                    {**command, "outcome": "refused_out_of_bounds", "bounds": [zone_min, zone_max]},
                 )
                 return False
             data = {
@@ -1171,7 +1289,13 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         except Exception as exc:  # noqa: BLE001
             self.write_status = "failed"
             _LOGGER.warning("OT %s: ramses_cc.set_zone_mode failed: %s", self.room_name, exc)
+            self._journal(
+                "command_result",
+                {**command, "outcome": "service_failed", "error": type(exc).__name__},
+            )
             return False
+        self._journal("command_sent", {**command, "outcome": "service_succeeded"})
+        self._journal("command_result", {**command, "outcome": "service_succeeded"})
         _LOGGER.info(
             "OT %s: %s %s (%s)",
             self.room_name,
@@ -1242,6 +1366,24 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         await self._maybe_fetch_ramses_schedule(self._config.get(CONF_PRIMARY_CLIMATE))
         zone = self._schedule()
         d.schedule_source = self._schedule_source
+        if self._journal_changed("schedule", (zone.schedule_setpoint, self._schedule_source)):
+            self._journal(
+                "schedule_change",
+                {
+                    "schedule_setpoint": zone.schedule_setpoint,
+                    "previous_schedule_setpoint": zone.previous_schedule_setpoint,
+                    "schedule_source": self._schedule_source,
+                    "next_switchpoint_at": zone.next_switchpoint_at,
+                    "next_switchpoint_setpoint": zone.next_switchpoint_setpoint,
+                    "outcome": "observed",
+                },
+                origin="source",
+            )
+        fetch = self._schedule_fetcher.snapshot()
+        d.schedule_fetch_status = fetch["status"]
+        d.schedule_fetch_failure_class = fetch["failure_class"]
+        d.schedule_fetch_attempts = fetch["attempts"]
+        d.schedule_next_retry_at = fetch["next_retry_at"]
         d.schedule_setpoint, d.zone_setpoint = zone.schedule_setpoint, zone.current_setpoint
         d.next_switchpoint_at, d.next_switchpoint_setpoint = (
             zone.next_switchpoint_at,
@@ -1366,6 +1508,27 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.would_write = (
             decision.would_write if decision.state is State.SHADOW else decision.setpoint
         )
+        if self._journal_changed("decision", (d.state, d.action, d.reason, d.would_write)):
+            self._journal(
+                "decision",
+                {
+                    "state": d.state,
+                    "action": d.action,
+                    "reason": d.reason,
+                    "target": d.would_write,
+                    "mode": self._mode,
+                    "bounds": list(self._zone_setpoint_bounds()),
+                    "schedule_setpoint": zone.schedule_setpoint,
+                    "air_setpoint": d.air_setpoint,
+                    "target_ot": d.target_ot,
+                    "air_temp": d.air_temp,
+                    "outcome": "shadow"
+                    if d.state == State.SHADOW.value
+                    else "command_requested"
+                    if d.action != Action.NONE.value
+                    else "no_action",
+                },
+            )
         d.window_override_active = decision.state is State.WINDOW_OPEN or (
             decision.state is State.SHADOW and inputs.any_window_open
         )
@@ -1458,6 +1621,21 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     window_closed_at=memory.window_closed_at,
                 )
                 d.reason = decision.reason + " (service call failed; will retry)"
+        manual = (memory.manual_detected_at, memory.manual_release_at, memory.manual_setpoint)
+        if self._journal_changed("manual", manual):
+            self._journal(
+                "manual_override",
+                {
+                    "status": "set" if memory.manual_detected_at is not None else "cleared",
+                    "detected_at": memory.manual_detected_at,
+                    "release_at": memory.manual_release_at,
+                    "held_setpoint": memory.manual_setpoint,
+                    "zone_setpoint": zone.current_setpoint,
+                    "schedule_setpoint": zone.schedule_setpoint,
+                    "outcome": "holding" if memory.manual_detected_at is not None else "released",
+                },
+                origin="user" if memory.manual_detected_at is not None else "controller",
+            )
         self._save_memory(memory)
         d.last_written_setpoint = memory.last_written_setpoint
         d.last_write = memory.last_written_at

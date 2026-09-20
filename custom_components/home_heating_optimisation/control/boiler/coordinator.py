@@ -93,6 +93,9 @@ from .core.efficiency import (
     STATUS_RETURN_UNAVAILABLE,
     estimate,
 )
+from .core.efficiency import (
+    MODEL_VERSION as EFFICIENCY_MODEL_VERSION,
+)
 from .core.model import (
     CurveParams,
     DhwCyclingState,
@@ -195,11 +198,14 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         config=None,
         state_reader=None,
         write_guard=None,
+        journal=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._entry = entry
         self._store = store
         self._hub = hub
+        self.journal = journal
+        self._journal_last: dict[str, Any] = {}
         # v0.2.1 review fix 9: options are the complete authoritative config once
         # set (the options flow always submits every field, absent ones cleared);
         # merging `{**entry.data, **entry.options}` let a key removed in options
@@ -421,6 +427,32 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
     # Action
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Journal hooks: optional, defensive, never affect control
+    # ------------------------------------------------------------------
+
+    def _journal(self, kind: str, data: dict[str, Any], origin: str = "controller") -> None:
+        journal = self.journal
+        if journal is None:
+            return
+        try:
+            journal.record(
+                kind,
+                scope="boiler",
+                origin=origin,
+                data=data,
+                provenance={"model_version": EFFICIENCY_MODEL_VERSION},
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("BFC: journal hook failed", exc_info=True)
+
+    def _journal_changed(self, key: str, value: Any) -> bool:
+        marker = object()
+        if self._journal_last.get(key, marker) == value:
+            return False
+        self._journal_last[key] = value
+        return True
+
     async def _perform(self, decision: Decision) -> bool:
         """Perform the write. Returns True only on a confirmed successful call.
 
@@ -433,10 +465,20 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         """
         if decision.action is not Action.WRITE or decision.setpoint is None:
             return False
+        command = {
+            "action": decision.action.value,
+            "setpoint": decision.setpoint,
+            "reason": decision.reason,
+            "target_changed": decision.target_changed,
+            "service": "number.set_value",
+        }
+        self._journal("command_requested", {**command, "outcome": "requested"})
         if not self._write_guard():
+            self._journal("command_result", {**command, "outcome": "blocked"})
             return False
         entity_id = self._config.get(CONF_FLOW_SETPOINT_ENTITY)
         if not entity_id:
+            self._journal("command_result", {**command, "outcome": "no_actuator"})
             return False
         value = decision.setpoint  # already constrained; memory uses this same value
         st = self._state(entity_id)
@@ -450,9 +492,15 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
             )
             _LOGGER.debug("BFC: wrote %.1f to %s (%s)", value, entity_id, decision.reason)
+            self._journal("command_sent", {**command, "outcome": "service_succeeded"})
+            self._journal("command_result", {**command, "outcome": "service_succeeded"})
             return True
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("BFC: number.set_value failed for %s", entity_id)
+            self._journal(
+                "command_result",
+                {**command, "outcome": "service_failed", "error": type(exc).__name__},
+            )
             return False
 
     # ------------------------------------------------------------------
@@ -802,6 +850,19 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 self._manual_hold_params(),
             )
         d.manual_hold_active = manual
+        if self._journal_changed("manual", manual):
+            self._journal(
+                "manual_override",
+                {
+                    "status": "set" if manual else "cleared",
+                    "live_setpoint": d.live_setpoint,
+                    "last_written_setpoint": memory.last_written_setpoint,
+                    "dial_value": d.max_flow,
+                    "detected_at": self._manual_hold_state.detected_at,
+                    "outcome": "holding" if manual else "released",
+                },
+                origin="user" if manual else "controller",
+            )
         mode = decide_mode(
             ModeInputs(
                 self._enabled, bool(d.heat_demand and d.heat_demand > 0), d.dhw_active, manual
@@ -935,6 +996,21 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         if d.dhw_active and (target is None or target < d.cylinder_target + 5):
             d.dhw_status = "insufficient_flow_headroom"
         d.dhw_issue_raised = d.dhw_active and d.dhw_status != "charging"
+        if self._journal_changed("dhw", (d.dhw_active, d.dhw_status)):
+            self._journal(
+                "decision",
+                {
+                    "subject": "dhw",
+                    "dhw_active": d.dhw_active,
+                    "dhw_status": d.dhw_status,
+                    "dhw_source": d.dhw_source,
+                    "cylinder_temp": d.cylinder_temp,
+                    "cylinder_target": d.cylinder_target,
+                    "target": target,
+                    "outcome": d.dhw_status if d.dhw_active else "dhw_inactive",
+                },
+                origin="source",
+            )
         if self._enabled and self._override == OVERRIDE_AUTO:
             if d.dhw_issue_raised:
                 ir.async_create_issue(
@@ -993,6 +1069,27 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             decision.setpoint if decision.action is Action.WRITE else decision.would_write
         )
         d.would_write = decision.would_write
+        if self._journal_changed("decision", (d.mode, d.action, d.reason, d.would_write)):
+            self._journal(
+                "decision",
+                {
+                    "mode": d.mode,
+                    "action": d.action,
+                    "reason": d.reason,
+                    "target": d.would_write,
+                    "override": self._override,
+                    "bounds": list(constraints[:2]) if constraints else None,
+                    "curve": d.curve,
+                    "outdoor_temp": d.outdoor_temp,
+                    "heat_demand": d.heat_demand,
+                    "dhw_active": d.dhw_active,
+                    "outcome": "shadow"
+                    if self._override != OVERRIDE_AUTO
+                    else "command_requested"
+                    if d.action != Action.NONE.value
+                    else "no_action",
+                },
+            )
         if self._override == "shadow" and operating and decision.would_write is not None:
             control.virtual_memory = replace(
                 policy_memory,
@@ -1025,6 +1122,20 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._hub.last_written_at,
         )
         d.last_target_change = self._hub.last_target_change
+        if d.write_status != "not_attempted" and self._journal_changed(
+            "readback", (d.write_status, d.confirmed_setpoint)
+        ):
+            self._journal(
+                "readback",
+                {
+                    "status": d.write_status,
+                    "live_setpoint": d.live_setpoint,
+                    "confirmed_setpoint": d.confirmed_setpoint,
+                    "last_written_setpoint": d.last_written_setpoint,
+                    "outcome": d.write_status,
+                },
+                origin="source",
+            )
         if wrote_ok or (
             self._override == "shadow" and operating and decision.would_write is not None
         ):

@@ -10,6 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .advisor.evidence import TASKS
+from .advisor.notify import EVENTS as NOTIFY_EVENTS
 from .advisor.profiles import profile_info
 from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, NAME, SYSTEM_SOURCES, effective_config
@@ -35,10 +36,24 @@ from .control.configuration import (
     validate_control_rooms,
 )
 from .control.store import ControlStore
+from .energy.const import (
+    DEFAULT_CALORIFIC_MJ_M3,
+    DEFAULT_VOLUME_CORRECTION,
+    KINDS,
+    MAX_METERS,
+    UNITS,
+)
+from .gateway.monitor import (
+    DEFAULT_OFFLINE_MINUTES,
+    MAX_OFFLINE_MINUTES,
+    MIN_OFFLINE_MINUTES,
+    gateway_config,
+)
 from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
     "analytics_enabled": False,
+    "journal_enabled": True,
     "history_state_policy": "recorded_state",
     "analysis_window_days": 7,
     "update_interval_minutes": 15,
@@ -47,6 +62,7 @@ ANALYTICS_DEFAULTS = {
 }
 ANALYTICS_VALIDATORS = {
     "analytics_enabled": bool,
+    "journal_enabled": bool,
     "history_state_policy": selector.SelectSelector(
         selector.SelectSelectorConfig(
             options=[
@@ -113,7 +129,7 @@ class MappingFlow:
                     "rooms": [],
                     **{
                         k: self.current[k]
-                        for k in ("advisor", "control", "mqtt_sources")
+                        for k in ("advisor", "control", "mqtt_sources", "gateways", "energy")
                         if k in self.current
                     },
                 }
@@ -310,7 +326,10 @@ class HeatingConfigFlow(MappingFlow, ConfigFlow, domain=DOMAIN):
 class HeatingOptionsFlow(MappingFlow, OptionsFlow):
     async def async_step_init(self, user_input=None):
         self.current = effective_config(self.config_entry)
-        return self.async_show_menu(step_id="init", menu_options=["mapping", "control", "advisor"])
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["mapping", "control", "advisor", "gateways", "energy"],
+        )
 
     async def async_step_mapping(self, user_input=None):
         self.current = effective_config(self.config_entry)
@@ -741,6 +760,40 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         async with lock:
             return await save()
 
+    async def async_step_gateways(self, user_input=None):
+        """Optional gateway online entities; an empty selection disables monitoring."""
+        self.current = effective_config(self.config_entry)
+        old = gateway_config(self.current)
+        errors = {}
+        if user_input is not None:
+            entities = list(user_input.get("gateway_entities") or [])
+            if len(entities) != len(set(entities)) or self.invalid_sources(entities):
+                errors["base"] = "invalid_source"
+            else:
+                gateways = gateway_config(
+                    {"gateways": {**user_input, "gateway_entities": entities}}
+                )
+                return self.async_create_entry(
+                    title=NAME, data={**self.current, "gateways": gateways}
+                )
+        schema = {
+            # A suggested value, not a default: an omitted or empty list disables monitoring.
+            vol.Optional(
+                "gateway_entities", description={"suggested_value": old["gateway_entities"]}
+            ): entity_selector(("binary_sensor",), multiple=True),
+            vol.Optional(
+                "gateway_offline_minutes",
+                default=old.get("gateway_offline_minutes", DEFAULT_OFFLINE_MINUTES),
+            ): vol.All(
+                vol.Coerce(int), vol.Range(min=MIN_OFFLINE_MINUTES, max=MAX_OFFLINE_MINUTES)
+            ),
+            vol.Optional("gateway_notify", default=old["gateway_notify"]): bool,
+            vol.Optional("gateway_events", default=old["gateway_events"]): bool,
+        }
+        return self.async_show_form(
+            step_id="gateways", errors=errors, data_schema=vol.Schema(schema)
+        )
+
     async def async_step_advisor(self, user_input=None):
         self.current = effective_config(self.config_entry)
         old = self.current.get("advisor", {})
@@ -750,7 +803,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 errors["base"] = "advisor_needs_analytics"
             elif any(
                 profile_info(self.hass, user_input[t])["status"] != "ready"
-                for t in TASKS
+                for t in (*TASKS, "followup")
                 if user_input.get(t)
             ):
                 errors["base"] = "invalid_ai_profile"
@@ -759,6 +812,13 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 for t in ("daily_summary", "weekly_review")
             ):
                 errors["base"] = "missing_ai_profile"
+            elif user_input.get("notify_enabled") and not user_input.get("notify_on"):
+                errors["base"] = "missing_notify_event"
+            elif any(
+                not str(t).startswith("notify.") or len(str(t)) <= len("notify.")
+                for t in user_input.get("notify_targets", [])
+            ):
+                errors["base"] = "invalid_notify_target"
             else:
                 return self.async_create_entry(
                     title=NAME, data={**self.current, "advisor": user_input}
@@ -770,13 +830,17 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             "schedule_hour": 9,
             "max_calls_per_day": 4,
             "timeout_seconds": 120,
+            "notify_enabled": False,
+            "notify_include_summary": False,
         }
         schema = {
             vol.Optional(k, default=old.get(k, default)): bool
             for k, default in defaults.items()
             if isinstance(default, bool)
         }
-        schema.update({optional(t, old): entity_selector(("ai_task",)) for t in TASKS})
+        schema.update(
+            {optional(t, old): entity_selector(("ai_task",)) for t in (*TASKS, "followup")}
+        )
         schema.update(
             {
                 vol.Optional(k, default=old.get(k, defaults[k])): vol.All(
@@ -789,6 +853,96 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 )
             }
         )
+        notify_services = sorted(
+            f"notify.{name}" for name in self.hass.services.async_services_for_domain("notify")
+        )
+        # Keep previously chosen targets selectable even if their service is absent now.
+        notify_services = sorted(set(notify_services) | set(old.get("notify_targets", [])))
+        schema.update(
+            {
+                vol.Optional(
+                    "notify_targets", default=list(old.get("notify_targets", []))
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=notify_services, multiple=True, custom_value=True
+                    )
+                ),
+                vol.Optional(
+                    "notify_on", default=list(old.get("notify_on", ["report_ready"]))
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(NOTIFY_EVENTS),
+                        multiple=True,
+                        translation_key="advisor_notify_on",
+                    )
+                ),
+            }
+        )
         return self.async_show_form(
             step_id="advisor", errors=errors, data_schema=vol.Schema(schema)
         )
+
+    async def async_step_energy(self, user_input=None):
+        """Explicit meter selection; an empty form disables energy evidence."""
+        self.current = effective_config(self.config_entry)
+        old = self.current.get("energy") or {}
+        meters = old.get("meters") or []
+        errors = {}
+        if user_input is not None:
+            selected = []
+            for index in range(1, MAX_METERS + 1):
+                entity = user_input.get(f"meter_{index}_entity")
+                if not entity:
+                    continue
+                state = self.hass.states.get(entity)
+                if (
+                    not entity.startswith("sensor.")
+                    or state is None
+                    or state.attributes.get("device_class") not in ("energy", "gas")
+                ):
+                    errors["base"] = "invalid_energy_meter"
+                    break
+                selected.append(
+                    {
+                        "entity": entity,
+                        "kind": user_input.get(f"meter_{index}_kind", "fuel_input"),
+                        "unit": user_input.get(f"meter_{index}_unit") or None,
+                        "calorific_value_mj_m3": user_input["calorific_value_mj_m3"],
+                        "volume_correction": user_input["volume_correction"],
+                    }
+                )
+            if not errors and len({m["entity"] for m in selected}) != len(selected):
+                errors["base"] = "duplicate_energy_meter"
+            if not errors:
+                energy = {"meters": selected} if selected else {}
+                return self.async_create_entry(title=NAME, data={**self.current, "energy": energy})
+        schema = {}
+        for index in range(1, MAX_METERS + 1):
+            meter = meters[index - 1] if index <= len(meters) else {}
+            key = f"meter_{index}_entity"
+            schema[optional(key, {key: meter.get("entity")})] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["sensor"], device_class=["energy", "gas"])
+            )
+            schema[vol.Optional(f"meter_{index}_kind", default=meter.get("kind", "fuel_input"))] = (
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(KINDS), translation_key="energy_meter_kind"
+                    )
+                )
+            )
+            unit_key = f"meter_{index}_unit"
+            schema[optional(unit_key, {unit_key: meter.get("unit")})] = selector.SelectSelector(
+                selector.SelectSelectorConfig(options=list(UNITS))
+            )
+        first = meters[0] if meters else {}
+        schema.update(
+            dict(
+                (
+                    number_field(
+                        "calorific_value_mj_m3", first, DEFAULT_CALORIFIC_MJ_M3, 30.0, 50.0
+                    ),
+                    number_field("volume_correction", first, DEFAULT_VOLUME_CORRECTION, 0.9, 1.1),
+                )
+            )
+        )
+        return self.async_show_form(step_id="energy", errors=errors, data_schema=vol.Schema(schema))

@@ -120,6 +120,7 @@ class Controls:
             config=self.config["boiler"]["config"],
             state_reader=self.heating.telemetry.get,
             write_guard=lambda: self.can_write("boiler"),
+            journal=getattr(self.heating, "journal", None),
         )
         # Do not act while configuration and all entities are still restoring.
         self.boiler.override = "shadow"
@@ -133,8 +134,10 @@ class Controls:
                 config=spec["config"],
                 state_reader=self.heating.telemetry.get,
                 write_guard=lambda rid=room_id: self.can_write(rid),
+                journal=getattr(self.heating, "journal", None),
             )
             c.mode = "shadow"
+            c.journal_room_id = room_id
             c.enabled = spec.get("enabled", True)
             c.occupancy_enabled = spec.get("occupancy_enabled", True)
             await c.async_load_geometry()
@@ -278,11 +281,34 @@ class Controls:
             self.settings.set("modes", modes)
             await self.settings.async_save()
             c = self.boiler if scope == "boiler" else self.rooms[scope]
+            previous = c.override if scope == "boiler" else c.mode
             if scope == "boiler":
                 c.override = mode
             else:
                 c.mode = mode
+            self.journal_event(
+                "mode_change",
+                scope,
+                {"from": previous, "to": mode, "outcome": "applied"},
+                origin="user",
+            )
             await c.async_refresh()
+
+    def journal_event(self, kind, scope, data, origin="controller"):
+        """Record a control-level event; failures are logged and never propagate."""
+        journal = getattr(self.heating, "journal", None)
+        if journal is None:
+            return None
+        try:
+            return journal.record(
+                kind,
+                room_id=None if scope in ("boiler", "system") else scope,
+                scope=scope,
+                origin=origin,
+                data=data,
+            )
+        except Exception:  # noqa: BLE001
+            return None
 
     def report(self):
         return {
@@ -305,7 +331,17 @@ class Controls:
                 for rid, c in self.rooms.items()
                 if c.data
             },
+            "gateways": self.gateway_report(),
         }
+
+    def gateway_report(self):
+        monitor = getattr(self.heating, "gateways", None)
+        if monitor is None:
+            return {"status": "unconfigured"}
+        try:
+            return monitor.report()
+        except Exception as err:  # noqa: BLE001 - monitoring must not break the report
+            return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 
     async def stop(self):
         self.closed = True

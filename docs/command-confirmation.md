@@ -17,6 +17,12 @@ A `follow_schedule` release is stricter: the primary thermostat must freshly rep
 
 Acknowledgement state is intentionally held only in runtime memory. Shadow-mode decisions never create a command acknowledgement, and a reload starts with no pending or confirmed command even if persistent policy memory contains a previous setpoint. That prevents old thermostat state from being presented as an acknowledgement for a command this process did not send.
 
+## Same-temperature renewals
+
+A renewal that re-sends the current target only moves the override expiry. RAMSES projects HHO's own transmitted `W 2349` into the same zone state that inbound controller reports update, and `ramses_cc` refreshes the entity on every packet, so neither the `until` attribute nor `last_reported` can show whether the report came from the controller (see the [20 September 2026 investigation](renewal-acknowledgement-2026-09-20.md), conclusion: inbound provenance is only available through an unsupported, opt-in packet-event surface). Such renewals therefore remain `matching_readback_unverified` and set `readback_timed_out` after three minutes. This is deliberate and is not evidence that the command was lost or that a valve did or did not move.
+
+To make that visible without over-claiming, the room decision sensor and `get_control_report` expose `readback_hint`. It is filled for `matching_readback_unverified` and whenever `readback_timed_out` is true (except `readback_reverted`, whose meaning is already narrow), empty for `confirmed` and while a readback is simply pending. The text explains what the status does and does not mean and what to check (gateway status, the zone's reported mode and expiry); it never states failed delivery or physical actuation. Manual-override detection, off handling and the single bounded reversion retry are unchanged by the hint. If a future `ramses_cc` release exposes inbound provenance for the zone mode, HHO will feature-detect it and keep the current rules whenever the fields are absent.
+
 ## Restart reconciliation
 
 Room ownership, manual-hold and window-timer memory stays unchanged until both the room and hub have finished restoring. A room with saved ownership or manual-hold history then waits at least two minutes and requires a fresh primary thermostat report timestamped at or after that settling deadline, plus a readable schedule reference. This avoids treating the initial partial/cached RAMSES setpoint as a manual adjustment and erasing HHO's previous ownership.

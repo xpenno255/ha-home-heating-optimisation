@@ -204,6 +204,10 @@ class AnalyticsCoordinator(DataUpdateCoordinator):
             "observation_count": len(self.store.observations),
             "history_truncated": self.store.truncated,
             "adjustment_count": len(self.store.adjustments),
+            "imported_era_count": len(self.store.imported_eras),
+            "imported_observation_count": sum(
+                len(e["observations"]) for e in self.store.imported_eras
+            ),
             "decision_context_count": len(self.store.decision_context),
             "history_state_policy": self.config.get("history_state_policy", "recorded_state"),
         }

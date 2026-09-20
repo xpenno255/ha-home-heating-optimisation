@@ -18,6 +18,54 @@ record_adjustment:
       selector:
         text:
 get_report:
+get_journal:
+  fields:
+    kinds:
+      selector:
+        select:
+          multiple: true
+          options:
+            - decision
+            - command_requested
+            - command_sent
+            - command_result
+            - readback
+            - manual_override
+            - schedule_change
+            - mode_change
+            - handover
+            - rollback
+            - adjustment_note
+            - gateway
+            - energy
+            - recommendation
+            - trial
+            - advisor_report
+            - advisor_followup
+            - migration
+    room_id:
+      selector:
+        text:
+    hours:
+      default: 24
+      selector:
+        number:
+          min: 0
+          max: 720
+          unit_of_measurement: h
+    include_private:
+      default: false
+      selector:
+        boolean:
+get_energy_report:
+  fields:
+    days:
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 90
+          mode: box
 get_house_model:
 reload_house_model:
 run_review:
@@ -39,9 +87,282 @@ get_advisor_reports:
     report_id:
       selector:
         text:
+get_advisor_report_summary:
+  fields:
+    report_id:
+      selector:
+        text:
+ask_advisor_followup:
+  fields:
+    report_id:
+      required: true
+      selector:
+        text:
+    question:
+      required: true
+      selector:
+        text:
+          multiline: true
+    conversation_id:
+      selector:
+        text:
+get_advisor_followup:
+  fields:
+    conversation_id:
+      required: true
+      selector:
+        text:
+
+decide_recommendation:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    decision:
+      required: true
+      selector:
+        select:
+          options:
+            - accepted
+            - rejected
+            - deferred
+    note:
+      selector:
+        text:
+          multiline: true
+    defer_until:
+      selector:
+        datetime:
+mark_recommendation_applied:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    journal_event_id:
+      selector:
+        text:
+    intervention_note:
+      selector:
+        text:
+          multiline: true
+evaluate_recommendation:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    outcome:
+      required: true
+      selector:
+        select:
+          options:
+            - improved
+            - no_change
+            - worse
+            - inconclusive
+            - failed
+    window_start:
+      required: true
+      selector:
+        datetime:
+    window_end:
+      required: true
+      selector:
+        datetime:
+    note:
+      selector:
+        text:
+          multiline: true
+get_recommendations:
+  fields:
+    state:
+      selector:
+        select:
+          options:
+            - proposed
+            - accepted
+            - rejected
+            - deferred
+            - applied
+            - evaluated
+    report_id:
+      selector:
+        text:
+    room_id:
+      selector:
+        text:
+    include_private:
+      default: false
+      selector:
+        boolean:
 
 preview_control_import:
 import_controls:
 get_control_report:
 handover_controls:
 rollback_controls:
+
+preview_history_import:
+  fields:
+    mapping:
+      selector:
+        object:
+import_history:
+  fields:
+    mapping:
+      selector:
+        object:
+    confirm:
+      default: false
+      selector:
+        boolean:
+retire_legacy_store:
+  fields:
+    confirm:
+      default: false
+      selector:
+        boolean:
+propose_trial:
+  fields:
+    scope:
+      required: true
+      selector:
+        text:
+    parameter:
+      required: true
+      selector:
+        select:
+          options:
+            - trust_k
+            - cap_up
+            - cap_down
+            - design_flow
+            - design_outdoor
+            - return_ceiling
+    target_value:
+      required: true
+      selector:
+        number:
+          min: -15
+          max: 80
+          step: 0.05
+          mode: box
+    rationale:
+      required: true
+      selector:
+        text:
+          multiline: true
+    duration_hours:
+      required: true
+      default: 24
+      selector:
+        number:
+          min: 1
+          max: 168
+          mode: box
+    comfort_floor_c:
+      selector:
+        number:
+          min: 5
+          max: 25
+          step: 0.5
+          mode: box
+    recommendation_id:
+      selector:
+        text:
+approve_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    confirm:
+      required: true
+      default: false
+      selector:
+        boolean:
+reject_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    note:
+      selector:
+        text:
+start_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    confirm:
+      required: true
+      default: false
+      selector:
+        boolean:
+stop_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    complete:
+      default: false
+      selector:
+        boolean:
+    note:
+      selector:
+        text:
+evaluate_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    outcome:
+      required: true
+      selector:
+        select:
+          options:
+            - improved
+            - no_change
+            - worse
+            - inconclusive
+    note:
+      selector:
+        text:
+          multiline: true
+get_trials:
+  fields:
+    state:
+      selector:
+        select:
+          options:
+            - proposed
+            - approved
+            - starting
+            - rejected
+            - running
+            - completed
+            - stopped
+            - rolled_back
+            - expired
+            - rollback_failed
+    scope:
+      selector:
+        text:
+    include_private:
+      default: false
+      selector:
+        boolean:
+preview_identity_migration:
+migrate_identities:
+  fields:
+    confirm:
+      required: true
+      selector:
+        boolean:
+rollback_identity_migration:

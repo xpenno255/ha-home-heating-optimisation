@@ -273,10 +273,30 @@ async def handover(controls):
             controls.settings.set("modes", {})
             controls.settings.set("disabled_legacy", disabled)
             await controls.settings.async_save()
-        except Exception:
+        except Exception as exc:
             controls.settings.set("ownership", "interrupted")
             await controls.settings.async_save()
+            controls.journal_event(
+                "handover",
+                "system",
+                {
+                    "outcome": "interrupted",
+                    "error": type(exc).__name__,
+                    "disabled_entry_count": len(disabled),
+                },
+                origin="service",
+            )
             raise
+        controls.journal_event(
+            "handover",
+            "system",
+            {
+                "outcome": "handover_complete_shadow",
+                "ownership": "ready",
+                "disabled_entry_count": len(disabled),
+            },
+            origin="service",
+        )
         return {"status": "handover_complete_shadow", "disabled_entries": disabled}
 
 
@@ -297,4 +317,14 @@ async def rollback(controls):
         controls.settings.set("ownership", "unclaimed")
         await controls.settings.async_save()
         controls.ready = True
+        controls.journal_event(
+            "rollback",
+            "system",
+            {
+                "outcome": "legacy_restored_consolidated_shadow",
+                "ownership": "unclaimed",
+                "restored_entry_count": len(controls.settings.get("disabled_legacy", [])),
+            },
+            origin="service",
+        )
         return {"status": "legacy_restored_consolidated_shadow"}

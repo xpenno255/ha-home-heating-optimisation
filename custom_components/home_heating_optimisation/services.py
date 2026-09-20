@@ -6,9 +6,14 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-from .advisor.evidence import TASKS
+from .advisor.evidence import MAX_QUESTION_CHARS, TASKS
+from .advisor.recommendations import DECISIONS, OUTCOMES, STATES
 from .analytics.const import MAX_ADJUSTMENTS
 from .const import DOMAIN
+from .journal.const import KINDS, QUERY_DEFAULT_HOURS, QUERY_MAX_EVENTS, QUERY_MAX_HOURS
+from .trials.const import MAX_DURATION_HOURS, MIN_DURATION_HOURS
+from .trials.const import OUTCOMES as TRIAL_OUTCOMES
+from .trials.const import STATES as TRIAL_STATES
 
 
 @callback
@@ -52,15 +57,68 @@ def async_register_services(hass):
                 "room_id": room,
             }
         )
+        journal = getattr(heating(), "journal", None)
+        if journal is not None:
+            # Mirror into the event journal; the note text stays under a private key.
+            journal.record(
+                "adjustment_note",
+                room_id=room,
+                scope=room or "system",
+                origin="user",
+                data={
+                    "adjustment_kind": call.data["kind"],
+                    "private_note": note,
+                    "outcome": "reported",
+                },
+            )
         coordinator.capture()
         await coordinator.refresh()
         if coordinator.store.status != "ready":
             raise HomeAssistantError("Adjustment is held in memory but could not be saved")
 
+    async def get_journal(call):
+        journal = getattr(heating(), "journal", None)
+        if journal is None or not journal.enabled:
+            return {"events": [], "count": 0, "truncated": False, "status": "disabled"}
+        kinds = call.data.get("kinds") or None
+        room = call.data.get("room_id")
+        since = dt_util.utcnow().timestamp() - call.data["hours"] * 3600
+        events = journal.export(
+            include_private=call.data["include_private"],
+            kinds=kinds,
+            room_id=room,
+            since=since,
+        )
+        truncated = len(events) > QUERY_MAX_EVENTS
+        if truncated:
+            events = events[-QUERY_MAX_EVENTS:]
+        return {
+            "events": events,
+            "count": len(events),
+            "truncated": truncated,
+            "status": journal.status,
+        }
+
     async def report(call):
         coordinator = analytics()
         await coordinator.refresh()
         return {**coordinator.report(), "house_model": heating().house_report()}
+
+    async def energy_report(call):
+        energy = heating().energy
+        if energy is None:
+            raise ServiceValidationError("Configure at least one energy meter first")
+        return energy.report(call.data["days"])
+
+    hass.services.async_register(
+        DOMAIN,
+        "get_energy_report",
+        energy_report,
+        schema=vol.Schema(
+            {vol.Optional("days", default=7): vol.All(vol.Coerce(int), vol.Range(min=1, max=90))}
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
 
     async def house_report(call):
         return heating().house_report()
@@ -98,12 +156,31 @@ def async_register_services(hass):
     hass.services.async_register(
         DOMAIN, "get_report", report, schema=vol.Schema({}), supports_response=SupportsResponse.ONLY
     )
+    hass.services.async_register(
+        DOMAIN,
+        "get_journal",
+        get_journal,
+        schema=vol.Schema(
+            {
+                vol.Optional("kinds"): vol.All(cv.ensure_list, [vol.In(KINDS)]),
+                vol.Optional("room_id"): cv.string,
+                vol.Optional("hours", default=QUERY_DEFAULT_HOURS): vol.All(
+                    vol.Coerce(float), vol.Range(min=0, max=QUERY_MAX_HOURS)
+                ),
+                vol.Optional("include_private", default=False): cv.boolean,
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
 
     async def run_review(call):
         return await heating().advisor.run(call.data["task"], call.data.get("question", ""))
 
     async def advisor_reports(call):
         return heating().advisor.report_list(call.data.get("report_id"))
+
+    async def advisor_report_summary(call):
+        return heating().advisor.report_summary(call.data.get("report_id"))
 
     hass.services.async_register(
         DOMAIN,
@@ -124,6 +201,267 @@ def async_register_services(hass):
         schema=vol.Schema({vol.Optional("report_id"): cv.string}),
         supports_response=SupportsResponse.ONLY,
     )
+    hass.services.async_register(
+        DOMAIN,
+        "get_advisor_report_summary",
+        advisor_report_summary,
+        schema=vol.Schema({vol.Optional("report_id"): cv.string}),
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    async def advisor_followup(call):
+        return await heating().advisor.followup(
+            call.data["report_id"], call.data["question"], call.data.get("conversation_id")
+        )
+
+    async def advisor_followup_conversation(call):
+        return heating().advisor.followup_conversation(call.data["conversation_id"])
+
+    hass.services.async_register(
+        DOMAIN,
+        "ask_advisor_followup",
+        advisor_followup,
+        schema=vol.Schema(
+            {
+                vol.Required("report_id"): cv.string,
+                vol.Required("question"): vol.All(
+                    cv.string, vol.Length(min=1, max=MAX_QUESTION_CHARS)
+                ),
+                vol.Optional("conversation_id"): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_advisor_followup",
+        advisor_followup_conversation,
+        schema=vol.Schema({vol.Required("conversation_id"): cv.string}),
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    def recommendations():
+        return heating().advisor.recommendations
+
+    async def decide(call):
+        return await recommendations().decide(
+            call.data["recommendation_id"],
+            call.data["decision"],
+            note=call.data.get("note"),
+            defer_until=call.data.get("defer_until"),
+        )
+
+    async def applied(call):
+        return await recommendations().mark_applied(
+            call.data["recommendation_id"],
+            journal_event_id=call.data.get("journal_event_id"),
+            intervention_note=call.data.get("intervention_note"),
+        )
+
+    async def evaluate(call):
+        return await recommendations().evaluate(
+            call.data["recommendation_id"],
+            call.data["outcome"],
+            call.data["window_start"],
+            call.data["window_end"],
+            note=call.data.get("note"),
+        )
+
+    async def list_recommendations(call):
+        return recommendations().report_list(
+            state=call.data.get("state"),
+            report_id=call.data.get("report_id"),
+            room_id=call.data.get("room_id"),
+            include_private=call.data["include_private"],
+        )
+
+    note = vol.All(cv.string, vol.Length(min=1, max=500))
+    hass.services.async_register(
+        DOMAIN,
+        "decide_recommendation",
+        decide,
+        schema=vol.Schema(
+            {
+                vol.Required("recommendation_id"): cv.string,
+                vol.Required("decision"): vol.In(DECISIONS),
+                vol.Optional("note"): note,
+                vol.Optional("defer_until"): cv.datetime,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "mark_recommendation_applied",
+        applied,
+        schema=vol.Schema(
+            {
+                vol.Required("recommendation_id"): cv.string,
+                vol.Optional("journal_event_id"): cv.string,
+                vol.Optional("intervention_note"): note,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "evaluate_recommendation",
+        evaluate,
+        schema=vol.Schema(
+            {
+                vol.Required("recommendation_id"): cv.string,
+                vol.Required("outcome"): vol.In(OUTCOMES),
+                vol.Required("window_start"): cv.datetime,
+                vol.Required("window_end"): cv.datetime,
+                vol.Optional("note"): note,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_recommendations",
+        list_recommendations,
+        schema=vol.Schema(
+            {
+                vol.Optional("state"): vol.In(STATES),
+                vol.Optional("report_id"): cv.string,
+                vol.Optional("room_id"): cv.string,
+                vol.Optional("include_private", default=False): cv.boolean,
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    def trials():
+        coordinator = heating()
+        if coordinator.trials is None:
+            raise ServiceValidationError("Trials are unavailable until setup completes")
+        return coordinator.trials
+
+    def confirmed(call):
+        if call.data.get("confirm") is not True:
+            raise ServiceValidationError("Set confirm: true to perform this trial action")
+
+    async def propose_trial(call):
+        return await trials().propose(
+            call.data["scope"],
+            call.data["parameter"],
+            call.data["target_value"],
+            call.data["rationale"],
+            call.data["duration_hours"],
+            comfort_floor_c=call.data.get("comfort_floor_c"),
+            recommendation_id=call.data.get("recommendation_id"),
+        )
+
+    async def approve_trial(call):
+        confirmed(call)
+        return await trials().approve(call.data["trial_id"])
+
+    async def reject_trial(call):
+        return await trials().reject(call.data["trial_id"], note=call.data.get("note"))
+
+    async def start_trial(call):
+        confirmed(call)
+        return await trials().start_trial(call.data["trial_id"])
+
+    async def stop_trial(call):
+        return await trials().stop_trial(
+            call.data["trial_id"], complete=call.data["complete"], note=call.data.get("note")
+        )
+
+    async def evaluate_trial(call):
+        return await trials().evaluate(
+            call.data["trial_id"], call.data["outcome"], note=call.data.get("note")
+        )
+
+    async def get_trials(call):
+        return trials().report_list(
+            state=call.data.get("state"),
+            scope=call.data.get("scope"),
+            include_private=call.data["include_private"],
+        )
+
+    trial_id = {vol.Required("trial_id"): cv.string}
+    hass.services.async_register(
+        DOMAIN,
+        "propose_trial",
+        propose_trial,
+        schema=vol.Schema(
+            {
+                vol.Required("scope"): cv.string,
+                vol.Required("parameter"): cv.string,
+                vol.Required("target_value"): vol.Coerce(float),
+                vol.Required("rationale"): note,
+                vol.Required("duration_hours"): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_DURATION_HOURS, max=MAX_DURATION_HOURS)
+                ),
+                vol.Optional("comfort_floor_c"): vol.Coerce(float),
+                vol.Optional("recommendation_id"): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "approve_trial",
+        approve_trial,
+        schema=vol.Schema({**trial_id, vol.Required("confirm"): cv.boolean}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "reject_trial",
+        reject_trial,
+        schema=vol.Schema({**trial_id, vol.Optional("note"): note}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "start_trial",
+        start_trial,
+        schema=vol.Schema({**trial_id, vol.Required("confirm"): cv.boolean}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "stop_trial",
+        stop_trial,
+        schema=vol.Schema(
+            {
+                **trial_id,
+                vol.Optional("complete", default=False): cv.boolean,
+                vol.Optional("note"): note,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "evaluate_trial",
+        evaluate_trial,
+        schema=vol.Schema(
+            {
+                **trial_id,
+                vol.Required("outcome"): vol.In(TRIAL_OUTCOMES),
+                vol.Optional("note"): note,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_trials",
+        get_trials,
+        schema=vol.Schema(
+            {
+                vol.Optional("state"): vol.In(TRIAL_STATES),
+                vol.Optional("scope"): cv.string,
+                vol.Optional("include_private", default=False): cv.boolean,
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
 
     from .control.migration import handover, import_controls, preview, rollback
 
@@ -142,7 +480,74 @@ def async_register_services(hass):
     async def control_rollback(call):
         return await rollback(heating().controls)
 
+    from .analytics import legacy_import
+
+    MAPPING = vol.Schema({cv.string: vol.Any(None, cv.string)})
+
+    async def history_preview(call):
+        coordinator = analytics()
+        return await legacy_import.preview(hass, coordinator, call.data.get("mapping"))
+
+    async def history_import(call):
+        coordinator = analytics()
+        return await legacy_import.execute(
+            hass, heating(), coordinator, call.data.get("mapping"), call.data.get("confirm")
+        )
+
+    async def history_retire(call):
+        coordinator = analytics()
+        return await legacy_import.retire_legacy_store(
+            hass, heating(), coordinator, call.data.get("confirm")
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        "preview_history_import",
+        history_preview,
+        schema=vol.Schema({vol.Optional("mapping"): MAPPING}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "import_history",
+        history_import,
+        schema=vol.Schema(
+            {vol.Optional("mapping"): MAPPING, vol.Optional("confirm", default=False): cv.boolean}
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "retire_legacy_store",
+        history_retire,
+        schema=vol.Schema({vol.Optional("confirm", default=False): cv.boolean}),
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    from .control import identity_migration
+
+    async def identity_preview(call):
+        heating_ = heating()
+        return await identity_migration.plan(hass, heating_.config_entry)
+
+    async def identity_migrate(call):
+        heating_ = heating()
+        return await identity_migration.execute(hass, heating_.config_entry)
+
+    async def identity_rollback(call):
+        heating_ = heating()
+        return await identity_migration.rollback(hass, heating_.config_entry)
+
+    hass.services.async_register(
+        DOMAIN,
+        "migrate_identities",
+        identity_migrate,
+        schema=vol.Schema({vol.Required("confirm"): True}),
+        supports_response=SupportsResponse.ONLY,
+    )
     for name, handler in (
+        ("preview_identity_migration", identity_preview),
+        ("rollback_identity_migration", identity_rollback),
         ("preview_control_import", control_preview),
         ("import_controls", control_import),
         ("get_control_report", control_report),

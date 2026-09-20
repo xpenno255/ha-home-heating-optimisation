@@ -64,9 +64,114 @@ response_variable: heating_reports
 The list includes the latest 20 reports and available profile settings. Supply a
 `report_id` to retrieve that report's exact evidence, hash and prompt version.
 The **Advisor status** sensor exposes status/count/timestamp only. Full report text
-stays out of entity attributes and downloadable diagnostics. A dashboard reader,
-notifications and conversational follow-ups are later work; actions provide the
-initial report access and can be used by your own automations.
+stays out of entity attributes and downloadable diagnostics. Conversational
+follow-ups remain later work; the reader and notifications below were added in
+September 2026 (issue #18).
+
+## Reading reports
+
+`get_advisor_report_summary` returns one retained report in readable form. Omit
+`report_id` for the latest report; an unknown or deleted ID returns a validation
+error and never triggers a new AI call.
+
+```yaml
+action: home_heating_optimisation.get_advisor_report_summary
+data:
+  report_id: optional-id-from-get_advisor_reports
+response_variable: heating_report
+```
+
+The response contains rendered Markdown in `text` plus structured fields: task and
+`created_at`, profile name/provider/model/effort, `prompt_version`, `evidence_hash`,
+the fact IDs cited (`evidence_references`), a `coverage` block (analysis window,
+system and per-room coverage percentages, unavailable/suppressed metrics, omitted
+evidence categories), the report's `conclusion` and `summary`, `findings` (title,
+kind, detail, evidence IDs, next check), `limitations` and `follow_up_actions`
+(one per finding). Coverage is described by reference: the summary reports
+percentages and metric names, not the evidence values themselves. Retrieve the full
+evidence with `get_advisor_reports` when you need to check a citation.
+
+Show `{{ heating_report.text }}` in a Markdown card or script, or read the fields in
+an automation. The **Advisor latest report** diagnostic sensor
+(`sensor.home_heating_optimisation_advisor_latest_report`) has the latest report's
+creation time as its state and only `report_id`, `task`, `profile_name`,
+`finding_count`, `limitation_count` and `headline` (the first finding's title,
+at most 120 characters) as attributes. No report text, evidence or private notes
+appear in entity attributes or diagnostics.
+
+## Notifications
+
+Notifications are off by default. In the Heating Advisor options step:
+
+- **Send notifications** enables them.
+- **Notification services** lists the available `notify.*` services (multi-select).
+  Leave it empty to receive a Home Assistant persistent notification instead.
+- **Notify on** selects events: report ready (default), report failed (timeout or
+  rejected response) and provider call failed.
+- **Include finding titles in notifications** adds finding titles only. Details,
+  next checks, limitations, evidence and questions are never sent by default or
+  with this option; the message carries the report ID, task, profile name,
+  conclusion and counts, plus the action name to retrieve the report.
+
+Deduplication is persisted in the advisor store: a report is never announced twice,
+including across restarts, and failure notifications are sent at most once per task
+per local day. A failure notification never causes a retry; the next call happens
+only when you or a schedule requests it. Delivery failures (missing or failing
+notify service, timeout) are logged at warning level and shown as `notify_status`
+on the Advisor status sensor; they never affect the review result or heating
+control. When a journal is enabled, each retained report also records an
+`advisor_report` event with the report ID, task, profile name and finding count.
+stays out of entity attributes and downloadable diagnostics. A dashboard reader and
+notifications are later work; actions provide the initial report access and can be
+used by your own automations. Bounded follow-up questions are described below.
+
+## Follow-up questions (added 20 September 2026)
+
+A follow-up is one more bounded AI Task call about a report you already have. It is
+not a conversation agent: the model gets no tools, no device access and no control
+authority, and its answer passes the same kind of strict validation as a report.
+
+Select a **Follow-up question AI profile** in the advisor options. Without it,
+`ask_advisor_followup` is refused; there is no fallback to another task's profile.
+
+```yaml
+action: home_heating_optimisation.ask_advisor_followup
+data:
+  report_id: "<id from get_advisor_reports>"
+  question: "Which room has the least reliable evidence, and why?"
+  # conversation_id: "<id from an earlier answer>"  # continue that conversation
+response_variable: followup
+```
+
+Each conversation is bound to one retained report and its saved evidence snapshot.
+The saved evidence hash is checked before every turn; a missing report, a hash
+mismatch or a conversation from a different report is rejected before any call.
+The payload contains the saved evidence, the original validated report, the prior
+turns of that conversation only, your question, and a `newer_observations` block
+holding just the current input availability percentage and per-room quality flags
+(air/target/demand). No new measurements, notes or other reports are sent; the
+instructions require anything newer to be labelled "not in evidence".
+
+The response is `{answer, references, unsupported_claims, missing_data}`: at most
+2,000 characters of answer, 0–12 cited fact IDs that must exist in the saved
+evidence, and up to 8 strings each naming numerical claims the model could not back
+with a cited fact and data the question needed but the evidence lacked. Invalid
+answers are rejected with a category such as `invalid_followup_reference` and no
+turn is stored. Validation checks structure and reference existence, not whether the
+answer is correct; treat it as a draft for human review.
+
+Bounds: questions are 1–600 characters, a conversation holds 8 turns, and the 10
+most recent conversations are retained (oldest dropped first). Follow-ups share the
+advisor's rolling 24-hour call limit and one-minute spacing with reviews, and a
+failed provider call is counted and never retried. Conversations persist in the
+advisor store across restarts; stores written before this feature load unchanged.
+
+`get_advisor_reports` lists each report's conversation IDs, turn counts and last
+update time only. Question and answer text is returned solely by
+`ask_advisor_followup` and `get_advisor_followup` (`conversation_id`); it never
+appears in entity attributes, diagnostics or the status sensor. When a journal is
+present, each accepted turn records an `advisor_followup` event with the report ID,
+conversation ID, turn number and profile name, without text.
 
 ## Schedules and limits
 
@@ -120,17 +225,73 @@ In particular, target overshoot includes setbacks/off-floor targets and cannot a
 establish heating-induced overheating. Demand coverage is different from demand
 active share. Matched-response eligibility does not determine recovery eligibility.
 No energy savings claims are supported without metered energy and suitable context.
+When meters are configured, an allowlisted `energy` fact carries coverage and
+comparability limits only; see [metered energy evidence](energy-evidence.md).
 Detected target-recovery episodes are not a count of all heating or burner cycles.
 Recent-change coverage cannot establish physical sensor freshness, since unchanged
 values may still be freshly reported. Current shadow/observation-only state cannot
 establish what any controller did throughout a historical window.
 
 Private storage is `.storage/home_heating_optimisation.<entry_id>.advisor`, separate
-from measurement history. It retains 20 reports with exact evidence plus bounded
-attempt/schedule metadata. Corrupt/unsupported storage is preserved and blocks new
+from measurement history. It retains 20 reports with exact evidence, up to 10
+follow-up conversations, and bounded attempt/schedule metadata. Corrupt/unsupported storage is preserved and blocks new
 calls. Failed saves also block calls until reload. Removing the integration preserves
 this private store. Home Assistant/provider traces or logs can contain AI task inputs
 and outputs; integration diagnostics omit them.
+
+## Recommendation decisions and outcomes
+
+Added 20 September 2026 (issue #20). Each finding of a stored report becomes one
+`proposed` recommendation with a stable ID (`sha1(report_id + finding index)[:16]`)
+linked to the report ID, evidence hash, prompt version, profile name/model and a
+scope of cited room IDs (or `system`). The workflow records explicit owner decisions
+only; the integration never acts on them.
+
+States and legal transitions: `proposed` → `accepted` | `rejected` | `deferred`;
+`deferred` → `accepted` | `rejected`; `accepted` → `applied` → `evaluated`. Any other
+move is rejected as a validation error. Every transition is timestamped in the
+recommendation's `history` (`by: advisor` for the proposal, `by: owner` afterwards)
+and, when the journal is present, recorded as a `recommendation` journal event.
+
+Services (all response-capable, none touch controls):
+
+- `decide_recommendation` — `recommendation_id`, `decision` (accepted/rejected/deferred),
+  optional private `note` (≤500 characters), optional `defer_until`. Accepting a
+  recommendation authorises nothing: room modes, boiler settings and DHW protection
+  are unchanged. Make any change yourself through the normal controls.
+- `mark_recommendation_applied` — records that you carried out an accepted
+  recommendation; optional `journal_event_id` of the real intervention and a private
+  `intervention_note`. The current actuator-mapping fingerprint is stored as the
+  configuration era at apply time.
+- `evaluate_recommendation` — `outcome` (improved/no_change/worse/inconclusive/failed)
+  over an explicit `window_start`/`window_end`, optional `note`. No-change and
+  inconclusive/failed outcomes are retained like any other.
+- `get_recommendations` — lists retained recommendations with filters `state`,
+  `report_id`, `room_id`. Private notes are stripped unless `include_private: true`.
+
+Follow-up eligibility is assessed for applied recommendations and returned with each
+one as `eligibility: {eligible, reasons, unknown, evidence_type: "association"}`.
+It requires at least 7 days since apply, analytics coverage of at least 80% for the
+scoped rooms, an unchanged configuration era, and (when the energy module exists)
+comparable DHW share and outdoor degree-hours; missing inputs are reported as
+`unknown`, not assumed. The result is an association check, never causal proof.
+`linked_intervention_count` counts journal intervention events for the scope since
+apply time when the journal is available.
+
+Storage is `.storage/home_heating_optimisation.<entry_id>.recommendations` (schema 1),
+bounded to 200 recommendations FIFO and 365 days since last update. It is validated
+on load; corrupt or unsupported data is preserved and the workflow becomes read-only
+until reload, while advisor reports continue to run and heating control is unaffected.
+A failed save keeps the decision in memory and reports `save_failed`. The
+`sensor.home_heating_optimisation_recommendations` entity shows the proposed count
+with per-state counts, the latest ID and the eligible-for-evaluation count; no
+recommendation text or notes appear in entity attributes or diagnostics.
+
+## Bounded trials
+
+A retained recommendation can be followed by an explicitly approved, bounded trial of
+one allowlisted tuning parameter (`propose_trial` with `recommendation_id`). The advisor
+never creates, approves or starts a trial; see [Bounded heating trials](bounded-trials.md).
 
 ## Initial local-model evaluation
 

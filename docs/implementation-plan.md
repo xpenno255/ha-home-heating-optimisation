@@ -30,7 +30,7 @@ it has no runtime imports or dependencies on sibling projects.
 
 Implemented in 0.2.0; see [definitions and validation](historical-analytics.md).
 Live observation, backfill, house mappings and storage migration were verified in 0.4.0. Context currently includes allowlisted controller
-outputs; v0.6.1 adds sampled room schedule-source, model-version and command lifecycle provenance. A complete event-by-event intervention journal remains future work. The optional advisor follows before control ownership migration.
+outputs; v0.6.1 adds sampled room schedule-source, model-version and command lifecycle provenance. The event-by-event [intervention journal](intervention-journal.md) (issue #17) was implemented on 2026-09-20; recommendation outcomes and trials can now reference its events. The optional advisor follows before control ownership migration.
 
 - Add explicit schedule, operative target, corrected-air target and decision-reason
   records. Associate units, provenance and model version with each field.
@@ -63,8 +63,13 @@ handover tests demonstrate that only one controller owns each actuator.
 ## Milestone 4 — heating advisor
 
 Initial AI Task profiles, bounded execution, optional schedules and retained reports
-are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). Notifications,
-conversation compatibility, follow-up outcomes and controlled trials remain future work.
+are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). On 20 September
+2026 (v0.7.0) the advisor gained a report reader action, a latest-report sensor,
+opt-in deduplicated notifications (#18), bounded follow-up questions grounded in a
+retained report's saved evidence as AI Task calls rather than a conversation agent
+(#19), persisted recommendation decisions and follow-up outcomes (#20), and
+explicitly approved bounded trials (#21). See the sections linked from
+[Heating Advisor](heating-advisor.md).
 
 - Select an existing Home Assistant AI Task profile per task. Provide conversation
   compatibility only where needed and validate its responses equally strictly.
@@ -75,7 +80,10 @@ conversation compatibility, follow-up outcomes and controlled trials remain futu
   provider implicitly.
 - Evaluate local Gemma and Claude on identical evidence, including confounders,
   incomplete data, prior interventions and cases requiring no action.
-- Store recommendations and follow-up outcomes before adding user-approved trials.
+- Store recommendations and follow-up outcomes before adding user-approved trials
+  (done: `advisor/recommendations.py`; accepting a recommendation changes no control).
+- User-approved trials (done: `trials/`; allowlisted tunables only, one at a time,
+  DHW protection and modes excluded, rollback on expiry/stop/restart/unload).
 
 Acceptance: a provider failure cannot affect heating; a malformed or unsupported
 recommendation cannot become a control command; reports distinguish evidence from

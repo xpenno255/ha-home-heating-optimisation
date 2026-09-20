@@ -1,10 +1,14 @@
 # Migration and control handover design
 
-Status (as of v0.6.4): this is the original design document, kept for its dated decisions. Read it alongside [implemented import and handover](control-and-handover.md), which describes current behaviour.
+Status (as of v0.7.0, 20 September 2026): this is the original design document, kept for its dated decisions. Read it alongside [implemented import and handover](control-and-handover.md), which describes current behaviour.
 
 Implemented (0.6.1 onward): configuration/survey import, exclusive actuator handover with rollback, restart ownership reconciliation, manual-hold protection, command lifecycle tracking and following configured source references through registry renames.
 
-Deferred: transfer of legacy output entity identities and long-term statistics, import of Radiator Analytics history and adjustment notes, and a general-purpose importer. These are tracked in [#23](https://github.com/xpenno255/ha-home-heating-optimisation/issues/23) and [#24](https://github.com/xpenno255/ha-home-heating-optimisation/issues/24). Sections below that describe them as future work still are.
+Implemented in v0.7.0 ([#23](https://github.com/xpenno255/ha-home-heating-optimisation/issues/23)): previewed, reversible transfer of compatible legacy output entity identities after handover; history and long-term statistics follow the entity ID in the recorder. Estimated or revised metrics are archived under their legacy IDs. See [identity migration](control-and-handover.md#identity-migration).
+
+Implemented in v0.7.0 ([#24](https://github.com/xpenno255/ha-home-heating-optimisation/issues/24)): read-only preview, checksum-keyed idempotent import of compatible Radiator Analytics observations and notes into a private imported era, archiving of legacy session aggregates, and explicit retirement of the legacy store. See [importing Radiator Analytics history](historical-analytics.md#importing-radiator-analytics-history).
+
+Not planned: a general-purpose importer. Sections below that describe the above as future work are retained as the original specification and acceptance reference.
 
 ## Existing identities and storage
 
@@ -12,7 +16,7 @@ Deferred: transfer of legacy output entity identities and long-term statistics, 
 | --- | --- | --- |
 | OT Thermostat Control | Hub and per-room entries; entity unique IDs generally `{entry_id}_{key}` | `.storage/ot_thermostat_control_{entry_id}` and hub variant `ot_thermostat_control_hub_{entry_id}`; survey YAML |
 | Boiler Flow Control | One entry; entity unique IDs `{entry_id}_{key}` | `.storage/boiler_flow_control_{entry_id}`; write/filter/manual-hold memory |
-| Radiator Analytics | Single entry; zone entity IDs include domain, zone slug and metric key | HA Store key `radiator_analytics`, envelope version 1, payload schema 2; observations, source configuration, adjustment journal, archived legacy sessions |
+| Radiator Analytics | Single entry; zone entity IDs include domain, zone slug and metric key | HA Store key `radiator_analytics`, envelope version 1, payload schema 2; observations, source configuration, adjustment journal, archived legacy sessions. Importable since 2026-09-20 via `preview_history_import` / `import_history` |
 
 Changing a domain or unique ID does not itself preserve entity IDs or history.
 Treat registry transfer and metric compatibility as explicit migration work.
@@ -51,7 +55,7 @@ ownership. Read-only survey loading and explicit mappings are implemented in 0.3
 
 ## Entity and history continuity
 
-Current status: not implemented. Only the source-rename listener noted at the end of this section exists; see [#23](https://github.com/xpenno255/ha-home-heating-optimisation/issues/23).
+Current status (2026-09-20, [#23](https://github.com/xpenno255/ha-home-heating-optimisation/issues/23)): implemented as an explicit, previewed, reversible identity migration run after handover; see [identity migration](control-and-handover.md#identity-migration). Compatible legacy output entity IDs are transferred by renaming the consolidated entity onto the legacy ID; history and long-term statistics follow the entity ID in the recorder. Estimated or revised metrics are archived under their legacy IDs. Radiator Analytics history import is implemented separately ([#24](https://github.com/xpenno255/ha-home-heating-optimisation/issues/24)).
 
 - Transfer eligible registry entries using supported HA registry APIs, with explicit
   platform/config-entry/unique-ID mappings and collision checks.

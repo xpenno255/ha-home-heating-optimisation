@@ -12,6 +12,10 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.home_heating_optimisation.control.comfort.coordinator import (
+    OTCoordinator,
+    OTCoordinatorData,
+)
 from custom_components.home_heating_optimisation.control.comfort.core.policy import (
     Action,
     Decision,
@@ -1055,3 +1059,136 @@ async def test_synchronous_report_during_service_waits_for_later_readback(
     data = room.data
     assert data.confirmed_target == data.sent_target
     assert data.sent_at < room._service_completed_at < data.readback_at <= data.confirmed_at
+
+
+# ---------------------------------------------------------------------------
+# Issue #16: same-temperature renewals stay unverified; the hint explains why
+# without asserting delivery failure or valve actuation.
+# ---------------------------------------------------------------------------
+
+FORBIDDEN_HINT_CLAIMS = ("not delivered", "was lost", "valve moved", "valve did not", "failed to")
+
+
+def test_readback_hint_per_status_never_claims_delivery_or_actuation():
+    hint = OTCoordinator.readback_hint
+    assert hint("confirmed", False) == ""
+    assert hint("confirmed", True) == ""
+    assert hint("pending_readback", False) == ""
+    assert hint("readback_no_echo", False) == ""
+    unverified = hint("matching_readback_unverified", False)
+    assert "unverified" in unverified and "expiry" in unverified
+    assert "not evidence of a lost command" in unverified
+    timed_out = hint("readback_no_echo", True)
+    assert "3 minutes" in timed_out and "Unconfirmed is not the same as undelivered" in timed_out
+    both = hint("matching_readback_unverified", True)
+    assert both.startswith(unverified) and both.endswith(timed_out)
+    # A reversion has its own narrow status; the timeout hint does not replace it.
+    assert hint("readback_reverted", True) == ""
+    for text in (unverified, timed_out, both):
+        lowered = text.lower()
+        assert not any(claim in lowered for claim in FORBIDDEN_HINT_CLAIMS)
+
+
+async def test_same_temperature_renewal_publishes_hint_and_keeps_rules(
+    hass, controlled, sources, freezer
+):
+    _, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    target = room.data.pending_target
+    assert room.data.readback_hint == ""
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": target,
+                "until": (dt_util.utcnow() + timedelta(hours=2)).isoformat(),
+            },
+        },
+    )
+    await room.async_refresh()
+    assert room.data.write_status == "confirmed"
+    assert room.data.readback_hint == ""
+
+    # Renewal of the same target: only the expiry moves.
+    freezer.tick(timedelta(minutes=46))
+    hass.states.async_set("sensor.air", 18, {"unit_of_measurement": "°C"})
+    hass.states.async_set("climate.study", "auto", hass.states.get("climate.study").attributes)
+    await room.async_refresh()
+    assert room.data.action == "write"
+    writes = len([kind for kind, _ in calls if kind == "ramses"])
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": target,
+            "mode": {
+                "mode": "temporary_override",
+                "setpoint": target,
+                "until": (dt_util.utcnow() + timedelta(hours=2)).isoformat(),
+            },
+        },
+    )
+    await room.async_refresh()
+    assert room.data.write_status == "matching_readback_unverified"
+    assert room.data.confirmed_target is None
+    assert not room.data.readback_timed_out
+    assert room.data.readback_hint == OTCoordinator.readback_hint(
+        "matching_readback_unverified", False
+    )
+    published = hass.states.get(c.entities[("study", "state")])
+    assert published.attributes["readback_hint"] == room.data.readback_hint
+
+    # The timeout flag adds the timeout hint; the status itself is unchanged and
+    # no extra write is triggered by the unverified outcome.
+    freezer.tick(timedelta(minutes=3))
+    await room.async_refresh()
+    assert room.data.write_status == "matching_readback_unverified"
+    assert room.data.readback_timed_out
+    assert room.data.readback_hint == OTCoordinator.readback_hint(
+        "matching_readback_unverified", True
+    )
+    assert room.data.state == "active"
+    assert len([kind for kind, _ in calls if kind == "ramses"]) == writes
+
+    # A genuine manual change still goes through manual-override detection.
+    freezer.tick(timedelta(seconds=1))
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {
+            "current_temperature": 18,
+            "temperature": target + 2,
+            "mode": {"mode": "temporary_override", "setpoint": target + 2, "until": None},
+        },
+    )
+    await room.async_refresh()
+    assert room.data.state == "manual"
+    assert room.data.readback_status == "readback_different"
+    assert room.data.readback_hint == OTCoordinator.readback_hint("readback_different", True)
+    assert len([kind for kind, _ in calls if kind == "ramses"]) == writes
+
+
+async def test_readback_hint_does_not_alter_reversion_retry_budget(
+    hass, controlled, sources, freezer
+):
+    _, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    room._readback_status = "readback_reverted"
+    room._readback_timed_out = True
+    data = OTCoordinatorData()
+    room._command_data(data)
+    assert data.readback_hint == ""
+    # The hint is derived state only: reversion flags are untouched by publishing it.
+    assert not room._reversion_retry_used
+    assert room._pending_target is not None
