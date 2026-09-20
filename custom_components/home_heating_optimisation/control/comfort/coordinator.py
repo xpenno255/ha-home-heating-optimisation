@@ -140,6 +140,26 @@ ZONE_SETPOINT_MAX = 35.0
 READBACK_TIMEOUT = timedelta(minutes=3)
 STARTUP_SETTLE_TIME = timedelta(minutes=2)
 READBACK_MAX_AGE = timedelta(minutes=5)
+# Same-temperature renewals stay unverified because RAMSES exposes no inbound
+# packet provenance to Home Assistant (docs/renewal-acknowledgement-2026-09-20.md).
+# These hints describe what the status means and what to check.  They must not
+# claim the command was lost or that a valve did or did not move.
+READBACK_HINTS = {
+    "matching_readback_unverified": (
+        "The thermostat reports the requested target, but no setpoint or mode "
+        "transition distinguishes this command from earlier state; an expiry-only "
+        "change is not accepted for a same-temperature renewal. This is an "
+        "unverified acknowledgement, not evidence of a lost command. If the zone "
+        "keeps reporting the target and the override expiry, no action is needed."
+    ),
+    "readback_timed_out": (
+        "No qualifying primary thermostat report arrived within 3 minutes of the "
+        "service call. Unconfirmed is not the same as undelivered: Home Assistant "
+        "attributes cannot show whether a report came from the controller. Check "
+        "the RAMSES gateway status and the zone's reported mode and expiry; HHO "
+        "keeps its normal bounded retry and does not clear manual holds."
+    ),
+}
 COMFORT_MODEL_VERSION = "steady_state_ot_v2"
 
 
@@ -169,6 +189,9 @@ class OTCoordinatorData:
     readback_at: datetime | None = None
     readback_status: str = "not_attempted"
     readback_timed_out: bool = False
+    # Actionable explanation for an unconfirmed outcome.  It never asserts
+    # failed delivery or valve actuation; see docs/command-confirmation.md.
+    readback_hint: str = ""
     write_status: str = "not_attempted"
     # Target
     schedule_setpoint: float | None = None
@@ -1194,7 +1217,19 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.readback_at = self._readback_at
         d.readback_status = self._readback_status
         d.readback_timed_out = self._readback_timed_out
+        d.readback_hint = self.readback_hint(self._readback_status, self._readback_timed_out)
         d.write_status = self.write_status
+
+    @staticmethod
+    def readback_hint(status: str, timed_out: bool) -> str:
+        """Explain an unconfirmed readback without asserting delivery or actuation."""
+        if status == "confirmed":
+            return ""
+        hint = READBACK_HINTS.get(status, "")
+        if timed_out and status != "readback_reverted":
+            timeout_hint = READBACK_HINTS["readback_timed_out"]
+            hint = f"{hint} {timeout_hint}" if hint else timeout_hint
+        return hint
 
     async def _perform(self, decision: Decision) -> bool:
         """Carry out the decision's action. Returns False when the service call did not
