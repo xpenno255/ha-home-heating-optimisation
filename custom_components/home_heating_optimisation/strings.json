@@ -445,6 +445,12 @@
       },
       "advisor_latest_report": {
         "name": "Advisor latest report"
+      },
+      "recommendations": {
+        "name": "Recommendations"
+      },
+      "trials": {
+        "name": "Trials"
       }
     },
     "binary_sensor": {
@@ -634,6 +640,224 @@
           "description": "Optional ID from the report list; omit for the latest report."
         }
       }
+    },
+    "decide_recommendation": {
+      "name": "Decide recommendation",
+      "description": "Record your decision on an advisor recommendation. Accepting changes no heating setting; make any change yourself through the controls and then mark it applied.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID from get_recommendations."
+        },
+        "decision": {
+          "name": "Decision",
+          "description": "accepted, rejected or deferred."
+        },
+        "note": {
+          "name": "Private note",
+          "description": "Optional reason (up to 500 characters), kept in private storage."
+        },
+        "defer_until": {
+          "name": "Defer until",
+          "description": "Optional date/time to revisit a deferred recommendation."
+        }
+      }
+    },
+    "mark_recommendation_applied": {
+      "name": "Mark recommendation applied",
+      "description": "Record that you carried out an accepted recommendation. Optionally link the journal event of the intervention. This action changes no heating setting.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID of an accepted recommendation."
+        },
+        "journal_event_id": {
+          "name": "Journal event ID",
+          "description": "Optional ID of the journal event recording the actual intervention."
+        },
+        "intervention_note": {
+          "name": "Private intervention note",
+          "description": "Optional description of what you changed (up to 500 characters), kept private."
+        }
+      }
+    },
+    "evaluate_recommendation": {
+      "name": "Evaluate recommendation",
+      "description": "Record the follow-up outcome for an applied recommendation over an evaluation window. Outcomes are associations, not causal proof.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID of an applied recommendation."
+        },
+        "outcome": {
+          "name": "Outcome",
+          "description": "improved, no_change, worse, inconclusive or failed."
+        },
+        "window_start": {
+          "name": "Window start",
+          "description": "Start of the evaluation window."
+        },
+        "window_end": {
+          "name": "Window end",
+          "description": "End of the evaluation window."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Optional evaluation note (up to 500 characters)."
+        }
+      }
+    },
+    "get_recommendations": {
+      "name": "Get recommendations",
+      "description": "Return retained recommendations with decision history and follow-up eligibility. Private notes are excluded unless requested.",
+      "fields": {
+        "state": {
+          "name": "State",
+          "description": "Optional state filter."
+        },
+        "report_id": {
+          "name": "Report ID",
+          "description": "Optional advisor report ID filter."
+        },
+        "room_id": {
+          "name": "Room ID",
+          "description": "Optional room ID filter."
+        },
+        "include_private": {
+          "name": "Include private notes",
+          "description": "Include private decision and intervention notes in the response."
+        }
+      }
+    },
+    "propose_trial": {
+      "name": "Propose trial",
+      "description": "Create a reviewable proposal to change one allowlisted tunable for a bounded time. Nothing changes until the owner approves and starts it. DHW protection, modes and enable switches are excluded.",
+      "fields": {
+        "scope": {
+          "name": "Scope",
+          "description": "Controlled room ID or 'boiler'."
+        },
+        "parameter": {
+          "name": "Parameter",
+          "description": "Room: trust_k, cap_up, cap_down. Boiler: design_flow, design_outdoor, return_ceiling."
+        },
+        "target_value": {
+          "name": "Target value",
+          "description": "Value to trial; must be within bounds and within max_step of the current value."
+        },
+        "rationale": {
+          "name": "Rationale",
+          "description": "Private reason for the trial (not exposed by default)."
+        },
+        "duration_hours": {
+          "name": "Duration (hours)",
+          "description": "1 to 168 hours; the trial rolls back automatically when this elapses."
+        },
+        "comfort_floor_c": {
+          "name": "Comfort floor (\u00b0C)",
+          "description": "Optional measured room air temperature below which the trial stops and rolls back."
+        },
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "Optional retained recommendation this trial follows."
+        }
+      }
+    },
+    "approve_trial": {
+      "name": "Approve trial",
+      "description": "Explicitly approve a proposal. Requires ownership ready, the scope already active/auto with no activation blocker, and no other trial running.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Trial to approve."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true."
+        }
+      }
+    },
+    "reject_trial": {
+      "name": "Reject trial",
+      "description": "Reject a proposed or approved trial without applying anything.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Trial to reject."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Private note."
+        }
+      }
+    },
+    "start_trial": {
+      "name": "Start trial",
+      "description": "Apply an approved trial value through the owning controller's tunable. No mode, DHW or actuator command is issued.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Approved trial to start."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true."
+        }
+      }
+    },
+    "stop_trial": {
+      "name": "Stop trial",
+      "description": "Roll a running trial back to its baseline now and verify the readback.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Running trial to stop."
+        },
+        "complete": {
+          "name": "Mark completed",
+          "description": "Record the stop as a planned completion rather than an early stop."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Private note."
+        }
+      }
+    },
+    "evaluate_trial": {
+      "name": "Evaluate trial",
+      "description": "Record an outcome for an ended trial alongside its predeclared criteria and measured metrics. Outcomes are associations, not causal proof.",
+      "fields": {
+        "trial_id": {
+          "name": "Trial ID",
+          "description": "Ended trial to evaluate."
+        },
+        "outcome": {
+          "name": "Outcome",
+          "description": "improved, no_change, worse or inconclusive."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Private evaluation note."
+        }
+      }
+    },
+    "get_trials": {
+      "name": "Get trials",
+      "description": "Return retained trials with criteria, history and evaluations. Private rationale and notes are excluded unless requested.",
+      "fields": {
+        "state": {
+          "name": "State",
+          "description": "Optional state filter."
+        },
+        "scope": {
+          "name": "Scope",
+          "description": "Optional room ID or 'boiler' filter."
+        },
+        "include_private": {
+          "name": "Include private notes",
+          "description": "Include private rationale and notes in the response."
+        }
+      }
     }
   },
   "issues": {
@@ -644,6 +868,10 @@
     "gateway_unresponsive": {
       "title": "Heating gateway not responding",
       "description": "{entity} has not reported online since {since} ({minutes} minutes). Room and boiler control continue and radio schedules use the cached copy. This is the online entity's state only; it does not show that a radio command failed. Check the gateway's power, USB or network link and the ramses_cc diagnostics."
+    },
+    "trial_rollback_failed": {
+      "title": "Heating trial rollback could not be verified",
+      "description": "The {scope} trial of {parameter} could not restore its baseline value {value}. Check the control number entity and set it back manually, then stop the trial."
     }
   },
   "selector": {

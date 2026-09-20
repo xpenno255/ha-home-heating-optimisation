@@ -239,6 +239,60 @@ calls. Failed saves also block calls until reload. Removing the integration pres
 this private store. Home Assistant/provider traces or logs can contain AI task inputs
 and outputs; integration diagnostics omit them.
 
+## Recommendation decisions and outcomes
+
+Added 20 September 2026 (issue #20). Each finding of a stored report becomes one
+`proposed` recommendation with a stable ID (`sha1(report_id + finding index)[:16]`)
+linked to the report ID, evidence hash, prompt version, profile name/model and a
+scope of cited room IDs (or `system`). The workflow records explicit owner decisions
+only; the integration never acts on them.
+
+States and legal transitions: `proposed` → `accepted` | `rejected` | `deferred`;
+`deferred` → `accepted` | `rejected`; `accepted` → `applied` → `evaluated`. Any other
+move is rejected as a validation error. Every transition is timestamped in the
+recommendation's `history` (`by: advisor` for the proposal, `by: owner` afterwards)
+and, when the journal is present, recorded as a `recommendation` journal event.
+
+Services (all response-capable, none touch controls):
+
+- `decide_recommendation` — `recommendation_id`, `decision` (accepted/rejected/deferred),
+  optional private `note` (≤500 characters), optional `defer_until`. Accepting a
+  recommendation authorises nothing: room modes, boiler settings and DHW protection
+  are unchanged. Make any change yourself through the normal controls.
+- `mark_recommendation_applied` — records that you carried out an accepted
+  recommendation; optional `journal_event_id` of the real intervention and a private
+  `intervention_note`. The current actuator-mapping fingerprint is stored as the
+  configuration era at apply time.
+- `evaluate_recommendation` — `outcome` (improved/no_change/worse/inconclusive/failed)
+  over an explicit `window_start`/`window_end`, optional `note`. No-change and
+  inconclusive/failed outcomes are retained like any other.
+- `get_recommendations` — lists retained recommendations with filters `state`,
+  `report_id`, `room_id`. Private notes are stripped unless `include_private: true`.
+
+Follow-up eligibility is assessed for applied recommendations and returned with each
+one as `eligibility: {eligible, reasons, unknown, evidence_type: "association"}`.
+It requires at least 7 days since apply, analytics coverage of at least 80% for the
+scoped rooms, an unchanged configuration era, and (when the energy module exists)
+comparable DHW share and outdoor degree-hours; missing inputs are reported as
+`unknown`, not assumed. The result is an association check, never causal proof.
+`linked_intervention_count` counts journal intervention events for the scope since
+apply time when the journal is available.
+
+Storage is `.storage/home_heating_optimisation.<entry_id>.recommendations` (schema 1),
+bounded to 200 recommendations FIFO and 365 days since last update. It is validated
+on load; corrupt or unsupported data is preserved and the workflow becomes read-only
+until reload, while advisor reports continue to run and heating control is unaffected.
+A failed save keeps the decision in memory and reports `save_failed`. The
+`sensor.home_heating_optimisation_recommendations` entity shows the proposed count
+with per-state counts, the latest ID and the eligible-for-evaluation count; no
+recommendation text or notes appear in entity attributes or diagnostics.
+
+## Bounded trials
+
+A retained recommendation can be followed by an explicitly approved, bounded trial of
+one allowlisted tuning parameter (`propose_trial` with `recommendation_id`). The advisor
+never creates, approves or starts a trial; see [Bounded heating trials](bounded-trials.md).
+
 ## Initial local-model evaluation
 
 The installed `gemma-4-26b-a4b` endpoint returned structured reports in approximately

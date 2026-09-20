@@ -292,9 +292,12 @@ async def test_notify_helper_exception_is_isolated(hass, config, sources):
 async def test_report_is_journaled_defensively(hass, config, sources):
     a = await advisor(hass, config)
     recorded = []
-    a.heating.journal = SimpleNamespace(record=lambda kind, **kw: recorded.append((kind, kw)))
+    a.heating.journal = SimpleNamespace(
+        record=lambda kind, **kw: recorded.append((kind, kw)), status="ready"
+    )
     report = await run(a)
-    assert recorded == [
+    # Other advisor features (recommendations) journal too; check only this feature's event.
+    assert [r for r in recorded if r[0] == "advisor_report"] == [
         (
             "advisor_report",
             {
@@ -309,7 +312,7 @@ async def test_report_is_journaled_defensively(hass, config, sources):
             },
         )
     ]
-    a.heating.journal = SimpleNamespace(record=lambda *a, **k: 1 / 0)
+    a.heating.journal = SimpleNamespace(record=lambda *a, **k: 1 / 0, status="ready")
     a.data["attempts"] = []
     assert (await run(a))["task"] == "investigation"
 

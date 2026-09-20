@@ -20,6 +20,7 @@ from .journal.coordinator import Journal
 from .observations import watched_entities
 from .services import async_register_services
 from .source_identity import async_register_source_identity
+from .trials.coordinator import Trials
 
 LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -58,6 +59,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     await coordinator.telemetry.start()
     entry.async_on_unload(coordinator.telemetry.stop)
     await coordinator.controls.initialise()
+    # Any trial persisted as running is rolled back here; a restart never resumes one.
+    coordinator.trials = Trials(hass, entry, coordinator)
+    await coordinator.trials.initialise()
     await coordinator.async_config_entry_first_refresh()
     await coordinator.load_house()
     if coordinator.config.get("analytics_enabled", False):
@@ -100,6 +104,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator.start(entry)
     coordinator.telemetry.listeners.append(lambda: coordinator.changed(None))
     await coordinator.controls.start()
+    coordinator.trials.start()
     coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()
@@ -118,6 +123,9 @@ async def async_reload(hass: HomeAssistant, entry: HeatingEntry) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
+    # Roll running trials back to baseline while the controllers can still be written.
+    if entry.runtime_data.trials:
+        await entry.runtime_data.trials.stop()
     await entry.runtime_data.controls.stop()
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded and entry.runtime_data.advisor:

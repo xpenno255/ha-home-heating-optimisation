@@ -111,6 +111,91 @@ get_advisor_followup:
       selector:
         text:
 
+decide_recommendation:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    decision:
+      required: true
+      selector:
+        select:
+          options:
+            - accepted
+            - rejected
+            - deferred
+    note:
+      selector:
+        text:
+          multiline: true
+    defer_until:
+      selector:
+        datetime:
+mark_recommendation_applied:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    journal_event_id:
+      selector:
+        text:
+    intervention_note:
+      selector:
+        text:
+          multiline: true
+evaluate_recommendation:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    outcome:
+      required: true
+      selector:
+        select:
+          options:
+            - improved
+            - no_change
+            - worse
+            - inconclusive
+            - failed
+    window_start:
+      required: true
+      selector:
+        datetime:
+    window_end:
+      required: true
+      selector:
+        datetime:
+    note:
+      selector:
+        text:
+          multiline: true
+get_recommendations:
+  fields:
+    state:
+      selector:
+        select:
+          options:
+            - proposed
+            - accepted
+            - rejected
+            - deferred
+            - applied
+            - evaluated
+    report_id:
+      selector:
+        text:
+    room_id:
+      selector:
+        text:
+    include_private:
+      default: false
+      selector:
+        boolean:
+
 preview_control_import:
 import_controls:
 get_control_report:
@@ -134,6 +219,136 @@ import_history:
 retire_legacy_store:
   fields:
     confirm:
+propose_trial:
+  fields:
+    scope:
+      required: true
+      selector:
+        text:
+    parameter:
+      required: true
+      selector:
+        select:
+          options:
+            - trust_k
+            - cap_up
+            - cap_down
+            - design_flow
+            - design_outdoor
+            - return_ceiling
+    target_value:
+      required: true
+      selector:
+        number:
+          min: -15
+          max: 80
+          step: 0.05
+          mode: box
+    rationale:
+      required: true
+      selector:
+        text:
+          multiline: true
+    duration_hours:
+      required: true
+      default: 24
+      selector:
+        number:
+          min: 1
+          max: 168
+          mode: box
+    comfort_floor_c:
+      selector:
+        number:
+          min: 5
+          max: 25
+          step: 0.5
+          mode: box
+    recommendation_id:
+      selector:
+        text:
+approve_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    confirm:
+      required: true
+      default: false
+      selector:
+        boolean:
+reject_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    note:
+      selector:
+        text:
+start_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    confirm:
+      required: true
+      default: false
+      selector:
+        boolean:
+stop_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    complete:
+      default: false
+      selector:
+        boolean:
+    note:
+      selector:
+        text:
+evaluate_trial:
+  fields:
+    trial_id:
+      required: true
+      selector:
+        text:
+    outcome:
+      required: true
+      selector:
+        select:
+          options:
+            - improved
+            - no_change
+            - worse
+            - inconclusive
+    note:
+      selector:
+        text:
+          multiline: true
+get_trials:
+  fields:
+    state:
+      selector:
+        select:
+          options:
+            - proposed
+            - approved
+            - rejected
+            - running
+            - completed
+            - stopped
+            - rolled_back
+            - expired
+            - rollback_failed
+    scope:
+      selector:
+        text:
+    include_private:
       default: false
       selector:
         boolean:

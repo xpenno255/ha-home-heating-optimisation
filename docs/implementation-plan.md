@@ -80,7 +80,10 @@ explicitly approved bounded trials (#21). See the sections linked from
   provider implicitly.
 - Evaluate local Gemma and Claude on identical evidence, including confounders,
   incomplete data, prior interventions and cases requiring no action.
-- Store recommendations and follow-up outcomes before adding user-approved trials.
+- Store recommendations and follow-up outcomes before adding user-approved trials
+  (done: `advisor/recommendations.py`; accepting a recommendation changes no control).
+- User-approved trials (done: `trials/`; allowlisted tunables only, one at a time,
+  DHW protection and modes excluded, rollback on expiry/stop/restart/unload).
 
 Acceptance: a provider failure cannot affect heating; a malformed or unsupported
 recommendation cannot become a control command; reports distinguish evidence from

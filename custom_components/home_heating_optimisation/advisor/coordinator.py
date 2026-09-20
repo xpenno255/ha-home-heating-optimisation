@@ -34,6 +34,7 @@ from .evidence import (
 )
 from .notify import EVENTS, FAILURE_EVENTS, deliver, failure_message, report_message
 from .profiles import profile_info, profiles
+from .recommendations import Recommendations
 from .reports import latest_attributes, summarise
 
 LOGGER = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ class Advisor:
         self.notify_status = "enabled" if self.config.get("notify_enabled") else "disabled"
         self.error_type = None
         self.storage_ready = True
+        self.recommendations = Recommendations(hass, entry, heating)
         self.closed = False
         self.running = None
         self.schedule_task = None
@@ -144,6 +146,8 @@ class Advisor:
         except Exception:
             self.storage_ready = False
             self.status = "storage_read_only"
+        # Recommendation storage is independent: its corruption never blocks reports.
+        await self.recommendations.initialise()
 
     def changed(self, status):
         self.status = status
@@ -160,6 +164,7 @@ class Advisor:
             else None,
             "running": self.running is not None,
             "notify_status": self.notify_status,
+            "recommendations": self.recommendations.quality(),
         }
 
     def latest(self):
@@ -378,6 +383,8 @@ class Advisor:
                 c for c in self.data["conversations"] if c["report_id"] in retained
             ]
             await self.persist()
+            # Never raises; a recommendation store failure cannot fail a stored report.
+            await self.recommendations.add_report(report)
             self.changed("ready")
             self.journal(report)
             await self.notify_report(report)
