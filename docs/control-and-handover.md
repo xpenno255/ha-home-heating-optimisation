@@ -34,7 +34,7 @@ Run `home_heating_optimisation.rollback_controls` to stop new writes and restore
 
 ## Schedule fallback and commissioning
 
-Missing RAMSES schedules are retried every five minutes rather than deferring a failed retrieval for a day. Valid cached schedules have a 48-hour offline limit; cloud/live schedule sources remain preferred. The Utility RF schedule warning still requires checking against live retrieval: retries cannot repair an RF/device failure by themselves.
+Missing RAMSES schedules are retried in the background rather than deferring a failed retrieval for a day. Since 0.6.2 the first retry is after five minutes and consecutive failures back off through ten, twenty and forty minutes to a one-hour ceiling; see [radio schedule recovery](radio-schedule-recovery.md). Valid cached schedules have a 48-hour offline limit; cloud/live schedule sources remain preferred. The Utility RF schedule warning still requires checking against live retrieval: retries cannot repair an RF/device failure by themselves. Residual retrieval and gateway reliability work is tracked in [#15](https://github.com/xpenno255/ha-home-heating-optimisation/issues/15).
 
 Before activation, compare cold-weather shadow decisions, exercise heating/DHW transitions, confirm room sensor placement and controller limits, and record a supervised trial with a rollback point. Historical coverage and passing software tests do not demonstrate the house's heating performance. Activate one function at a time; do not change tuning and ownership simultaneously.
 

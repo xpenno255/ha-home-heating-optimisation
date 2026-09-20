@@ -1,5 +1,14 @@
 # Changelog
 
+Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
+
+## 0.6.4 - estimated boiler efficiency (commissioning prerelease)
+
+- Add an optional **Estimated boiler efficiency (%)** diagnostic for the British Gas 430/i natural-gas profile. Disabled by default; select the profile in the boiler-control options to enable it.
+- Estimate from return temperature and manufacturer full-load reference data on a gross-energy basis. It is guidance, not metered efficiency, load-adjusted efficiency, seasonal efficiency or proof of savings.
+- Require configured return-temperature, burner-modulation and heating-active sources, fresh readings and an observed uninterrupted burn of at least five minutes; report unknown while off, warming up, outside the 30–60 °C return range or missing reliable data.
+- Expose status and model assumptions as sensor attributes. Boiler control, setpoints, energy counters and reported savings are unchanged.
+
 ## 0.6.3 - restart ownership reconciliation (commissioning prerelease)
 
 - Preserve room policy ownership, manual holds and window timers until room and hub restoration finish, including decisions that would send no command.

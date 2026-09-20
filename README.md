@@ -5,7 +5,7 @@
 A Home Assistant integration for observing room temperatures, heating demand and
 boiler operation, forming the foundation for coordinated home heating optimisation.
 
-**Version 0.6.1 includes consolidated comfort and boiler control**, with an explicit
+**Version 0.6.x includes consolidated comfort and boiler control**, with an explicit
 legacy import and exclusive handover. Imported controllers start in shadow. It
 replaces OT Thermostat Control and Boiler Flow Control after handover, while keeping
 RAMSES/Evohome and EMS-ESP as the device connections. Observation, history and the
@@ -13,7 +13,7 @@ optional Heating Advisor remain available independently.
 
 See [control setup and handover](docs/control-and-handover.md),
 [controller configuration](docs/control-configuration.md), and
-[commissioning](docs/commissioning.md). Version 0.6.1 is a commissioning prerelease: software validation is complete, but physical heating performance still requires a supervised trial. New setup and import both start in shadow.
+[commissioning](docs/commissioning.md). The current release is v0.6.4, a commissioning prerelease: software validation is complete, but physical heating performance still requires a supervised trial. New setup and import both start in shadow. See the [changelog](CHANGELOG.md) and the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12) for what has shipped and what remains.
 
 ## Install
 
@@ -40,7 +40,7 @@ This repository supports HACS custom-repository installation; it is not included
 in HACS's default catalogue. It includes standard and high-resolution local brand
 icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
 
-HACS installs the component from the selected release tag. The release ZIP is an alternative for manual installation. The v0.6.1 prerelease is available for explicit installation; enable prerelease visibility in HACS if required. It is not a claim of completed physical commissioning.
+HACS installs the component from the selected release tag. The release ZIP is an alternative for manual installation. The 0.6.x releases (currently v0.6.4) are published as prereleases; enable prerelease visibility in HACS or the HACS update entity will keep reporting the last stable 0.5.x tag as latest. A prerelease is not a claim of completed physical commissioning.
 Keep the existing controllers installed until the control import, shadow comparison
 and handover have been verified. The published v0.5.x releases are observation-only.
 
@@ -189,6 +189,8 @@ confidence labels and limitations. The optional advisor can use this survey cont
 
 See the [implementation plan](docs/implementation-plan.md),
 [migration design](docs/migration-plan.md) and [design notes](docs/design-notes.md).
+Open commissioning, reliability and roadmap items are tracked in the
+[GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12).
 
 The integration includes operative-temperature comfort control, boiler supervision and an
 optional Heating Advisor. The advisor selects Home
