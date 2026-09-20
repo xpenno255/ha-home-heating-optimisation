@@ -803,7 +803,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 errors["base"] = "advisor_needs_analytics"
             elif any(
                 profile_info(self.hass, user_input[t])["status"] != "ready"
-                for t in TASKS
+                for t in (*TASKS, "followup")
                 if user_input.get(t)
             ):
                 errors["base"] = "invalid_ai_profile"
@@ -838,7 +838,9 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             for k, default in defaults.items()
             if isinstance(default, bool)
         }
-        schema.update({optional(t, old): entity_selector(("ai_task",)) for t in TASKS})
+        schema.update(
+            {optional(t, old): entity_selector(("ai_task",)) for t in (*TASKS, "followup")}
+        )
         schema.update(
             {
                 vol.Optional(k, default=old.get(k, defaults[k])): vol.All(

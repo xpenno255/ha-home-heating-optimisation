@@ -121,6 +121,57 @@ notify service, timeout) are logged at warning level and shown as `notify_status
 on the Advisor status sensor; they never affect the review result or heating
 control. When a journal is enabled, each retained report also records an
 `advisor_report` event with the report ID, task, profile name and finding count.
+stays out of entity attributes and downloadable diagnostics. A dashboard reader and
+notifications are later work; actions provide the initial report access and can be
+used by your own automations. Bounded follow-up questions are described below.
+
+## Follow-up questions (added 20 September 2026)
+
+A follow-up is one more bounded AI Task call about a report you already have. It is
+not a conversation agent: the model gets no tools, no device access and no control
+authority, and its answer passes the same kind of strict validation as a report.
+
+Select a **Follow-up question AI profile** in the advisor options. Without it,
+`ask_advisor_followup` is refused; there is no fallback to another task's profile.
+
+```yaml
+action: home_heating_optimisation.ask_advisor_followup
+data:
+  report_id: "<id from get_advisor_reports>"
+  question: "Which room has the least reliable evidence, and why?"
+  # conversation_id: "<id from an earlier answer>"  # continue that conversation
+response_variable: followup
+```
+
+Each conversation is bound to one retained report and its saved evidence snapshot.
+The saved evidence hash is checked before every turn; a missing report, a hash
+mismatch or a conversation from a different report is rejected before any call.
+The payload contains the saved evidence, the original validated report, the prior
+turns of that conversation only, your question, and a `newer_observations` block
+holding just the current input availability percentage and per-room quality flags
+(air/target/demand). No new measurements, notes or other reports are sent; the
+instructions require anything newer to be labelled "not in evidence".
+
+The response is `{answer, references, unsupported_claims, missing_data}`: at most
+2,000 characters of answer, 0–12 cited fact IDs that must exist in the saved
+evidence, and up to 8 strings each naming numerical claims the model could not back
+with a cited fact and data the question needed but the evidence lacked. Invalid
+answers are rejected with a category such as `invalid_followup_reference` and no
+turn is stored. Validation checks structure and reference existence, not whether the
+answer is correct; treat it as a draft for human review.
+
+Bounds: questions are 1–600 characters, a conversation holds 8 turns, and the 10
+most recent conversations are retained (oldest dropped first). Follow-ups share the
+advisor's rolling 24-hour call limit and one-minute spacing with reviews, and a
+failed provider call is counted and never retried. Conversations persist in the
+advisor store across restarts; stores written before this feature load unchanged.
+
+`get_advisor_reports` lists each report's conversation IDs, turn counts and last
+update time only. Question and answer text is returned solely by
+`ask_advisor_followup` and `get_advisor_followup` (`conversation_id`); it never
+appears in entity attributes, diagnostics or the status sensor. When a journal is
+present, each accepted turn records an `advisor_followup` event with the report ID,
+conversation ID, turn number and profile name, without text.
 
 ## Schedules and limits
 
@@ -182,8 +233,8 @@ values may still be freshly reported. Current shadow/observation-only state cann
 establish what any controller did throughout a historical window.
 
 Private storage is `.storage/home_heating_optimisation.<entry_id>.advisor`, separate
-from measurement history. It retains 20 reports with exact evidence plus bounded
-attempt/schedule metadata. Corrupt/unsupported storage is preserved and blocks new
+from measurement history. It retains 20 reports with exact evidence, up to 10
+follow-up conversations, and bounded attempt/schedule metadata. Corrupt/unsupported storage is preserved and blocks new
 calls. Failed saves also block calls until reload. Removing the integration preserves
 this private store. Home Assistant/provider traces or logs can contain AI task inputs
 and outputs; integration diagnostics omit them.

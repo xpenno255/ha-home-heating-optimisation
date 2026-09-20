@@ -6,7 +6,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-from .advisor.evidence import TASKS
+from .advisor.evidence import MAX_QUESTION_CHARS, TASKS
 from .analytics.const import MAX_ADJUSTMENTS
 from .const import DOMAIN
 from .journal.const import KINDS, QUERY_DEFAULT_HOURS, QUERY_MAX_EVENTS, QUERY_MAX_HOURS
@@ -202,6 +202,37 @@ def async_register_services(hass):
         "get_advisor_report_summary",
         advisor_report_summary,
         schema=vol.Schema({vol.Optional("report_id"): cv.string}),
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    async def advisor_followup(call):
+        return await heating().advisor.followup(
+            call.data["report_id"], call.data["question"], call.data.get("conversation_id")
+        )
+
+    async def advisor_followup_conversation(call):
+        return heating().advisor.followup_conversation(call.data["conversation_id"])
+
+    hass.services.async_register(
+        DOMAIN,
+        "ask_advisor_followup",
+        advisor_followup,
+        schema=vol.Schema(
+            {
+                vol.Required("report_id"): cv.string,
+                vol.Required("question"): vol.All(
+                    cv.string, vol.Length(min=1, max=MAX_QUESTION_CHARS)
+                ),
+                vol.Optional("conversation_id"): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_advisor_followup",
+        advisor_followup_conversation,
+        schema=vol.Schema({vol.Required("conversation_id"): cv.string}),
         supports_response=SupportsResponse.ONLY,
     )
 

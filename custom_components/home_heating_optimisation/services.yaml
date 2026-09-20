@@ -90,6 +90,24 @@ get_advisor_reports:
 get_advisor_report_summary:
   fields:
     report_id:
+ask_advisor_followup:
+  fields:
+    report_id:
+      required: true
+      selector:
+        text:
+    question:
+      required: true
+      selector:
+        text:
+          multiline: true
+    conversation_id:
+      selector:
+        text:
+get_advisor_followup:
+  fields:
+    conversation_id:
+      required: true
       selector:
         text:
 

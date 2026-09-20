@@ -252,6 +252,7 @@
           "daily_summary": "Daily summary AI profile",
           "weekly_review": "Weekly review AI profile",
           "investigation": "Investigation AI profile",
+          "followup": "Follow-up question AI profile",
           "schedule_daily_summary": "Schedule daily summaries",
           "schedule_weekly_review": "Schedule weekly reviews",
           "schedule_hour": "Review hour (Home Assistant local time)",
@@ -502,11 +503,39 @@
     },
     "get_advisor_reports": {
       "name": "Get advisor reports",
-      "description": "Return retained reports and profile settings. Supply a report ID to include its full evidence.",
+      "description": "Return retained reports, their follow-up conversation IDs and turn counts, and profile settings. Supply a report ID to include its full evidence.",
       "fields": {
         "report_id": {
           "name": "Report ID",
           "description": "Optional ID from the report list."
+        }
+      }
+    },
+    "ask_advisor_followup": {
+      "name": "Ask advisor follow-up",
+      "description": "Ask one bounded question about a retained report using its saved evidence and the follow-up AI profile. Counts against the daily call limit. Returns the validated answer and conversation ID.",
+      "fields": {
+        "report_id": {
+          "name": "Report ID",
+          "description": "ID of the retained report to ask about."
+        },
+        "question": {
+          "name": "Question",
+          "description": "Follow-up question sent to the selected provider (1-600 characters)."
+        },
+        "conversation_id": {
+          "name": "Conversation ID",
+          "description": "Optional ID to continue an existing conversation about the same report (8 turns maximum)."
+        }
+      }
+    },
+    "get_advisor_followup": {
+      "name": "Get advisor follow-up conversation",
+      "description": "Return the full question and answer text of one retained follow-up conversation.",
+      "fields": {
+        "conversation_id": {
+          "name": "Conversation ID",
+          "description": "ID from a follow-up response or the report list."
         }
       }
     },
