@@ -45,3 +45,24 @@ import_controls:
 get_control_report:
 handover_controls:
 rollback_controls:
+
+preview_history_import:
+  fields:
+    mapping:
+      selector:
+        object:
+import_history:
+  fields:
+    mapping:
+      selector:
+        object:
+    confirm:
+      default: false
+      selector:
+        boolean:
+retire_legacy_store:
+  fields:
+    confirm:
+      default: false
+      selector:
+        boolean:
