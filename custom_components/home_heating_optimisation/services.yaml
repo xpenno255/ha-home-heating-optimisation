@@ -90,6 +90,8 @@ get_advisor_reports:
 get_advisor_report_summary:
   fields:
     report_id:
+      selector:
+        text:
 ask_advisor_followup:
   fields:
     report_id:

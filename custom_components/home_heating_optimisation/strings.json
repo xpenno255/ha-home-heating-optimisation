@@ -593,7 +593,7 @@
       "fields": {
         "mapping": {
           "name": "Mapping",
-          "description": "Optional legacy zone to room ID overrides, for example {\"climate.study\": \"study\"}; null skips a zone."
+          "description": "Optional legacy zone to room ID overrides as a mapping of legacy climate entity ID to room ID, for example climate.study to study; a null value skips a zone."
         }
       }
     },
@@ -603,7 +603,7 @@
       "fields": {
         "mapping": {
           "name": "Mapping",
-          "description": "Optional legacy zone to room ID overrides; null skips a zone."
+          "description": "Optional legacy zone to room ID overrides as a mapping of legacy climate entity ID to room ID, for example climate.study to study; a null value skips a zone."
         },
         "confirm": {
           "name": "Confirm",
