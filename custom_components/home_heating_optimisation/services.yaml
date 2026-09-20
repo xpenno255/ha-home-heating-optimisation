@@ -221,6 +221,9 @@ import_history:
 retire_legacy_store:
   fields:
     confirm:
+      default: false
+      selector:
+        boolean:
 propose_trial:
   fields:
     scope:
