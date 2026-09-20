@@ -24,3 +24,7 @@ Stop the trial for unexpected targets, repeated unconfirmed commands, competing 
 `home_heating_optimisation.rollback_controls` stops consolidated control and restores only the legacy entries disabled by handover. It retains their existing settings; if those were shadow, rollback restores shadow, not automatic heating optimisation. The device system's underlying scheduled heating remains separate. Check actual device modes and targets after rollback.
 
 Record trial time, enabled functions, observations, failures and any chosen tuning changes in the private commissioning record. Do not claim energy savings without metered energy and suitable weather/DHW context.
+
+## Bounded tuning trials
+
+Once a room is active or the boiler is in auto and commissioning is accepted, single-parameter tuning changes can be run as explicitly approved, self-reverting trials; see [Bounded heating trials](bounded-trials.md). A trial never activates control, never changes modes or DHW protection, and rolls back on expiry, on any stop criterion, on restart and on unload.

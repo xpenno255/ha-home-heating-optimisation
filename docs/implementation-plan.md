@@ -66,7 +66,9 @@ Initial AI Task profiles, bounded execution, optional schedules and retained rep
 are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). Recommendation
 decisions and follow-up outcomes (proposed/accepted/rejected/deferred/applied/evaluated,
 private notes, association-only eligibility) were added on 20 September 2026 (issue
-#20). Notifications, conversation compatibility and controlled trials remain future work.
+#20). Explicitly approved, bounded single-parameter trials with automatic rollback were
+added on 20 September 2026 (issue #21; see [Bounded heating trials](bounded-trials.md)).
+Notifications and conversation compatibility remain future work.
 
 - Select an existing Home Assistant AI Task profile per task. Provide conversation
   compatibility only where needed and validate its responses equally strictly.
@@ -79,6 +81,8 @@ private notes, association-only eligibility) were added on 20 September 2026 (is
   incomplete data, prior interventions and cases requiring no action.
 - Store recommendations and follow-up outcomes before adding user-approved trials
   (done: `advisor/recommendations.py`; accepting a recommendation changes no control).
+- User-approved trials (done: `trials/`; allowlisted tunables only, one at a time,
+  DHW protection and modes excluded, rollback on expiry/stop/restart/unload).
 
 Acceptance: a provider failure cannot affect heating; a malformed or unsupported
 recommendation cannot become a control command; reports distinguish evidence from

@@ -180,6 +180,12 @@ A failed save keeps the decision in memory and reports `save_failed`. The
 with per-state counts, the latest ID and the eligible-for-evaluation count; no
 recommendation text or notes appear in entity attributes or diagnostics.
 
+## Bounded trials
+
+A retained recommendation can be followed by an explicitly approved, bounded trial of
+one allowlisted tuning parameter (`propose_trial` with `recommendation_id`). The advisor
+never creates, approves or starts a trial; see [Bounded heating trials](bounded-trials.md).
+
 ## Initial local-model evaluation
 
 The installed `gemma-4-26b-a4b` endpoint returned structured reports in approximately
