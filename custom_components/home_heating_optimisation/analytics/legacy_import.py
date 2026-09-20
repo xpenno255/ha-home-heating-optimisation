@@ -280,19 +280,25 @@ def classify(loaded, rooms, zone_names, mapping_override, imported_checksums):
     return result
 
 
-def zone_names(hass, payload):
-    names = {}
-    for point in payload.get("observations", [])[-1:]:
-        for zone in point.get("zones", {}) if isinstance(point, dict) else ():
-            state = hass.states.get(zone)
-            if state is not None:
-                names[zone] = state.name
-    return names
+def legacy_zones(payload):
+    """Executor: every zone slug referenced by observations or notes."""
+    zones = set()
+    for point in payload.get("observations", []):
+        if isinstance(point, dict) and isinstance(point.get("zones"), dict):
+            zones.update(point["zones"])
+    for note in payload.get("adjustments", []):
+        if isinstance(note, dict) and isinstance(note.get("zone"), str):
+            zones.add(note["zone"])
+    return sorted(zones)
 
 
 async def analyse(hass, coordinator, mapping_override=None):
     loaded = await hass.async_add_executor_job(read_legacy, legacy_path(hass))
-    names = zone_names(hass, loaded["payload"]) if loaded["status"] == "ready" else {}
+    names = {}
+    if loaded["status"] == "ready":
+        for zone in await hass.async_add_executor_job(legacy_zones, loaded["payload"]):
+            if (state := hass.states.get(zone)) is not None:
+                names[zone] = state.name
     checksums = {
         e["signature"].get("checksum")
         for e in coordinator.store.imported_eras

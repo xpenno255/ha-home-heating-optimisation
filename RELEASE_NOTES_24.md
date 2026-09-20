@@ -1,0 +1,4 @@
+- Added `preview_history_import`, which read the Radiator Analytics store (envelope 1, schema 2) without changing it and reported its checksum, zone spans, proposed room mapping and importable/archived/skipped counts.
+- Added `import_history` (`confirm: true`), which copied compatible legacy observations with original timestamps into a separate private imported era, archived legacy session aggregates and imported adjustment notes privately; current analysis and sensors were unchanged and repeated imports were skipped by checksum.
+- Added `retire_legacy_store` (`confirm: true`), which renamed the legacy store only after a matching import had been saved and the legacy integration was no longer loaded.
+- Diagnostics now count imported eras and observations without exposing their content.
