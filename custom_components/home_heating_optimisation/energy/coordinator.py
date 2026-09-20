@@ -369,8 +369,10 @@ class EnergyEvidence(DataUpdateCoordinator):
 
     def comparability(self, since):
         """Period from *since* to now against the equal-length period before it."""
-        a, b = since_periods(self.days(), since, dt_util.utcnow(), self.hass.config.time_zone)
-        return comparability(a, b, self.slugs)
+        a, b, length = since_periods(
+            self.days(), since, dt_util.utcnow(), self.hass.config.time_zone
+        )
+        return comparability(a, b, self.slugs, expected_days=length)
 
     def report(self, days=7):
         recent = self.days(days)
@@ -389,7 +391,7 @@ class EnergyEvidence(DataUpdateCoordinator):
                 "allocation": "heating, dhw, idle or unknown per bucket; energy is never split between heating and DHW.",
                 "era": "Hash of actuator bindings when control is configured, else 'observation'.",
                 "kwh_per_degree_hour": "Association between metered energy and weather; not causal evidence or savings.",
-                "coverage": "Share of five-minute buckets with an ok or rollover meter delta.",
+                "coverage": "Share of the five-minute buckets expected over the whole requested calendar span that carry an ok or rollover meter delta; wholly missing days count against it.",
             },
         }
 

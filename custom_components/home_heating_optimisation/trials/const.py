@@ -34,6 +34,7 @@ STATES = (
     "proposed",
     "approved",
     "rejected",
+    "starting",
     "running",
     "completed",
     "stopped",
@@ -41,11 +42,16 @@ STATES = (
     "expired",
     "rollback_failed",
 )
-ACTIVE_STATES = ("running", "rollback_failed")
+# A trial in any of these states has (or may have) a changed value applied and is
+# rolled back on startup, unload and supervision.
+ACTIVE_STATES = ("starting", "running", "rollback_failed")
+# A failed rollback is retried once per supervision tick, at most this many times.
+MAX_ROLLBACK_ATTEMPTS = 10
 EVALUABLE_STATES = ("completed", "stopped", "rolled_back", "expired")
 TRANSITIONS = {
     "proposed": {"approved", "rejected"},
-    "approved": {"running", "rejected"},
+    "approved": {"starting", "rejected"},
+    "starting": {"running", "stopped", "rolled_back", "rollback_failed"},
     "running": {"completed", "stopped", "rolled_back", "expired", "rollback_failed"},
     "rollback_failed": {"rolled_back"},
     "rejected": set(),

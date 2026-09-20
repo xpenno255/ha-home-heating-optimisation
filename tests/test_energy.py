@@ -20,6 +20,7 @@ from custom_components.home_heating_optimisation.energy.analysis import (
     comparability,
     group_days,
     since_periods,
+    summarise_period,
 )
 from custom_components.home_heating_optimisation.energy.const import BUCKET_SECONDS
 from custom_components.home_heating_optimisation.energy.coordinator import (
@@ -182,9 +183,33 @@ def test_since_periods_split_equal_lengths():
     days = group_days(sum((day_buckets(d) for d in range(6)), []), "UTC", ["fuel_input"])
     since = datetime.fromtimestamp(BASE + 3 * 86400, timezone.utc)
     now = datetime.fromtimestamp(BASE + 5 * 86400 + 3600, timezone.utc)
-    a, b = since_periods(days, since, now, "UTC")
+    a, b, length = since_periods(days, since, now, "UTC")
     assert [d["date"] for d in a] == ["2026-09-17", "2026-09-18", "2026-09-19"]
     assert [d["date"] for d in b] == ["2026-09-14", "2026-09-15", "2026-09-16"]
+    assert length == 3
+
+
+def test_coverage_counts_wholly_missing_days_against_the_requested_span():
+    """One observed day in an eight-day window is 12.5% coverage, not 100%."""
+    days = group_days(day_buckets(0) + day_buckets(8), "UTC", ["fuel_input"])
+    since = datetime.fromtimestamp(BASE + 1 * 86400, timezone.utc)
+    now = datetime.fromtimestamp(BASE + 8 * 86400 + 3600, timezone.utc)
+    a, b, length = since_periods(days, since, now, "UTC")
+    assert length == 8 and [d["date"] for d in a] == ["2026-09-22"]
+    assert a[0]["coverage_percent"] == 100
+    summary = summarise_period(a, ["fuel_input"], expected_days=length)
+    assert summary["days"] == 1 and summary["expected_days"] == 8
+    assert summary["coverage_percent"] == pytest.approx(12.5)
+    assert summary["context_coverage_percent"] == pytest.approx(12.5)
+    result = comparability(a, b, ["fuel_input"], expected_days=length)
+    assert result["conclusion"] == "insufficient"
+    assert "period_a_coverage_below_80" in result["hard_limits"]
+    assert result["periods"]["a"]["coverage_percent"] == pytest.approx(12.5)
+    # Without an explicit span, gaps between the first and last observed day still count.
+    sparse = summarise_period(days, ["fuel_input"])
+    assert sparse["expected_days"] == 9 and sparse["coverage_percent"] == pytest.approx(22.2)
+    full = summarise_period(group_days(day_buckets(0), "UTC", ["fuel_input"]), ["fuel_input"])
+    assert full["coverage_percent"] == 100
 
 
 def test_configuration_era_is_stable_and_observation_without_control():
@@ -292,6 +317,46 @@ async def test_buckets_report_and_entities(hass, config, sources, freezer):
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert diagnostics["energy"]["meter_count"] == 1
     assert "sensor." not in str(diagnostics)
+
+
+async def test_bucket_spanning_journal_command_is_flagged_as_intervention(
+    hass, config, sources, freezer
+):
+    """The coordinator passes datetimes to journal.events; the flag must still be set."""
+    freeze(hass, freezer)
+    set_meter(hass, 1000.0)
+    entry = await setup(hass, metered(config))
+    energy, journal = entry.runtime_data.energy, entry.runtime_data.journal
+    await advance(hass, freezer, 5)
+    assert energy.store.buckets[-1]["intervention"] is False
+    freezer.tick(timedelta(minutes=2))
+    assert journal.record("command_sent", room_id="study", scope="study") is not None
+    freezer.tick(timedelta(minutes=3))
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert energy.store.buckets[-1]["intervention"] is True
+    await advance(hass, freezer, 5)
+    assert energy.store.buckets[-1]["intervention"] is False
+
+
+async def test_daily_sensor_declares_last_reset_at_local_midnight(hass, config, sources, freezer):
+    """TOTAL state class with a midnight reset needs last_reset or statistics corrupt."""
+    freeze(hass, freezer)  # 10:00Z = 03:00 local (US/Pacific test default)
+    set_meter(hass, 1000.0)
+    entry = await setup(hass, metered(config))
+    daily = entity_id(hass, entry, "system:energy_fuel_input_daily_kwh")
+    await advance(hass, freezer, 5)
+    set_meter(hass, 1000.5)
+    await advance(hass, freezer, 5)
+    state = hass.states.get(daily)
+    assert state.attributes["state_class"] == "total"
+    assert state.attributes["last_reset"] == "2026-09-14T00:00:00-07:00"
+    assert float(state.state) == pytest.approx(0.5)
+    freezer.move_to("2026-09-15T10:00:00+00:00")
+    await advance(hass, freezer, 5)
+    state = hass.states.get(daily)
+    assert state.attributes["last_reset"] == "2026-09-15T00:00:00-07:00"
+    assert dt_util.parse_datetime(state.attributes["last_reset"]) == dt_util.start_of_local_day()
 
 
 async def test_reset_and_source_change_counted_and_persisted(

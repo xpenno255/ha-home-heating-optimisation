@@ -1,5 +1,6 @@
 """Bounded trials: allowlisted tunables only, explicit approval, tested rollback."""
 
+import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -15,7 +16,11 @@ from custom_components.home_heating_optimisation.control.boiler.coordinator impo
 from custom_components.home_heating_optimisation.control.comfort.coordinator import OTCoordinator
 from custom_components.home_heating_optimisation.control.migration import handover
 from custom_components.home_heating_optimisation.control.runtime import Controls
-from custom_components.home_heating_optimisation.trials.const import ALLOWED_PARAMETERS
+from custom_components.home_heating_optimisation.control.store import ControlStore
+from custom_components.home_heating_optimisation.trials.const import (
+    ALLOWED_PARAMETERS,
+    MAX_ROLLBACK_ATTEMPTS,
+)
 from custom_components.home_heating_optimisation.trials.coordinator import ISSUE_ROLLBACK_FAILED
 from tests.control.test_runtime import controlled as controlled  # noqa: F401
 from tests.control.test_runtime import start
@@ -196,7 +201,12 @@ async def test_propose_approve_start_applies_only_through_set_tunable(hass, cont
     assert calls == [] and not room_perform.called and not boiler_perform.called
     assert not set_mode.called
     assert room.mode == "active"  # the trial never touched the mode
-    assert [h["state"] for h in started["history"]] == ["proposed", "approved", "running"]
+    assert [h["state"] for h in started["history"]] == [
+        "proposed",
+        "approved",
+        "starting",
+        "running",
+    ]
     sensor = hass.states.get("sensor.home_heating_optimisation_trials")
     assert sensor.state == "1"
     assert sensor.attributes["running_scope"] == "study"
@@ -547,7 +557,13 @@ async def test_journal_is_used_defensively(hass, controlled, sources):
     await call(hass, "start_trial", trial_id=trial_id, confirm=True)
     await call(hass, "stop_trial", trial_id=trial_id)
     assert entry.runtime_data.trials.find(trial_id)["state"] == "stopped"
-    assert [e[1]["data"]["to"] for e in events] == ["proposed", "approved", "running", "stopped"]
+    assert [e[1]["data"]["to"] for e in events] == [
+        "proposed",
+        "approved",
+        "starting",
+        "running",
+        "stopped",
+    ]
     assert all(kind == "trial" and data["scope"] == "study" for kind, data in events)
     assert all(data["room_id"] == "study" for _, data in events)
     assert events[-1][1]["origin"] == "user" and events[-1][1]["data"]["reason"] == "owner"
@@ -565,3 +581,208 @@ async def test_save_failure_keeps_trial_in_memory_and_control_working(hass, cont
     assert trials.store.status == "save_failed"
     await c.set_mode("study", "shadow")
     assert c.rooms["study"].mode == "shadow"
+
+
+# Review findings (issue #21) ------------------------------------------------------
+
+
+def issue_for(hass, trial_id):
+    return ir.async_get(hass).async_get_issue(DOMAIN, f"{ISSUE_ROLLBACK_FAILED}_{trial_id}")
+
+
+async def test_persisted_non_allowlisted_parameter_is_never_written_on_restart(
+    hass, controlled, sources, hass_storage
+):
+    """A store entry naming dhw_delta must be refused by the write gate, not rolled back."""
+    entry, c, calls, trial_id = await running(hass, controlled, "boiler", "design_flow", 60)
+    dhw_delta = c.boiler.get_tunable("dhw_delta")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    stored = hass_storage[STORE.format(entry.entry_id)]["data"]["trials"][0]
+    stored.update(
+        {"state": "running", "parameter": "dhw_delta", "rollback_value": 99.0, "target_value": 98.0}
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    boiler = entry.runtime_data.controls.boiler
+    assert boiler.get_tunable("dhw_delta") == dhw_delta
+    assert boiler._store.get("dhw_delta") in (None, dhw_delta)
+    trial = entry.runtime_data.trials.find(trial_id)
+    assert trial["state"] == "rollback_failed" and trial["rollback_verified"] is False
+    assert "not permitted" in trial["rollback_error"]
+    assert issue_for(hass, trial_id) is not None
+    # Retries never write either, and give up marking after the bounded attempt count.
+    for _ in range(MAX_ROLLBACK_ATTEMPTS + 2):
+        await entry.runtime_data.trials._tick()
+    assert boiler.get_tunable("dhw_delta") == dhw_delta
+    assert trial["rollback_attempts"] == MAX_ROLLBACK_ATTEMPTS
+    assert trial["state"] == "rollback_failed" and issue_for(hass, trial_id) is not None
+
+
+async def test_store_load_drops_inactive_non_allowlisted_entries(hass, controlled, sources):
+    entry, c, calls, trial_id = await running(hass, controlled)
+    await call(hass, "stop_trial", trial_id=trial_id)
+    trials = entry.runtime_data.trials
+    trials.find(trial_id)["parameter"] = "manual_setpoint"
+    await trials.store.save()
+    await trials.store.load(dt_util.utcnow())
+    assert trials.store.trials == [] and trials.store.ready
+
+
+async def test_start_writes_nothing_when_trial_state_cannot_be_persisted(hass, controlled, sources):
+    entry, c, calls = await live(hass, controlled)
+    trial_id = await propose(hass)
+    await call(hass, "approve_trial", trial_id=trial_id, confirm=True)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    with (
+        patch.object(trials.store.backend, "async_save", side_effect=OSError("disk full")),
+        patch.object(room, "set_tunable") as set_tunable,
+    ):
+        with pytest.raises(ServiceValidationError, match="could not be persisted"):
+            await call(hass, "start_trial", trial_id=trial_id, confirm=True)
+    assert not set_tunable.called
+    assert room.get_tunable("trust_k") == 0.8 and room._store.get("trust_k") in (None, 0.8)
+    trial = trials.find(trial_id)
+    assert trial["state"] == "approved" and "started_at" not in trial
+
+
+async def test_starting_state_is_saved_before_the_value_is_applied(hass, controlled, sources):
+    entry, c, calls = await live(hass, controlled)
+    trial_id = await propose(hass)
+    await call(hass, "approve_trial", trial_id=trial_id, confirm=True)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    order = []
+    real_save = trials.store.backend.async_save
+    real_set = room.set_tunable
+
+    async def save(data):
+        order.append(("save", [t["state"] for t in data["trials"]]))
+        await real_save(data)
+
+    def set_tunable(key, value):
+        order.append(("set", key, value))
+        real_set(key, value)
+
+    with (
+        patch.object(trials.store.backend, "async_save", side_effect=save),
+        patch.object(room, "set_tunable", side_effect=set_tunable),
+    ):
+        await call(hass, "start_trial", trial_id=trial_id, confirm=True)
+    assert order[0] == ("save", ["starting"])
+    assert order[1] == ("set", "trust_k", 0.6)
+    assert order[-1] == ("save", ["running"])
+
+
+async def test_restart_with_persisted_starting_trial_rolls_back(
+    hass, controlled, sources, hass_storage
+):
+    entry, c, calls, trial_id = await running(hass, controlled)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    hass_storage[STORE.format(entry.entry_id)]["data"]["trials"][0]["state"] = "starting"
+    hass_storage[f"home_heating_optimisation.control.{entry.entry_id}.room.study"]["data"][
+        "trust_k"
+    ] = 0.6
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    trial = entry.runtime_data.trials.find(trial_id)
+    assert trial["state"] == "stopped" and trial["stop_reason"] == "restart"
+    assert entry.runtime_data.controls.rooms["study"].get_tunable("trust_k") == 0.8
+    assert hass_storage[STORE.format(entry.entry_id)]["data"]["trials"][0]["state"] == "stopped"
+
+
+async def test_rollback_requires_control_store_save_and_retries_each_tick(
+    hass, controlled, sources
+):
+    entry, c, calls, trial_id = await running(hass, controlled)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    with patch.object(ControlStore, "async_save", side_effect=OSError("disk full")):
+        result = await call(hass, "stop_trial", trial_id=trial_id)
+        assert result["state"] == "rollback_failed" and result["rollback_verified"] is False
+        assert issue_for(hass, trial_id) is not None
+        # Retries while the save keeps failing stay failed and are bounded.
+        for _ in range(MAX_ROLLBACK_ATTEMPTS + 3):
+            await trials._tick()
+        trial = trials.find(trial_id)
+        assert trial["state"] == "rollback_failed"
+        assert trial["rollback_attempts"] == MAX_ROLLBACK_ATTEMPTS
+        assert issue_for(hass, trial_id) is not None
+    # Owner stop is always allowed to try again once the store saves.
+    result = await call(hass, "stop_trial", trial_id=trial_id)
+    assert result["state"] == "rolled_back" and result["rollback_verified"] is True
+    assert room.get_tunable("trust_k") == 0.8 and room._store.get("trust_k") == 0.8
+    assert issue_for(hass, trial_id) is None
+
+
+async def test_failed_rollback_is_retried_by_the_next_tick(hass, controlled, sources):
+    entry, c, calls, trial_id = await running(hass, controlled)
+    trials = entry.runtime_data.trials
+    room = c.rooms["study"]
+    with patch.object(ControlStore, "async_save", side_effect=OSError("disk full")):
+        await call(hass, "stop_trial", trial_id=trial_id)
+    assert trials.find(trial_id)["state"] == "rollback_failed"
+    await trials._tick()
+    trial = trials.find(trial_id)
+    assert trial["state"] == "rolled_back" and trial["rollback_attempts"] == 2
+    assert room._store.get("trust_k") == 0.8
+    assert issue_for(hass, trial_id) is None
+    assert calls == []
+
+
+async def test_concurrent_starts_yield_exactly_one_running_trial(hass, controlled, sources):
+    entry, c, calls = await live(hass, controlled)
+    room = c.rooms["study"]
+    trust_k, cap_up = room.get_tunable("trust_k"), room.get_tunable("cap_up")
+    first = await propose(hass, "study", "trust_k", 0.6)
+    second = await propose(hass, "study", "cap_up", cap_up - 0.5)
+    await call(hass, "approve_trial", trial_id=first, confirm=True)
+    await call(hass, "approve_trial", trial_id=second, confirm=True)
+    trials = entry.runtime_data.trials
+    real_save = ControlStore.async_save
+
+    async def slow_save(self):
+        await asyncio.sleep(0)  # a real store save yields; force the interleaving
+        await real_save(self)
+
+    with patch.object(ControlStore, "async_save", slow_save):
+        results = await asyncio.gather(
+            trials.start_trial(first), trials.start_trial(second), return_exceptions=True
+        )
+    errors = [r for r in results if isinstance(r, Exception)]
+    assert len(errors) == 1 and isinstance(errors[0], ServiceValidationError)
+    assert "one change at a time" in str(errors[0])
+    states = sorted(t["state"] for t in trials.store.trials)
+    assert states == ["approved", "running"]
+    applied = (room.get_tunable("trust_k"), room.get_tunable("cap_up"))
+    assert applied in ((0.6, cap_up), (trust_k, cap_up - 0.5))
+
+
+async def test_boiler_manual_hold_stops_trial_without_touching_hold(hass, controlled, sources):
+    entry, c, calls, trial_id = await running(hass, controlled, "boiler", "design_flow", 60)
+    trials = entry.runtime_data.trials
+    c.boiler.data.manual_hold_active = True
+    with patch.object(BFCCoordinator, "_perform", new=AsyncMock()) as perform:
+        await trials._tick()
+    trial = trials.find(trial_id)
+    assert trial["state"] == "stopped" and trial["stop_reason"] == "manual_hold"
+    assert c.boiler.get_tunable("design_flow") == 55.0
+    assert c.boiler.data.manual_hold_active is True  # never cleared by a trial
+    assert calls == [] and not perform.called
+
+
+async def test_approve_and_start_refused_while_boiler_manual_hold_active(hass, controlled, sources):
+    entry, c, calls = await live(hass, controlled, scopes=("boiler",))
+    trial_id = await propose(hass, "boiler", "design_flow", 60)
+    c.boiler.data.manual_hold_active = True
+    with pytest.raises(ServiceValidationError, match="manual hold"):
+        await call(hass, "approve_trial", trial_id=trial_id, confirm=True)
+    c.boiler.data.manual_hold_active = False
+    await call(hass, "approve_trial", trial_id=trial_id, confirm=True)
+    c.boiler.data.manual_hold_active = True
+    with pytest.raises(ServiceValidationError, match="manual hold"):
+        await call(hass, "start_trial", trial_id=trial_id, confirm=True)
+    assert c.boiler.get_tunable("design_flow") == 55.0
+    assert c.boiler.data.manual_hold_active is True

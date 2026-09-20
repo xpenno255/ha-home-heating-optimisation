@@ -1,11 +1,20 @@
 """Energy status and per-meter daily kWh; totals are not savings."""
 
+from datetime import datetime, time
+
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory, UnitOfEnergy
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN, NAME, VERSION
+
+
+def local_midnight(now=None):
+    """Start of the current local day as an aware datetime; the daily total's reset point."""
+    now = dt_util.as_local(now) if now is not None else dt_util.now()
+    return datetime.combine(now.date(), time.min, tzinfo=now.tzinfo)
 
 
 def create_sensors(energy, entry):
@@ -71,6 +80,11 @@ class EnergyDailySensor(EnergySensor):
     @property
     def native_value(self):
         return self.coordinator.daily_kwh(self.slug)
+
+    @property
+    def last_reset(self):
+        """TOTAL state class: the total restarts at local midnight, so statistics must know."""
+        return local_midnight()
 
     @property
     def extra_state_attributes(self):

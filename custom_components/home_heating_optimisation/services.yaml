@@ -338,6 +338,7 @@ get_trials:
           options:
             - proposed
             - approved
+            - starting
             - rejected
             - running
             - completed

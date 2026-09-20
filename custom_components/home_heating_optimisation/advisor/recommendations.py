@@ -38,7 +38,8 @@ TRANSITIONS = {
     "rejected": set(),
     "evaluated": set(),
 }
-PRIVATE_FIELDS = ("private_note", "intervention_note")
+# Free-text fields written by decide/mark_applied/evaluate; stripped unless include_private.
+PRIVATE_FIELDS = ("private_note", "intervention_note", "evaluation_note")
 INTERVENTION_KINDS = ["command_sent", "manual_override", "mode_change", "adjustment_note"]
 EVIDENCE_TYPE = "association"
 
@@ -102,8 +103,9 @@ def eligibility(rec, now, coverage=None, era=None, energy=None):
 
     coverage: percent known analytics coverage over the scope, or None when unknown.
     era: current configuration era hash, or None when unknown.
-    energy: dict with optional booleans dhw_share_comparable and
-        outdoor_degree_hours_comparable, or None when the energy module is absent.
+    energy: the energy module's comparability result (``conclusion`` of
+        "insufficient" or "comparable" plus ``hard_limits``/``limits``), or None
+        when the energy module is absent.
     """
     reasons, unknown = [], []
     if rec.get("state") != "applied":
@@ -125,15 +127,14 @@ def eligibility(rec, now, coverage=None, era=None, energy=None):
     if not isinstance(energy, dict):
         unknown.append("energy")
     else:
-        for key, reason in (
-            ("dhw_share_comparable", "dhw_share_not_comparable"),
-            ("outdoor_degree_hours_comparable", "outdoor_degree_hours_not_comparable"),
-        ):
-            value = energy.get(key)
-            if value is None:
-                unknown.append(key)
-            elif value is False:
-                reasons.append(reason)
+        conclusion = energy.get("conclusion")
+        hard = energy.get("hard_limits")
+        if hard is None:
+            hard = energy.get("limits")
+        if conclusion == "insufficient" or (isinstance(hard, list) and hard):
+            reasons.append("energy_not_comparable")
+        elif conclusion != "comparable":
+            unknown.append("energy")
     return {
         "eligible": not reasons,
         "reasons": reasons,

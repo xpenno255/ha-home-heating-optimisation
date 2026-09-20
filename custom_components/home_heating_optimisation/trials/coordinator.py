@@ -11,6 +11,7 @@ next startup. Outcomes are recorded as associations, never causal proof.
 
 import asyncio
 import logging
+import math
 import uuid
 from copy import deepcopy
 from datetime import timedelta
@@ -30,6 +31,7 @@ from .const import (
     EXCLUDED_NOTE,
     MAX_COMFORT_FLOOR_C,
     MAX_DURATION_HOURS,
+    MAX_ROLLBACK_ATTEMPTS,
     METRIC_KEYS,
     MIN_COMFORT_FLOOR_C,
     MIN_DURATION_HOURS,
@@ -45,6 +47,8 @@ from .store import TrialStore
 LOGGER = logging.getLogger(__name__)
 ISSUE_ROLLBACK_FAILED = "trial_rollback_failed"
 TOLERANCE = 1e-6
+# States in which the trial value is, or may be, applied to the controller.
+APPLIED_STATES = ("starting", "running")
 
 
 def parameter_spec(scope, parameter):
@@ -69,6 +73,10 @@ def check_bounds(spec, baseline, target):
         raise ServiceValidationError("Target equals the current value; nothing to trial")
 
 
+def _finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def _parse(value):
     if not isinstance(value, str):
         return None
@@ -89,10 +97,11 @@ class Trials:
     async def initialise(self):
         """Load, then roll back anything left running: a restart never resumes a trial."""
         try:
-            await self.store.load(dt_util.utcnow())
-            for trial in [t for t in self.store.trials if t["state"] in ACTIVE_STATES]:
-                await self._rollback(trial, "stopped", "restart", origin="controller")
-            await self.store.save()
+            async with self.lock:
+                await self.store.load(dt_util.utcnow())
+                for trial in [t for t in self.store.trials if t["state"] in ACTIVE_STATES]:
+                    await self._rollback(trial, "stopped", "restart", origin="controller")
+                await self.store.save()
         except Exception:
             LOGGER.exception("Trial startup handling failed; heating control is unaffected")
 
@@ -111,7 +120,7 @@ class Trials:
             self.unsub = None
         try:
             async with self.lock:
-                for trial in [t for t in self.store.trials if t["state"] == "running"]:
+                for trial in [t for t in self.store.trials if t["state"] in APPLIED_STATES]:
                     await self._rollback(trial, "stopped", "unload", origin="controller")
                 await self.store.save()
         except Exception:
@@ -343,6 +352,8 @@ class Trials:
         if scope == "boiler":
             if controls.boiler.override != "auto":
                 return "boiler must already be in auto; a trial never activates control"
+            if getattr(controls.boiler.data, "manual_hold_active", False):
+                return "a boiler manual hold is active; a trial never clears a hold"
         else:
             if scope not in controls.rooms:
                 return "room is no longer controlled"
@@ -356,13 +367,16 @@ class Trials:
         return None
 
     async def approve(self, trial_id):
-        trial = self.writable(trial_id)
-        if trial["state"] != "proposed":
-            raise ServiceValidationError(f"Trial is {trial['state']}; only proposals are approved")
-        if reason := self.readiness(trial):
-            raise ServiceValidationError(reason)
-        self.transition(trial, "approved", "user", approved_at=dt_util.utcnow().isoformat())
-        await self.persist()
+        async with self.lock:
+            trial = self.writable(trial_id)
+            if trial["state"] != "proposed":
+                raise ServiceValidationError(
+                    f"Trial is {trial['state']}; only proposals are approved"
+                )
+            if reason := self.readiness(trial):
+                raise ServiceValidationError(reason)
+            self.transition(trial, "approved", "user", approved_at=dt_util.utcnow().isoformat())
+            await self.persist()
         return self.public(trial)
 
     async def reject(self, trial_id, note=None):
@@ -372,48 +386,103 @@ class Trials:
         return self.public(trial)
 
     async def start_trial(self, trial_id):
-        """Apply the approved value through set_tunable only; nothing else changes."""
-        trial = self.writable(trial_id)
-        if trial["state"] != "approved":
-            raise ServiceValidationError(f"Trial is {trial['state']}; approve it first")
-        if reason := self.readiness(trial):
-            raise ServiceValidationError(reason)
-        coordinator = self.coordinator(trial["scope"])
-        parameter_spec(trial["scope"], trial["parameter"])
-        async with self.controls.lock:
-            before = float(coordinator.get_tunable(trial["parameter"]))
-            check_bounds(trial["bounds"], before, trial["target_value"])
+        """Persist the rollback intent first, then apply the value through set_tunable.
+
+        Order matters: the trial is saved as ``starting`` (with baseline, rollback
+        value and expiry) before the controller store changes, so a crash between the
+        two leaves a supervised trial that the next startup rolls back, never an
+        unsupervised changed value.
+        """
+        async with self.lock:
+            trial = self.writable(trial_id)
+            if trial["state"] != "approved":
+                raise ServiceValidationError(f"Trial is {trial['state']}; approve it first")
+            if reason := self.readiness(trial):
+                raise ServiceValidationError(reason)
+            scope, parameter = trial["scope"], trial["parameter"]
+            target = float(trial["target_value"])
+            coordinator = self.gate(scope, parameter, target)
+            before = float(coordinator.get_tunable(parameter))
+            check_bounds(trial["bounds"], before, target)
             if abs(before - trial["baseline_value"]) > TOLERANCE:
                 raise ServiceValidationError(
                     "Current value differs from the proposal baseline; propose again"
                 )
-            coordinator.set_tunable(trial["parameter"], trial["target_value"])
-            saved = await self._save_control_store(coordinator)
-            after = float(coordinator.get_tunable(trial["parameter"]))
-        if abs(after - trial["target_value"]) > TOLERANCE:
-            # Applied value did not read back; restore immediately and refuse.
-            coordinator.set_tunable(trial["parameter"], trial["rollback_value"])
-            await self._save_control_store(coordinator)
-            raise HomeAssistantError("Trial value did not read back; baseline restored")
-        now = dt_util.utcnow()
-        self.transition(
-            trial,
-            "running",
-            "user",
-            started_at=now.isoformat(),
-            expires_at=(now + timedelta(hours=trial["duration_hours"])).isoformat(),
-            applied={"before": before, "after": after, "control_store_saved": saved},
-        )
-        await self.persist()
+            self.gate(scope, parameter, before)
+            now = dt_util.utcnow()
+            snapshot = deepcopy(trial)
+            self.transition(
+                trial,
+                "starting",
+                "user",
+                baseline_value=before,
+                rollback_value=before,
+                started_at=now.isoformat(),
+                expires_at=(now + timedelta(hours=trial["duration_hours"])).isoformat(),
+            )
+            if not await self.store.save():
+                trial.clear()
+                trial.update(snapshot)
+                self.journal(trial, "starting", "approved", "controller", note="not_persisted")
+                self.changed()
+                raise ServiceValidationError(
+                    "Trial state could not be persisted; nothing was changed"
+                )
+            try:
+                async with self.controls.lock:
+                    await self._tuning_write(scope, parameter, target)
+                    after = float(coordinator.get_tunable(parameter))
+            except Exception as err:
+                # Restore immediately and refuse; the trial never reaches running.
+                await self._rollback(trial, "stopped", "start_failed", origin="controller")
+                await self.store.save()
+                raise HomeAssistantError(f"Trial start failed; baseline restored: {err}") from err
+            self.transition(
+                trial,
+                "running",
+                "user",
+                applied={"before": before, "after": after, "control_store_saved": True},
+            )
+            await self.persist()
         return self.public(trial)
 
-    async def _save_control_store(self, coordinator):
+    # Tuning write gate ---------------------------------------------------------
+
+    def gate(self, scope, parameter, value):
+        """The only admission check for a tunable write; persisted fields are never trusted.
+
+        Returns the owning coordinator or raises ServiceValidationError. The scope must
+        be a controlled room or "boiler", the parameter must be on the allowlist for
+        that scope and the value must be finite and within the allowlisted range.
+        """
+        coordinator = self.coordinator(scope)
+        spec = parameter_spec(scope, parameter)
+        if not _finite(value) or not (spec["min"] <= value <= spec["max"]):
+            raise ServiceValidationError(
+                f"Value {value!r} for {parameter} is outside {spec['min']} to {spec['max']}"
+            )
+        return coordinator
+
+    async def _tuning_write(self, scope, parameter, value):
+        """Gate, apply through set_tunable, persist the controller store, verify readback.
+
+        Every trial write (start, rollback, restart rollback) goes through here. A
+        gate refusal raises ServiceValidationError before anything is written; a store
+        save or readback failure raises HomeAssistantError after the in-memory write.
+        Returns the coordinator written to.
+        """
+        coordinator = self.gate(scope, parameter, value)
+        coordinator.set_tunable(parameter, float(value))
         try:
             await coordinator._store.async_save()
-            return True
-        except Exception:
-            LOGGER.warning("Control store save failed after a trial tunable change")
-            return False
+        except Exception as err:
+            raise HomeAssistantError("Control store save failed after a tunable change") from err
+        if not getattr(coordinator._store, "ready", True):
+            raise HomeAssistantError("Control store is not writable after a tunable change")
+        after = float(coordinator.get_tunable(parameter))
+        if abs(after - float(value)) > TOLERANCE:
+            raise HomeAssistantError("Tunable value did not read back")
+        return coordinator
 
     # Running -----------------------------------------------------------------
 
@@ -425,6 +494,12 @@ class Trials:
                 changed = False
                 for trial in [t for t in self.store.trials if t["state"] == "running"]:
                     changed = await self._check(trial) or changed
+                for trial in [t for t in self.store.trials if t["state"] == "rollback_failed"]:
+                    if trial.get("rollback_attempts", 0) >= MAX_ROLLBACK_ATTEMPTS:
+                        continue  # give up retrying; the Repairs issue stays until stopped
+                    changed = (
+                        await self._rollback(trial, "rolled_back", trial["stop_reason"]) or changed
+                    )
                 if changed:
                     await self.store.save()
         except Exception:
@@ -446,7 +521,11 @@ class Trials:
         mode = coordinator.override if scope == "boiler" else coordinator.mode
         if mode not in ("auto", "active"):
             return await self._rollback(trial, "stopped", "mode_changed")
-        if scope != "boiler":
+        if scope == "boiler":
+            if getattr(coordinator.data, "manual_hold_active", False):
+                # Roll back only; the hold itself is never touched.
+                return await self._rollback(trial, "stopped", "manual_hold")
+        else:
             try:
                 manual = coordinator._memory().manual_setpoint
             except Exception:
@@ -485,32 +564,29 @@ class Trials:
         return False
 
     async def _rollback(self, trial, to, reason, origin="controller", **detail):
-        """Restore the baseline through set_tunable, verify by readback, record."""
-        controls = self.controls
-        coordinator = None
-        if controls is not None and controls.config and controls.boiler is not None:
-            coordinator = (
-                controls.boiler
-                if trial["scope"] == "boiler"
-                else controls.rooms.get(trial["scope"])
-            )
+        """Restore the baseline through the tuning write gate; persist and verify.
+
+        Success requires the gate to admit the write, the controller store save to
+        succeed and the readback to match. Anything else is ``rollback_failed`` with a
+        Repairs issue; the supervision tick retries once a minute up to
+        MAX_ROLLBACK_ATTEMPTS and the owner can always ``stop_trial`` again.
+        """
         trial["stop_reason"] = reason
         if detail:
             trial["stop_detail"] = detail
-        trial["ended_at"] = dt_util.utcnow().isoformat()
+        trial.setdefault("ended_at", dt_util.utcnow().isoformat())
+        trial["rollback_attempts"] = trial.get("rollback_attempts", 0) + 1
         verified = False
-        if coordinator is not None:
-            try:
-                coordinator.set_tunable(trial["parameter"], trial["rollback_value"])
-                await self._save_control_store(coordinator)
-                verified = (
-                    abs(
-                        float(coordinator.get_tunable(trial["parameter"])) - trial["rollback_value"]
-                    )
-                    <= TOLERANCE
-                )
-            except Exception:
-                LOGGER.exception("Trial rollback raised")
+        try:
+            await self._tuning_write(trial["scope"], trial["parameter"], trial["rollback_value"])
+            verified = True
+            trial.pop("rollback_error", None)
+        except ServiceValidationError as err:
+            LOGGER.error("Trial rollback refused by the tuning gate: %s", err)
+            trial["rollback_error"] = str(err)
+        except Exception as err:
+            LOGGER.exception("Trial rollback failed")
+            trial["rollback_error"] = str(err)
         trial["rollback_verified"] = verified
         if verified:
             ir.async_delete_issue(self.hass, DOMAIN, f"{ISSUE_ROLLBACK_FAILED}_{trial['id']}")
@@ -520,6 +596,10 @@ class Trials:
         else:
             if trial["state"] != "rollback_failed":
                 self.transition(trial, "rollback_failed", origin)
+            else:
+                trial["updated_at"] = dt_util.utcnow().isoformat()
+                self.journal(trial, "rollback_failed", "rollback_failed", origin, note="retry")
+                self.changed()
             ir.async_create_issue(
                 self.hass,
                 DOMAIN,
@@ -536,15 +616,15 @@ class Trials:
         return True
 
     async def stop_trial(self, trial_id, complete=False, note=None):
-        trial = self.writable(trial_id)
-        if trial["state"] not in ("running", "rollback_failed"):
-            raise ServiceValidationError(f"Trial is {trial['state']}; nothing to stop")
         async with self.lock:
-            to = "completed" if complete else "stopped"
+            trial = self.writable(trial_id)
+            if trial["state"] not in ACTIVE_STATES:
+                raise ServiceValidationError(f"Trial is {trial['state']}; nothing to stop")
+            to = "completed" if complete and trial["state"] == "running" else "stopped"
             await self._rollback(trial, to, "owner", origin="user")
             if note:
                 trial["private_note"] = note
-        await self.persist()
+            await self.persist()
         return self.public(trial)
 
     # Evaluation --------------------------------------------------------------
@@ -604,7 +684,7 @@ class Trials:
         counts = dict.fromkeys(STATES, 0)
         for trial in self.store.trials:
             counts[trial["state"]] += 1
-        running = next((t for t in self.store.trials if t["state"] == "running"), None)
+        running = next((t for t in self.store.trials if t["state"] in APPLIED_STATES), None)
         return {
             "status": self.store.status,
             "counts": counts,

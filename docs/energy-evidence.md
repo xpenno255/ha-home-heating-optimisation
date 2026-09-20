@@ -72,6 +72,10 @@ Diagnostics show counts and quality only, never entity IDs or readings.
 
 ## Comparability
 
+Coverage for a period is the share of five-minute buckets expected over the whole
+requested calendar span (wholly missing days included) that carry an ok or rollover
+meter delta, so one observed day in an eight-day window is 12.5%, not 100%.
+
 Two periods are compared only when none of these hard limits applies:
 
 - either period has under 80% meter coverage or under 80% weather context;

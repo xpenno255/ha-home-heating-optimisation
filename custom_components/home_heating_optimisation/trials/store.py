@@ -9,6 +9,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     ACTIVE_STATES,
+    ALLOWED_PARAMETERS,
     MAX_STORE_BYTES,
     MAX_TRIALS,
     RETENTION_DAYS,
@@ -26,7 +27,13 @@ def _number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def valid_trial(trial):
+def allowlisted(scope, parameter):
+    """The parameter must be on the closed allowlist for the scope kind."""
+    kind = "boiler" if scope == "boiler" else "room"
+    return parameter in ALLOWED_PARAMETERS[kind]
+
+
+def structurally_valid(trial):
     return (
         isinstance(trial, dict)
         and all(isinstance(trial.get(k), str) for k in REQUIRED_STR)
@@ -42,6 +49,11 @@ def valid_trial(trial):
             for h in trial["history"]
         )
     )
+
+
+def valid_trial(trial):
+    """Well formed and on the allowlist; persisted fields are never trusted otherwise."""
+    return structurally_valid(trial) and allowlisted(trial["scope"], trial["parameter"])
 
 
 class TrialStore:
@@ -61,11 +73,27 @@ class TrialStore:
                 or data.get("schema") != SCHEMA
                 or not isinstance(data.get("trials"), list)
                 or len(json.dumps(data).encode()) > MAX_STORE_BYTES
-                or not all(valid_trial(t) for t in data["trials"])
+                or not all(structurally_valid(t) for t in data["trials"])
                 or len({t["id"] for t in data["trials"]}) != len(data["trials"])
             ):
                 raise ValueError("invalid_store")
-            self.trials = data["trials"]
+            # A well-formed entry naming a parameter outside the allowlist is never
+            # trusted: inactive ones are dropped; active ones are kept only so the
+            # coordinator's write gate can refuse the rollback, flag the trial as
+            # rollback_failed and raise a Repairs issue without writing anything.
+            self.trials = []
+            for trial in data["trials"]:
+                if valid_trial(trial):
+                    self.trials.append(trial)
+                elif trial["state"] in ACTIVE_STATES:
+                    LOGGER.error(
+                        "Trial %s names non-allowlisted parameter %r; kept for refusal only",
+                        trial["id"],
+                        trial["parameter"],
+                    )
+                    self.trials.append(trial)
+                else:
+                    LOGGER.warning("Dropped trial %s with non-allowlisted parameter", trial["id"])
             self.bound(now)
         except Exception:
             # Keep the unreadable file for inspection; refuse writes until reload.

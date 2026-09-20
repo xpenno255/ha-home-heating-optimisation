@@ -96,7 +96,12 @@ def group_days(buckets, timezone_name, slugs):
     return result
 
 
-def summarise_period(days, slugs):
+def summarise_period(days, slugs, expected_days=None):
+    """Totals over *days*; coverage is measured against *expected_days* calendar days.
+
+    When *expected_days* is not given the span between the first and last observed
+    date is used, so days with no buckets at all still count against coverage.
+    """
     if not days:
         return {
             "days": 0,
@@ -112,14 +117,16 @@ def summarise_period(days, slugs):
             "source_changes": 0,
         }
     count = len(days)
+    span = max(count, span_days(days) if expected_days is None else int(expected_days))
     known_dhw = [d["dhw_share"] for d in days if d["dhw_share"] is not None]
     return {
         "days": count,
+        "expected_days": span,
         "kwh": {slug: round(sum(d["kwh"][slug] for d in days), 3) for slug in slugs},
         "degree_hours": round(sum(d["degree_hours"] for d in days), 2),
-        "coverage_percent": round(sum(d["coverage_percent"] for d in days) / count, 1),
+        "coverage_percent": round(sum(d["coverage_percent"] for d in days) / span, 1),
         "context_coverage_percent": round(
-            sum(d["context_coverage_percent"] for d in days) / count, 1
+            sum(d["context_coverage_percent"] for d in days) / span, 1
         ),
         "dhw_share": round(sum(known_dhw) / len(known_dhw), 3) if known_dhw else None,
         "allocation_unknown_share": round(
@@ -132,14 +139,28 @@ def summarise_period(days, slugs):
     }
 
 
+def span_days(days):
+    """Calendar days from the first to the last observed date, inclusive."""
+    if not days:
+        return 0
+    first = datetime.fromisoformat(days[0]["date"]).date()
+    last = datetime.fromisoformat(days[-1]["date"]).date()
+    return (last - first).days + 1
+
+
 def degree_hour_range(days):
     values = [d["degree_hours"] for d in days if d["context_coverage_percent"] >= MIN_COVERAGE]
     return (min(values), max(values)) if values else None
 
 
-def comparability(days_a, days_b, slugs):
-    """Limits that stop two periods being compared; hard limits give 'insufficient'."""
-    a, b = summarise_period(days_a, slugs), summarise_period(days_b, slugs)
+def comparability(days_a, days_b, slugs, expected_days=None):
+    """Limits that stop two periods being compared; hard limits give 'insufficient'.
+
+    *expected_days* is the requested calendar length of each period; wholly missing
+    days inside it count against coverage.
+    """
+    a = summarise_period(days_a, slugs, expected_days)
+    b = summarise_period(days_b, slugs, expected_days)
     hard, soft = [], []
     for label, period in (("a", "a"), ("b", "b")):
         summary = a if period == "a" else b
@@ -214,7 +235,9 @@ def split_periods(days, since_date, until_date, timezone_name):
 
 
 def since_periods(days, since, now, timezone_name):
+    """Period a = [since, today], period b = the equal-length span before; plus its length."""
     zone = ZoneInfo(timezone_name)
     since_date = since.astimezone(zone).date()
     until_date = now.astimezone(zone).date() + timedelta(days=1)
-    return split_periods(days, since_date, until_date, timezone_name)
+    a, b = split_periods(days, since_date, until_date, timezone_name)
+    return a, b, (until_date - since_date).days

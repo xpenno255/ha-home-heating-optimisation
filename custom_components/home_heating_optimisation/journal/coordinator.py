@@ -7,7 +7,7 @@ import math
 import uuid
 from collections import Counter
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -48,6 +48,26 @@ def json_safe(value):
     if isinstance(value, (list, tuple, set, frozenset)):
         return [json_safe(v) for v in value]
     return str(value)
+
+
+def as_epoch(value):
+    """Accept an aware or naive (assumed UTC) datetime, an epoch number or an ISO string."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.timestamp()
+    if isinstance(value, bool):
+        raise TypeError("journal time bound must be a datetime, number or ISO string")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        parsed = dt_util.parse_datetime(value)
+        if parsed is None:
+            raise ValueError(f"invalid journal time bound {value!r}")
+        return as_epoch(parsed)
+    raise TypeError("journal time bound must be a datetime, number or ISO string")
 
 
 def strip_private(value):
@@ -124,6 +144,8 @@ class Journal:
             return None
 
     def events(self, kinds=None, room_id=None, since=None, until=None, limit=None):
+        """Filtered copies sorted by time; since/until take datetimes, epochs or ISO strings."""
+        since, until = as_epoch(since), as_epoch(until)
         selected = [
             e
             for e in self.store.events
@@ -178,6 +200,9 @@ class Journal:
         self.store.prune(dt_util.utcnow().timestamp())
         if self.store.dirty:
             await self.store.save()
+        if self.store.dirty and not self.closed:
+            # Events recorded while the write was in flight are still unsaved.
+            self._schedule_save()
 
     async def flush(self):
         """Persist now; used by tests and shutdown."""

@@ -45,6 +45,7 @@ class JournalStore:
         self.status = "ready"
         self.truncated = False
         self.dirty = False
+        self.generation = 0
         self.lock = asyncio.Lock()
 
     async def load(self):
@@ -74,28 +75,35 @@ class JournalStore:
             self.events.insert(index, event)
         else:
             self.events.append(event)
-        self.dirty = True
+        self.mark_dirty()
         self.limit()
 
     def limit(self):
         if len(self.events) > MAX_EVENTS:
             self.events = self.events[-MAX_EVENTS:]
             self.truncated = True
-            self.dirty = True
+            self.mark_dirty()
 
     def prune(self, now):
         cutoff = now - RETENTION_SECONDS
         kept = [e for e in self.events if e["time"] >= cutoff]
         if len(kept) != len(self.events):
             self.events = kept
-            self.dirty = True
+            self.mark_dirty()
+
+    def mark_dirty(self):
+        """Flag unsaved changes; the generation lets save() detect late arrivals."""
+        self.dirty = True
+        self.generation += 1
 
     async def save(self):
         if self.status == "storage_read_only":
             return
         async with self.lock:
             # Events are immutable after insertion; copy the list so concurrent
-            # records cannot alter the payload while HA serialises it.
+            # records cannot alter the payload while HA serialises it. The generation
+            # shows whether anything arrived during the write.
+            generation = self.generation
             data = {
                 "schema": SCHEMA_VERSION,
                 "events": list(self.events),
@@ -104,7 +112,8 @@ class JournalStore:
             try:
                 await self.backend.async_save(data)
                 self.status = "ready"
-                self.dirty = False
+                if self.generation == generation:
+                    self.dirty = False
             except Exception:
                 self.status = "save_failed"
                 LOGGER.exception("Heating journal save failed; retaining events in memory")

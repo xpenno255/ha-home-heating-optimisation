@@ -108,5 +108,6 @@ if journal is not None:
 ```
 
 `journal.events(kinds=None, room_id=None, since=None, until=None, limit=None)` returns
-copies sorted by time; `journal.export(include_private=False)` returns the allowlisted
-form. Free text belongs only under `private_note`.
+copies sorted by time; `since`/`until` accept an aware or naive (read as UTC) `datetime`,
+an epoch number or an ISO 8601 string, and are compared against the stored epoch `time`.
+`journal.export(include_private=False)` returns the allowlisted form. Free text belongs only under `private_note`.

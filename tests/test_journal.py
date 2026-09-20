@@ -1,6 +1,7 @@
 """Journal API contract, bounds, privacy, persistence and failure isolation."""
 
-from datetime import timedelta
+import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -79,6 +80,81 @@ async def test_events_filter_and_export_strip_private_text(hass, config, sources
     assert any("private_note" in e["data"] for e in journal.export(include_private=True))
     times = [e["time"] for e in journal.events()]
     assert times == sorted(times)
+
+
+async def test_events_accept_datetime_epoch_and_iso_bounds(hass, config, sources, freezer):
+    """Callers pass datetimes; stored times are epochs. Every form must filter correctly."""
+    freezer.move_to("2026-09-14T10:00:00+00:00")
+    entry = await setup(hass, config)
+    journal = entry.runtime_data.journal
+    early = journal.record("decision", room_id="study")
+    freezer.tick(timedelta(minutes=10))
+    late = journal.record("command_sent", room_id="study")
+    boundary = datetime(2026, 9, 14, 10, 5, tzinfo=timezone.utc)
+    assert [e["id"] for e in journal.events(since=boundary)] == [late["id"]]
+    assert [e["id"] for e in journal.events(until=boundary)] == [early["id"]]
+    # Naive datetimes are read as UTC; epochs and ISO strings are accepted too.
+    assert [e["id"] for e in journal.events(since=boundary.replace(tzinfo=None))] == [late["id"]]
+    assert [e["id"] for e in journal.events(since=boundary.timestamp())] == [late["id"]]
+    assert [e["id"] for e in journal.events(since=boundary.isoformat())] == [late["id"]]
+    assert journal.events(since=boundary, until=boundary + timedelta(hours=1)) == [
+        journal.events(kinds=["command_sent"])[0]
+    ]
+    assert journal.events(since=dt_util.utcnow() + timedelta(days=1)) == []
+    with pytest.raises(ValueError):
+        journal.events(since="not a time")
+
+
+async def test_event_recorded_during_in_flight_save_is_persisted(hass, hass_storage):
+    """A record that lands while HA is writing must leave the store dirty for the next save."""
+    store = JournalStore(hass, "test")
+    gate = asyncio.Event()
+    written = []
+
+    async def slow_save(data):
+        written.append(data)
+        await gate.wait()
+
+    def event(name):
+        return {"id": name, "time": dt_util.utcnow().timestamp(), "kind": "decision"}
+
+    store.append(event("first"))
+    with patch.object(store.backend, "async_save", side_effect=slow_save):
+        task = hass.async_create_task(store.save())
+        await asyncio.sleep(0)
+        assert written and [e["id"] for e in written[0]["events"]] == ["first"]
+        store.append(event("second"))
+        gate.set()
+        await task
+    assert store.dirty is True, "late event must not be marked as saved"
+    await store.save()
+    saved = hass_storage[f"{DOMAIN}.test.journal"]["data"]["events"]
+    assert [e["id"] for e in saved] == ["first", "second"]
+    assert store.dirty is False
+
+
+async def test_journal_reschedules_save_for_events_recorded_mid_write(
+    hass, config, sources, hass_storage
+):
+    entry = await setup(hass, config)
+    journal = entry.runtime_data.journal
+    journal.record("decision", data={"which": "first"})
+    real_save = journal.store.backend.async_save
+    late = []
+
+    async def record_while_saving(data):
+        await real_save(data)
+        late.append(journal.record("decision", data={"which": "late"}))
+
+    with patch.object(journal.store.backend, "async_save", side_effect=record_while_saving):
+        await journal.flush()
+    saved = {e["id"] for e in hass_storage[key(entry)]["data"]["events"]}
+    assert late[0]["id"] not in saved and journal.store.dirty
+    assert journal._save_cancel is not None, "debounced save must be rescheduled"
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=SAVE_DELAY_SECONDS + 1))
+    await hass.async_block_till_done()
+    assert late[0]["id"] in {e["id"] for e in hass_storage[key(entry)]["data"]["events"]}
+    assert not journal.store.dirty
 
 
 async def test_debounced_save_persists_and_reload_is_idempotent(

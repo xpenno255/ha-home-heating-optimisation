@@ -12,6 +12,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from custom_components.home_heating_optimisation.advisor.coordinator import Advisor
 from custom_components.home_heating_optimisation.advisor.recommendations import (
     MAX_RECOMMENDATIONS,
+    PRIVATE_FIELDS,
     Recommendations,
     eligibility,
     extract,
@@ -241,11 +242,50 @@ async def test_persistence_bounds_and_retention(hass, config, sources):
 @pytest.mark.parametrize(
     "rec,kwargs,reasons,unknown",
     [
+        (applied(), {"coverage": 95, "era": "era-1", "energy": {}}, [], ["energy"]),
         (
             applied(),
-            {"coverage": 95, "era": "era-1", "energy": {}},
+            {
+                "coverage": 95,
+                "era": "era-1",
+                "energy": {"conclusion": "comparable", "hard_limits": [], "limits": []},
+            },
             [],
-            ["dhw_share_comparable", "outdoor_degree_hours_comparable"],
+            [],
+        ),
+        (
+            applied(),
+            {
+                "coverage": 95,
+                "era": "era-1",
+                "energy": {
+                    "conclusion": "comparable",
+                    "hard_limits": [],
+                    "limits": ["period_a_contains_interventions"],
+                },
+            },
+            [],
+            [],
+        ),
+        (
+            applied(),
+            {
+                "coverage": 95,
+                "era": "era-1",
+                "energy": {
+                    "conclusion": "insufficient",
+                    "hard_limits": ["period_b_no_data"],
+                    "limits": ["period_b_no_data"],
+                },
+            },
+            ["energy_not_comparable"],
+            [],
+        ),
+        (
+            applied(),
+            {"coverage": 95, "era": "era-1", "energy": {"limits": ["dhw_share_unknown"]}},
+            ["energy_not_comparable"],
+            [],
         ),
         (
             applied(days_ago=3),
@@ -267,16 +307,6 @@ async def test_persistence_bounds_and_retention(hass, config, sources):
             ["not_applied", "era_unknown"],
             ["energy"],
         ),
-        (
-            applied(),
-            {
-                "coverage": 95,
-                "era": "era-1",
-                "energy": {"dhw_share_comparable": False, "outdoor_degree_hours_comparable": True},
-            },
-            ["dhw_share_not_comparable"],
-            [],
-        ),
     ],
 )
 def test_eligibility_reasons_are_explicit_and_association_only(rec, kwargs, reasons, unknown):
@@ -286,6 +316,83 @@ def test_eligibility_reasons_are_explicit_and_association_only(rec, kwargs, reas
     assert result["eligible"] is (not reasons)
     assert result["evidence_type"] == "association"
     assert "causal" not in str(result)
+
+
+async def test_energy_context_uses_the_real_comparability_contract(hass, config, sources):
+    """An explicitly insufficient energy comparison must block eligibility, not pass it."""
+    a, report = await stored(hass, config)
+    rec_id = a.recommendations.data["recommendations"][1]["id"]
+    await a.recommendations.decide(rec_id, "accepted")
+    await a.recommendations.mark_applied(rec_id)
+    rec = a.recommendations.find(rec_id)
+    rec["applied_at"] = (NOW - timedelta(days=10)).isoformat()
+    calls = []
+
+    class Energy:
+        def __init__(self, result):
+            self.result = result
+
+        def comparability(self, since):
+            calls.append(since)
+            return self.result
+
+    a.heating.energy = Energy(
+        {"conclusion": "insufficient", "hard_limits": ["period_b_no_data"], "limits": ["x"]}
+    )
+    assessment = a.recommendations.assess(rec)
+    assert calls and isinstance(calls[0], datetime) and calls[0].tzinfo is not None
+    assert "energy_not_comparable" in assessment["reasons"] and assessment["eligible"] is False
+    assert "energy" not in assessment["unknown"]
+    a.heating.energy = Energy({"conclusion": "comparable", "hard_limits": [], "limits": []})
+    assessment = a.recommendations.assess(rec)
+    assert "energy_not_comparable" not in assessment["reasons"]
+    assert assessment["unknown"] == []
+    a.heating.energy = None
+    assert a.recommendations.assess(rec)["unknown"] == ["energy"]
+
+
+async def test_evaluation_note_is_private_by_default(hass, config, sources):
+    a, report = await stored(hass, config)
+    rec_id = a.recommendations.data["recommendations"][0]["id"]
+    await call(hass, "decide_recommendation", recommendation_id=rec_id, decision="accepted")
+    await call(hass, "mark_recommendation_applied", recommendation_id=rec_id)
+    response = await call(
+        hass,
+        "evaluate_recommendation",
+        recommendation_id=rec_id,
+        outcome="improved",
+        window_start=NOW,
+        window_end=NOW + timedelta(days=7),
+        note="felt warmer in the evenings",
+    )
+    assert "evaluation_note" not in response
+    public = await call(hass, "get_recommendations")
+    private = await call(hass, "get_recommendations", include_private=True)
+    assert "felt warmer" not in str(public)
+    assert all("evaluation_note" not in r for r in public["recommendations"])
+    found = next(r for r in private["recommendations"] if r["id"] == rec_id)
+    assert found["evaluation_note"] == "felt warmer in the evenings"
+    assert "evaluation_note" in PRIVATE_FIELDS
+
+
+async def test_linked_interventions_are_counted_from_the_real_journal(
+    hass, config, sources, freezer
+):
+    """applied_at is a datetime; the journal stores epochs. The count must still work."""
+    freezer.move_to("2026-09-20T12:00:00+00:00")
+    a, report = await stored(hass, config)
+    journal = a.heating.journal
+    assert journal is not None and journal.status == "ready"
+    rec_id = a.recommendations.data["recommendations"][1]["id"]
+    journal.record("command_sent", room_id="study", scope="study")  # before applying
+    await a.recommendations.decide(rec_id, "accepted")
+    freezer.tick(timedelta(minutes=1))
+    await a.recommendations.mark_applied(rec_id)
+    freezer.tick(timedelta(minutes=1))
+    journal.record("command_sent", room_id="study", scope="study")
+    journal.record("manual_override", room_id="lounge")  # other room, not counted
+    item = a.recommendations.public(a.recommendations.find(rec_id))
+    assert item["linked_intervention_count"] == 1
 
 
 async def test_journal_contract_is_used_defensively(hass, config, sources):

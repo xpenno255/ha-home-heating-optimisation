@@ -28,9 +28,11 @@ input to their decision.
 
 ## Lifecycle
 
-`proposed` → `approved` → `running` → `completed` | `stopped` | `expired`, with
-`rejected` available from proposed/approved and `rollback_failed` → `rolled_back` when
-a restore has to be retried. Exactly one trial may be running at a time.
+`proposed` → `approved` → `starting` → `running` → `completed` | `stopped` |
+`expired`, with `rejected` available from proposed/approved and `rollback_failed` →
+`rolled_back` when a restore has to be retried. `starting` is the short-lived state
+saved before the value is applied. Exactly one trial may be starting or running at a
+time; approve, start and stop run under one lock so concurrent calls cannot race.
 
 1. `propose_trial` (`scope` room ID or `boiler`, `parameter`, `target_value`,
    private `rationale`, `duration_hours` 1 to 168, optional `comfort_floor_c`,
@@ -44,17 +46,19 @@ a restore has to be retried. Exactly one trial may be running at a time.
    stop and never touched.
 2. `approve_trial` (`trial_id`, `confirm: true`). Refused unless controls are
    configured, ownership is `ready`, the scope is already `active` (room) or `auto`
-   (boiler), no activation blocker (`guard_reason`) exists and no other trial is
-   running. A trial never activates control.
+   (boiler) with no boiler manual hold active, no activation blocker (`guard_reason`)
+   exists and no other trial is running. A trial never activates control.
 3. `start_trial` (`trial_id`, `confirm: true`). Re-checks the same conditions and
-   that the current value still equals the baseline, then applies the target via
-   `set_tunable` under the controls lock, reads it back, saves the control store and
-   records before/after values, `started_at` and `expires_at`.
+   that the current value still equals the baseline, then saves the trial as
+   `starting` (baseline, rollback value, `started_at`, `expires_at`) and waits for
+   that save to succeed before anything changes; if it cannot be persisted the start
+   is refused and nothing is written. Only then is the target applied via the tuning
+   write gate under the controls lock, read back and the trial saved as `running`.
 4. Supervision runs every 60 s while running. First breached condition wins:
    controls unavailable, expiry (→ `expired`), mode left active/auto, manual
-   override (`manual_setpoint` present), any `guard_reason`, comfort floor on
-   measured air, deficit/overshoot stop criteria from the analytics report. All
-   result in rollback.
+   override (room `manual_setpoint` present, or boiler `manual_hold_active`; the
+   hold itself is never touched), any `guard_reason`, comfort floor on measured air,
+   deficit/overshoot stop criteria from the analytics report. All result in rollback.
 5. `stop_trial` (`trial_id`, optional `complete: true`, private `note`) rolls back
    on demand.
 6. `evaluate_trial` (`trial_id`, `outcome` improved/no_change/worse/inconclusive,
@@ -65,15 +69,24 @@ a restore has to be retried. Exactly one trial may be running at a time.
 7. `get_trials` (`state`, `scope`, `include_private` default false) lists retained
    trials; private rationale and notes are excluded by default.
 
-Rollback always means `set_tunable(parameter, baseline)` followed by a `get_tunable`
-readback. If the readback does not match, the trial becomes `rollback_failed` and a
-Repairs issue (`trial_rollback_failed`) asks you to set the number entity back
-manually and stop the trial again.
+Every tunable write (start, rollback, restart rollback) passes one gate that
+re-checks the scope is a controlled room or `boiler`, the parameter is on the
+allowlist for that scope and the value is finite and within `min`/`max`; persisted
+trial fields are never trusted. Rollback means the gated `set_tunable(parameter,
+baseline)`, a successful controller store save and a matching `get_tunable`
+readback. If any of these fails, the trial becomes `rollback_failed` and a Repairs
+issue (`trial_rollback_failed`) is raised; supervision retries the rollback once a
+minute up to 10 attempts, and `stop_trial` may be called again at any time. A
+rollback is only counted as done once the baseline is persisted, so a restart cannot
+bring the trial value back.
 
 ## Restart, unload and storage
 
-- On startup any trial persisted as `running` is rolled back immediately and marked
-  `stopped` with reason `restart`. A trial is never resumed automatically.
+- On startup any trial persisted as `starting`, `running` or `rollback_failed` is
+  rolled back immediately and marked `stopped` with reason `restart`. A trial is
+  never resumed automatically. Stored entries naming a parameter outside the
+  allowlist are dropped if inactive, or kept only so the gate can refuse their
+  rollback and flag them.
 - On unload running trials are rolled back before the controllers stop.
 - Storage is `.storage/home_heating_optimisation.<entry_id>.trials` (schema 1),
   bounded to 100 trials and 365 days. It is validated on load; a corrupt file makes
