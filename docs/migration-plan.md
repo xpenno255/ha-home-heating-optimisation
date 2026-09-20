@@ -1,6 +1,10 @@
 # Migration and control handover design
 
-Status: the original design below is partially implemented in v0.6.1. See [implemented import and handover](control-and-handover.md). Configuration/survey import and exclusive ownership are available; legacy entity/history transfer and a general-purpose importer are not claimed.
+Status (as of v0.6.4): this is the original design document, kept for its dated decisions. Read it alongside [implemented import and handover](control-and-handover.md), which describes current behaviour.
+
+Implemented (0.6.1 onward): configuration/survey import, exclusive actuator handover with rollback, restart ownership reconciliation, manual-hold protection, command lifecycle tracking and following configured source references through registry renames.
+
+Deferred: transfer of legacy output entity identities and long-term statistics, import of Radiator Analytics history and adjustment notes, and a general-purpose importer. These are tracked in [#23](https://github.com/xpenno255/ha-home-heating-optimisation/issues/23) and [#24](https://github.com/xpenno255/ha-home-heating-optimisation/issues/24). Sections below that describe them as future work still are.
 
 ## Existing identities and storage
 
@@ -47,6 +51,8 @@ ownership. Read-only survey loading and explicit mappings are implemented in 0.3
 
 ## Entity and history continuity
 
+Current status: not implemented. Only the source-rename listener noted at the end of this section exists; see [#23](https://github.com/xpenno255/ha-home-heating-optimisation/issues/23).
+
 - Transfer eligible registry entries using supported HA registry APIs, with explicit
   platform/config-entry/unique-ID mappings and collision checks.
 - Only reuse an entity ID when its physical meaning, units and statistics semantics
@@ -59,7 +65,9 @@ ownership. Read-only survey loading and explicit mappings are implemented in 0.3
 
 ## Exclusive actuator handover
 
-The future write-enabled release must implement a handover transaction per actuator:
+Current status: implemented in 0.6.1 as `home_heating_optimisation.handover_controls` / `rollback_controls`, with restart reconciliation added in 0.6.3. The transaction below is the original specification and remains the acceptance reference.
+
+The write-enabled release must implement a handover transaction per actuator:
 
 1. List all known legacy writers and relevant automations. Explicitly identify each
    thermostat target and boiler flow-setpoint entity to be owned.

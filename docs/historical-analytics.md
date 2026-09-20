@@ -129,9 +129,16 @@ temperature and decision state. Optional system input: Boiler Flow Control's Flo
 Setpoint decision sensor. Context retains state, unit, update time and an allowlist
 of decision attributes such as reason, requested/sent/confirmed target and write
 status. It is controller-reported intent and estimates, with original timestamps,
-not a new measurement of comfort or proof an actuator responded. Controller build
-versions and full original schedule provenance are not yet captured. Only the last
-100 samples are exported; the full bounded timeline stays in private storage.
+not a new measurement of comfort or proof an actuator responded.
+
+Since 0.6.1 the allowlist also captures `schedule_source`, `model_version`, the
+command lifecycle timestamps (`requested_at`, `sent_at`, `pending_since`,
+`confirmed_at`, `readback_at`) and the requested/sent/pending/confirmed targets.
+These are sampled on the five-minute grid, so short-lived states between samples
+are not recorded. Controller build versions, the full original schedule and an
+event-by-event intervention and decision journal are not captured; that journal is
+tracked in [#17](https://github.com/xpenno255/ha-home-heating-optimisation/issues/17).
+Only the last 100 samples are exported; the full bounded timeline stays in private storage.
 
 ## Validation and legacy differences
 
