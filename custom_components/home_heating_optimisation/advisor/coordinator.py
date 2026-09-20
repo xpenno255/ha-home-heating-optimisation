@@ -171,6 +171,7 @@ class Advisor:
                 },
                 task,
                 question,
+                energy=self.heating.energy.report() if self.heating.energy else None,
             )
             profile = profile_info(self.hass, entity)
             if profile["status"] != "ready":

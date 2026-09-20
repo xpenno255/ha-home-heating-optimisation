@@ -80,7 +80,8 @@
           "mapping": "Room, system and survey mappings",
           "control": "Comfort and boiler control",
           "advisor": "Heating Advisor",
-          "gateways": "Gateway monitoring"
+          "gateways": "Gateway monitoring",
+          "energy": "Metered energy evidence"
         }
       },
       "room": {
@@ -271,6 +272,23 @@
           "gateway_offline_minutes": "Off, unavailable, unknown or missing for at least this long raises one repairs issue per gateway. Startup waits at least this long (minimum two minutes) before alerting.",
           "gateway_events": "Fires home_heating_optimisation_gateway_unresponsive and home_heating_optimisation_gateway_recovered for your own notify automations."
         }
+      },
+      "energy": {
+        "title": "Metered energy evidence",
+        "description": "Select up to three cumulative meter sensors. Fuel input is boiler gas or electricity; delivered heat requires a separate heat meter. Readings are stored privately as five-minute buckets with weather and hot-water context for up to 90 days. Leave every meter empty to disable. Metering alone does not prove savings.",
+        "data": {
+          "calorific_value_mj_m3": "Gas calorific value (MJ/m\u00b3) for m\u00b3 meters",
+          "volume_correction": "Gas volume correction factor for m\u00b3 meters",
+          "meter_1_entity": "Meter 1 sensor (energy or gas counter)",
+          "meter_1_kind": "Meter 1 measures",
+          "meter_1_unit": "Meter 1 unit override",
+          "meter_2_entity": "Meter 2 sensor (energy or gas counter)",
+          "meter_2_kind": "Meter 2 measures",
+          "meter_2_unit": "Meter 2 unit override",
+          "meter_3_entity": "Meter 3 sensor (energy or gas counter)",
+          "meter_3_kind": "Meter 3 measures",
+          "meter_3_unit": "Meter 3 unit override"
+        }
       }
     },
     "error": {
@@ -294,7 +312,9 @@
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
       "advisor_needs_analytics": "Enable historical analytics before the advisor.",
       "invalid_ai_profile": "Select an available Extended OpenAI or Anthropic AI Task profile with Home Assistant APIs and all tools disabled. For Extended OpenAI, set Functions to [].",
-      "missing_ai_profile": "Select a profile for each scheduled task."
+      "missing_ai_profile": "Select a profile for each scheduled task.",
+      "invalid_energy_meter": "Choose sensor entities with the energy or gas device class that currently have a state.",
+      "duplicate_energy_meter": "Each meter sensor can only be selected once."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
@@ -405,6 +425,12 @@
           "unconfigured": "Not configured",
           "unavailable": "Unavailable"
         }
+      },
+      "energy_status": {
+        "name": "Energy evidence status"
+      },
+      "energy_daily_kwh": {
+        "name": "Energy {meter} today"
       }
     },
     "binary_sensor": {
@@ -546,6 +572,16 @@
           "description": "Must be true to rename the file."
         }
       }
+    },
+    "get_energy_report": {
+      "name": "Get energy report",
+      "description": "Return metered-energy days with coverage, weather degree hours, hot-water share, configuration eras and comparability limits. No savings figure is produced when context is insufficient.",
+      "fields": {
+        "days": {
+          "name": "Days",
+          "description": "Number of recent local days to include (1 to 90)."
+        }
+      }
     }
   },
   "issues": {
@@ -556,6 +592,15 @@
     "gateway_unresponsive": {
       "title": "Heating gateway not responding",
       "description": "{entity} has not reported online since {since} ({minutes} minutes). Room and boiler control continue and radio schedules use the cached copy. This is the online entity's state only; it does not show that a radio command failed. Check the gateway's power, USB or network link and the ramses_cc diagnostics."
+    }
+  },
+  "selector": {
+    "energy_meter_kind": {
+      "options": {
+        "fuel_input": "Fuel or electricity input",
+        "delivered_heat": "Delivered heat (heat meter)",
+        "electricity": "Electricity (pumps, controls or heat pump)"
+      }
     }
   }
 }

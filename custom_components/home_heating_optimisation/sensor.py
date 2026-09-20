@@ -29,6 +29,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         entities.extend(create_sensors(coordinator.analytics, entry))
     entities.append(AdvisorSensor(coordinator, entry))
+    if coordinator.energy:
+        from .energy.sensor import create_sensors as energy_sensors
+
+        entities.extend(energy_sensors(coordinator.energy, entry))
     entities.append(HouseModelSensor(coordinator, entry))
     entities.append(JournalStatusSensor(coordinator, entry))
     from .control.entities import sensors
