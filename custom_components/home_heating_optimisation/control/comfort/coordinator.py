@@ -235,6 +235,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._entry = entry
         self._store = store
         self.journal = journal
+        # Stable HHO room id (the control config key); Controls sets it after construction.
+        self.journal_room_id: str | None = None
         self._journal_last: dict[str, Any] = {}
         self._config: dict[str, Any] = (
             dict(config) if config is not None else {**entry.data, **entry.options}
@@ -1066,10 +1068,11 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         if journal is None:
             return
         try:
+            room_id = self.journal_room_id or self.room_id
             journal.record(
                 kind,
-                room_id=self.room_id,
-                scope=self.room_id,
+                room_id=room_id,
+                scope=room_id,
                 origin=origin,
                 data=data,
                 provenance={
@@ -1089,6 +1092,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         return True
 
     def _journal_readback(self) -> None:
+        if self._sent_at is None:
+            return  # nothing has been commanded yet; there is no readback to journal
         state = (
             self._readback_status,
             self._readback_timed_out,

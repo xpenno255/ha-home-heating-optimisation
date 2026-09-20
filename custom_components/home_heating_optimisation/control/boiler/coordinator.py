@@ -1122,7 +1122,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._hub.last_written_at,
         )
         d.last_target_change = self._hub.last_target_change
-        if self._journal_changed("readback", (d.write_status, d.confirmed_setpoint)):
+        if d.write_status != "not_attempted" and self._journal_changed(
+            "readback", (d.write_status, d.confirmed_setpoint)
+        ):
             self._journal(
                 "readback",
                 {

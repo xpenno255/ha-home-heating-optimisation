@@ -30,7 +30,7 @@ it has no runtime imports or dependencies on sibling projects.
 
 Implemented in 0.2.0; see [definitions and validation](historical-analytics.md).
 Live observation, backfill, house mappings and storage migration were verified in 0.4.0. Context currently includes allowlisted controller
-outputs; v0.6.1 adds sampled room schedule-source, model-version and command lifecycle provenance. A complete event-by-event intervention journal remains future work. The optional advisor follows before control ownership migration.
+outputs; v0.6.1 adds sampled room schedule-source, model-version and command lifecycle provenance. The event-by-event [intervention journal](intervention-journal.md) (issue #17) was implemented on 2026-09-20; recommendation outcomes and trials can now reference its events. The optional advisor follows before control ownership migration.
 
 - Add explicit schedule, operative target, corrected-air target and decision-reason
   records. Associate units, provenance and model version with each field.

@@ -137,6 +137,7 @@ class Controls:
                 journal=getattr(self.heating, "journal", None),
             )
             c.mode = "shadow"
+            c.journal_room_id = room_id
             c.enabled = spec.get("enabled", True)
             c.occupancy_enabled = spec.get("occupancy_enabled", True)
             await c.async_load_geometry()

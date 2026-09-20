@@ -1,0 +1,4 @@
+- Added a complete intervention and controller-decision journal: every decision change, command request, service result, readback transition, manual hold, schedule change, mode change, handover, rollback and adjustment note is recorded as a versioned event with controller, configuration-era, model and schedule-source provenance.
+- Added the `get_journal` action (filter by kind, room and hours; private note text omitted unless requested) and the `Intervention journal status` diagnostic sensor with counts by kind.
+- Journal storage is bounded (20,000 events, 30 days), saved with a debounce and on shutdown, validated on load, and isolated so a storage fault never affects heating control.
+- Added the `Enable intervention journal` option (on by default) and a journal counts/status block in diagnostics downloads.

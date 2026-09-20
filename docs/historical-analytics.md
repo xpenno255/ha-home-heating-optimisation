@@ -135,9 +135,12 @@ Since 0.6.1 the allowlist also captures `schedule_source`, `model_version`, the
 command lifecycle timestamps (`requested_at`, `sent_at`, `pending_since`,
 `confirmed_at`, `readback_at`) and the requested/sent/pending/confirmed targets.
 These are sampled on the five-minute grid, so short-lived states between samples
-are not recorded. Controller build versions, the full original schedule and an
-event-by-event intervention and decision journal are not captured; that journal is
-tracked in [#17](https://github.com/xpenno255/ha-home-heating-optimisation/issues/17).
+are not recorded here. Since 2026-09-20 the separate
+[intervention journal](intervention-journal.md) records each decision change,
+command, service result, readback transition, manual hold, schedule change, mode
+change, handover and adjustment note as an event with controller, configuration and
+model provenance, so short-lived actions between samples are retained. The sampled
+context remains the measurement-aligned view; the journal is the action record.
 Only the last 100 samples are exported; the full bounded timeline stays in private storage.
 
 ## Validation and legacy differences

@@ -153,7 +153,10 @@ class Journal:
 
     def attributes(self):
         events = self.store.events
-        iso = lambda t: datetime.fromtimestamp(t, dt_util.UTC).isoformat()  # noqa: E731
+
+        def iso(stamp):
+            return datetime.fromtimestamp(stamp, dt_util.UTC).isoformat()
+
         return {
             "event_count": len(events),
             "oldest_at": iso(events[0]["time"]) if events else None,
