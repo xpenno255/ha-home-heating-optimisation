@@ -112,6 +112,48 @@ Every journal entry separates comparison regimes conservatively, including scope
 room changes because other rooms may experience changed load. This action writes
 only a note; it does not adjust a valve, thermostat or boiler setting.
 
+## Importing Radiator Analytics history
+
+Status (2026-09-20): implemented for issue #24; not yet run against a household
+store. Recorder backfill is not a substitute for the legacy store, which holds
+per-sample observations and the adjustment journal.
+
+Three response-only actions handle the legacy `.storage/radiator_analytics` file
+(HA envelope version 1, payload schema 2). Any other version, a missing file or
+undecodable JSON is reported as a status and nothing is imported.
+
+1. `preview_history_import` reads the file without changing it and returns its
+   SHA-256 checksum, each legacy zone with observation count and time span, note
+   and archived-session counts, and a proposed mapping from legacy zone to HHO room
+   ID: the configured climate entity first, then the room ID, then a unique
+   case-insensitive name match, otherwise `unmapped`. Two rooms sharing a name give
+   `needs_mapping` with the candidates. Pass `mapping: {"climate.x": "room_id"}` to
+   override (`null` skips a zone). Counts separate importable observations and notes
+   from skipped invalid/duplicate points and unmapped zones.
+2. `import_history` with `confirm: true` copies compatible observations, with their
+   original timestamps and field values, into a separate `imported_eras` collection
+   in the private history store. The live `observations` list, and therefore the
+   sensors and reports, are unchanged. Legacy `legacy_sessions` aggregates are
+   archived inside the era for inspection, never analysed. Notes become adjustments
+   with `kind: "imported"`, `source: "radiator_analytics"` and their original time;
+   they appear in `get_report` like other notes and stay out of diagnostics, entity
+   attributes and AI evidence. Because they are real past adjustments they also
+   separate comparison regimes for ramps recorded after them. Each import is
+   idempotent by checksum (`already_imported`), builds the full payload before a
+   single save, and rolls memory back if the save fails, so an interruption leaves
+   both stores as they were. At most three eras and 50,000 points per era are kept;
+   older points are dropped and `truncated` reported.
+3. `retire_legacy_store` with `confirm: true` renames the file to
+   `.storage/radiator_analytics.retired-<date>` only after the Radiator Analytics
+   integration is no longer loaded and an import matching the current file checksum
+   has been saved. Content is never rewritten; delete the retired file yourself
+   after checking the import.
+
+Legacy observations used `hvac_action` for demand activity and 30-minute freshness
+from `last_updated`; the era signature records this so imported points are never
+mistaken for current-semantics history. Imported eras are counted in diagnostics
+(`imported_era_count`, `imported_observation_count`) without content.
+
 ## Structured report and controller context
 
 ```yaml

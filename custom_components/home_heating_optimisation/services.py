@@ -196,6 +196,50 @@ def async_register_services(hass):
     async def control_rollback(call):
         return await rollback(heating().controls)
 
+    from .analytics import legacy_import
+
+    MAPPING = vol.Schema({cv.string: vol.Any(None, cv.string)})
+
+    async def history_preview(call):
+        coordinator = analytics()
+        return await legacy_import.preview(hass, coordinator, call.data.get("mapping"))
+
+    async def history_import(call):
+        coordinator = analytics()
+        return await legacy_import.execute(
+            hass, heating(), coordinator, call.data.get("mapping"), call.data.get("confirm")
+        )
+
+    async def history_retire(call):
+        coordinator = analytics()
+        return await legacy_import.retire_legacy_store(
+            hass, heating(), coordinator, call.data.get("confirm")
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        "preview_history_import",
+        history_preview,
+        schema=vol.Schema({vol.Optional("mapping"): MAPPING}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "import_history",
+        history_import,
+        schema=vol.Schema(
+            {vol.Optional("mapping"): MAPPING, vol.Optional("confirm", default=False): cv.boolean}
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "retire_legacy_store",
+        history_retire,
+        schema=vol.Schema({vol.Optional("confirm", default=False): cv.boolean}),
+        supports_response=SupportsResponse.ONLY,
+    )
+
     for name, handler in (
         ("preview_control_import", control_preview),
         ("import_controls", control_import),

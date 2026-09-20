@@ -512,6 +512,40 @@
           "description": "Include household note text. Off by default."
         }
       }
+    },
+    "preview_history_import": {
+      "name": "Preview history import",
+      "description": "Read the Radiator Analytics store without changing it: checksum, zones, proposed room mapping and importable, archived and skipped counts.",
+      "fields": {
+        "mapping": {
+          "name": "Mapping",
+          "description": "Optional legacy zone to room ID overrides, for example {\"climate.study\": \"study\"}; null skips a zone."
+        }
+      }
+    },
+    "import_history": {
+      "name": "Import history",
+      "description": "Copy compatible Radiator Analytics observations and adjustment notes into private storage as a separate imported era. Current analysis is unchanged and the legacy file is never modified.",
+      "fields": {
+        "mapping": {
+          "name": "Mapping",
+          "description": "Optional legacy zone to room ID overrides; null skips a zone."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true after reviewing the preview."
+        }
+      }
+    },
+    "retire_legacy_store": {
+      "name": "Retire legacy history store",
+      "description": "Rename the Radiator Analytics store file after its content has been imported. Requires the legacy integration to be removed and an import matching the file checksum.",
+      "fields": {
+        "confirm": {
+          "name": "Confirm",
+          "description": "Must be true to rename the file."
+        }
+      }
     }
   },
   "issues": {

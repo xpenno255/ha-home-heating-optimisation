@@ -13,6 +13,7 @@ from ..const import DOMAIN
 from .const import (
     MAX_ADJUSTMENTS,
     MAX_CONTEXT_POINTS,
+    MAX_IMPORTED_ERAS,
     MAX_POINTS,
     SAMPLE_SECONDS,
     SCHEMA_VERSION,
@@ -85,8 +86,11 @@ def validate_point(point):
         raise ValueError("invalid context validity")
 
 
+HISTORY_KEYS = ("observations", "decision_context", "previous_era", "imported_eras")
+
+
 def pack_history(data):
-    history = {k: data.pop(k) for k in ("observations", "decision_context", "previous_era")}
+    history = {k: data.pop(k, [] if k == "imported_eras" else None) for k in HISTORY_KEYS}
     data["history_zlib"] = base64.b64encode(
         zlib.compress(json.dumps(history, separators=(",", ":"), allow_nan=False).encode(), 3)
     ).decode()
@@ -105,8 +109,28 @@ def unpack_history(data):
         data = {
             **data,
             **{k: history[k] for k in ("observations", "decision_context", "previous_era")},
+            "imported_eras": history.get("imported_eras", []),
         }
     return data
+
+
+def validate_imported_eras(eras):
+    """Imported legacy eras are inspected, never analysed as current history."""
+    if not isinstance(eras, list):
+        raise ValueError("invalid imported eras")
+    for era in eras:
+        if (
+            not isinstance(era, dict)
+            or not isinstance(era.get("signature"), dict)
+            or not isinstance(era.get("observations"), list)
+        ):
+            raise ValueError("invalid imported era")
+        for point in era["observations"]:
+            validate_point(point)
+    return [
+        {**era, "observations": era["observations"][-MAX_POINTS:]}
+        for era in eras[-MAX_IMPORTED_ERAS:]
+    ]
 
 
 def split_context(points):
@@ -129,6 +153,7 @@ class HistoryStore:
         self.adjustments = []
         self.signature = None
         self.previous_era = None
+        self.imported_eras = []
         self.status = "ready"
         self.truncated = False
         self.lock = asyncio.Lock()
@@ -174,6 +199,9 @@ class HistoryStore:
                     self.previous_era["observations"], _ = await self.hass.async_add_executor_job(
                         split_context, self.previous_era["observations"][-MAX_POINTS:]
                     )
+                self.imported_eras = await self.hass.async_add_executor_job(
+                    validate_imported_eras, data.get("imported_eras", [])
+                )
                 self.truncated = data.get("truncated", False)
             if self.signature != signature:
                 if self.observations:
@@ -190,6 +218,7 @@ class HistoryStore:
             # Preserve unreadable/unsupported files; memory-only collection remains useful.
             self.observations = []
             self.adjustments = []
+            self.imported_eras = []
             self.status = "storage_read_only"
             LOGGER.exception("Heating history could not be loaded; preserving the existing file")
 
@@ -241,6 +270,7 @@ class HistoryStore:
                 "decision_context": list(self.decision_context),
                 "adjustments": list(self.adjustments),
                 "previous_era": self.previous_era,
+                "imported_eras": list(self.imported_eras),
                 "truncated": self.truncated,
             }
             try:
