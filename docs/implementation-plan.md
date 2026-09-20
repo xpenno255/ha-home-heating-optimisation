@@ -63,8 +63,10 @@ handover tests demonstrate that only one controller owns each actuator.
 ## Milestone 4 — heating advisor
 
 Initial AI Task profiles, bounded execution, optional schedules and retained reports
-are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). Notifications,
-conversation compatibility, follow-up outcomes and controlled trials remain future work.
+are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). Recommendation
+decisions and follow-up outcomes (proposed/accepted/rejected/deferred/applied/evaluated,
+private notes, association-only eligibility) were added on 20 September 2026 (issue
+#20). Notifications, conversation compatibility and controlled trials remain future work.
 
 - Select an existing Home Assistant AI Task profile per task. Provide conversation
   compatibility only where needed and validate its responses equally strictly.
@@ -75,7 +77,8 @@ conversation compatibility, follow-up outcomes and controlled trials remain futu
   provider implicitly.
 - Evaluate local Gemma and Claude on identical evidence, including confounders,
   incomplete data, prior interventions and cases requiring no action.
-- Store recommendations and follow-up outcomes before adding user-approved trials.
+- Store recommendations and follow-up outcomes before adding user-approved trials
+  (done: `advisor/recommendations.py`; accepting a recommendation changes no control).
 
 Acceptance: a provider failure cannot affect heating; a malformed or unsupported
 recommendation cannot become a control command; reports distinguish evidence from

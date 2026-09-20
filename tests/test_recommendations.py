@@ -210,7 +210,7 @@ async def test_accepting_and_applying_touch_no_controller(hass, controlled, sour
     assert calls == []
     assert controls.settings.get("modes", {}) == {}
     rec = a.recommendations.find(rec_id)
-    assert rec["applied_era"] == a.recommendations.assess(rec)["reasons"] or True
+    assert isinstance(rec["applied_era"], str) and len(rec["applied_era"]) == 16
     assert "era_changed" not in a.recommendations.assess(rec)["reasons"]
 
 
