@@ -63,8 +63,10 @@ handover tests demonstrate that only one controller owns each actuator.
 ## Milestone 4 — heating advisor
 
 Initial AI Task profiles, bounded execution, optional schedules and retained reports
-are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). Notifications,
-conversation compatibility, follow-up outcomes and controlled trials remain future work.
+are implemented in 0.5.0; see [Heating Advisor](heating-advisor.md). Bounded
+follow-up questions grounded in a retained report's saved evidence were added on
+20 September 2026 as AI Task calls, not a conversation agent. Notifications,
+follow-up outcomes and controlled trials remain future work.
 
 - Select an existing Home Assistant AI Task profile per task. Provide conversation
   compatibility only where needed and validate its responses equally strictly.

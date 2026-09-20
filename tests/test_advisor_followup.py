@@ -286,6 +286,19 @@ async def test_turn_and_conversation_bounds(hass, config, sources, freezer):
     assert len(a.followup_conversation(a.data["conversations"][0]["id"])["turns"]) == 1
 
 
+async def test_conversations_dropped_with_their_report(hass, config, sources, freezer):
+    a = await advisor(hass, config)
+    r = await report(a, freezer)
+    with patch(MODULE + ".generate", return_value=SimpleNamespace(data=ANSWER)):
+        answer = await a.followup(r["id"], "Why?")
+    a.data["reports"] = []
+    freezer.tick(timedelta(minutes=2))
+    await report(a, freezer)
+    assert not a.data["conversations"]
+    with pytest.raises(ServiceValidationError, match="Unknown advisor conversation"):
+        a.followup_conversation(answer["conversation_id"])
+
+
 async def test_conversations_are_isolated(hass, config, sources, freezer):
     a = await advisor(hass, config)
     r = await report(a, freezer)

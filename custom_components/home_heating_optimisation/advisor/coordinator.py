@@ -324,6 +324,11 @@ class Advisor:
                 "validation": "Structure and reference existence checked; AI interpretations require human review.",
             }
             self.data["reports"] = (self.data["reports"] + [report])[-MAX_REPORTS:]
+            # Conversations outlive their report only until the report is dropped.
+            retained = {r["id"] for r in self.data["reports"]}
+            self.data["conversations"] = [
+                c for c in self.data["conversations"] if c["report_id"] in retained
+            ]
             await self.persist()
             self.changed("ready")
             return deepcopy(report)
