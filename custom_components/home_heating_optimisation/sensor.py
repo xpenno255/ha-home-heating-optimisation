@@ -29,6 +29,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
         entities.extend(create_sensors(coordinator.analytics, entry))
     entities.append(AdvisorSensor(coordinator, entry))
+    entities.append(RecommendationsSensor(coordinator, entry))
     entities.append(HouseModelSensor(coordinator, entry))
     from .control.entities import sensors
 
@@ -104,3 +105,28 @@ class AdvisorSensor(HeatingEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         return self.coordinator.advisor.quality()
+
+
+class RecommendationsSensor(HeatingEntity, SensorEntity):
+    """Counts only; recommendation text stays in the private store and read service."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "recommendations")
+
+    @property
+    def native_value(self):
+        return self.coordinator.advisor.recommendations.quality()["counts"]["proposed"]
+
+    @property
+    def extra_state_attributes(self):
+        quality = self.coordinator.advisor.recommendations.quality()
+        return {
+            "status": quality["status"],
+            **{f"{state}_count": n for state, n in quality["counts"].items()},
+            "latest_id": quality["latest_id"],
+            "eligible_for_evaluation": quality["eligible_for_evaluation"],
+            "evidence_type": "association",
+        }

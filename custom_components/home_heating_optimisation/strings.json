@@ -368,6 +368,9 @@
       },
       "advisor": {
         "name": "Advisor status"
+      },
+      "recommendations": {
+        "name": "Recommendations"
       }
     },
     "binary_sensor": {
@@ -453,6 +456,94 @@
     "rollback_controls": {
       "name": "Restore legacy controllers",
       "description": "Stop consolidated writes and re-enable the retained legacy controllers."
+    },
+    "decide_recommendation": {
+      "name": "Decide recommendation",
+      "description": "Record your decision on an advisor recommendation. Accepting changes no heating setting; make any change yourself through the controls and then mark it applied.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID from get_recommendations."
+        },
+        "decision": {
+          "name": "Decision",
+          "description": "accepted, rejected or deferred."
+        },
+        "note": {
+          "name": "Private note",
+          "description": "Optional reason (up to 500 characters), kept in private storage."
+        },
+        "defer_until": {
+          "name": "Defer until",
+          "description": "Optional date/time to revisit a deferred recommendation."
+        }
+      }
+    },
+    "mark_recommendation_applied": {
+      "name": "Mark recommendation applied",
+      "description": "Record that you carried out an accepted recommendation. Optionally link the journal event of the intervention. This action changes no heating setting.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID of an accepted recommendation."
+        },
+        "journal_event_id": {
+          "name": "Journal event ID",
+          "description": "Optional ID of the journal event recording the actual intervention."
+        },
+        "intervention_note": {
+          "name": "Private intervention note",
+          "description": "Optional description of what you changed (up to 500 characters), kept private."
+        }
+      }
+    },
+    "evaluate_recommendation": {
+      "name": "Evaluate recommendation",
+      "description": "Record the follow-up outcome for an applied recommendation over an evaluation window. Outcomes are associations, not causal proof.",
+      "fields": {
+        "recommendation_id": {
+          "name": "Recommendation ID",
+          "description": "ID of an applied recommendation."
+        },
+        "outcome": {
+          "name": "Outcome",
+          "description": "improved, no_change, worse, inconclusive or failed."
+        },
+        "window_start": {
+          "name": "Window start",
+          "description": "Start of the evaluation window."
+        },
+        "window_end": {
+          "name": "Window end",
+          "description": "End of the evaluation window."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Optional evaluation note (up to 500 characters)."
+        }
+      }
+    },
+    "get_recommendations": {
+      "name": "Get recommendations",
+      "description": "Return retained recommendations with decision history and follow-up eligibility. Private notes are excluded unless requested.",
+      "fields": {
+        "state": {
+          "name": "State",
+          "description": "Optional state filter."
+        },
+        "report_id": {
+          "name": "Report ID",
+          "description": "Optional advisor report ID filter."
+        },
+        "room_id": {
+          "name": "Room ID",
+          "description": "Optional room ID filter."
+        },
+        "include_private": {
+          "name": "Include private notes",
+          "description": "Include private decision and intervention notes in the response."
+        }
+      }
     }
   },
   "issues": {

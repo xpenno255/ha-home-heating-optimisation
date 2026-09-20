@@ -7,6 +7,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
 from .advisor.evidence import TASKS
+from .advisor.recommendations import DECISIONS, OUTCOMES, STATES
 from .analytics.const import MAX_ADJUSTMENTS
 from .const import DOMAIN
 
@@ -122,6 +123,99 @@ def async_register_services(hass):
         "get_advisor_reports",
         advisor_reports,
         schema=vol.Schema({vol.Optional("report_id"): cv.string}),
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    def recommendations():
+        return heating().advisor.recommendations
+
+    async def decide(call):
+        return await recommendations().decide(
+            call.data["recommendation_id"],
+            call.data["decision"],
+            note=call.data.get("note"),
+            defer_until=call.data.get("defer_until"),
+        )
+
+    async def applied(call):
+        return await recommendations().mark_applied(
+            call.data["recommendation_id"],
+            journal_event_id=call.data.get("journal_event_id"),
+            intervention_note=call.data.get("intervention_note"),
+        )
+
+    async def evaluate(call):
+        return await recommendations().evaluate(
+            call.data["recommendation_id"],
+            call.data["outcome"],
+            call.data["window_start"],
+            call.data["window_end"],
+            note=call.data.get("note"),
+        )
+
+    async def list_recommendations(call):
+        return recommendations().report_list(
+            state=call.data.get("state"),
+            report_id=call.data.get("report_id"),
+            room_id=call.data.get("room_id"),
+            include_private=call.data["include_private"],
+        )
+
+    note = vol.All(cv.string, vol.Length(min=1, max=500))
+    hass.services.async_register(
+        DOMAIN,
+        "decide_recommendation",
+        decide,
+        schema=vol.Schema(
+            {
+                vol.Required("recommendation_id"): cv.string,
+                vol.Required("decision"): vol.In(DECISIONS),
+                vol.Optional("note"): note,
+                vol.Optional("defer_until"): cv.datetime,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "mark_recommendation_applied",
+        applied,
+        schema=vol.Schema(
+            {
+                vol.Required("recommendation_id"): cv.string,
+                vol.Optional("journal_event_id"): cv.string,
+                vol.Optional("intervention_note"): note,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "evaluate_recommendation",
+        evaluate,
+        schema=vol.Schema(
+            {
+                vol.Required("recommendation_id"): cv.string,
+                vol.Required("outcome"): vol.In(OUTCOMES),
+                vol.Required("window_start"): cv.datetime,
+                vol.Required("window_end"): cv.datetime,
+                vol.Optional("note"): note,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "get_recommendations",
+        list_recommendations,
+        schema=vol.Schema(
+            {
+                vol.Optional("state"): vol.In(STATES),
+                vol.Optional("report_id"): cv.string,
+                vol.Optional("room_id"): cv.string,
+                vol.Optional("include_private", default=False): cv.boolean,
+            }
+        ),
         supports_response=SupportsResponse.ONLY,
     )
 

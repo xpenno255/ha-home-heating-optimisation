@@ -25,6 +25,7 @@ from .evidence import (
     validate_response,
 )
 from .profiles import profile_info, profiles
+from .recommendations import Recommendations
 
 MAX_REPORTS = 20
 
@@ -45,6 +46,7 @@ class Advisor:
         self.status = "disabled" if not self.config.get("enabled") else "ready"
         self.error_type = None
         self.storage_ready = True
+        self.recommendations = Recommendations(hass, entry, heating)
         self.closed = False
         self.running = None
         self.schedule_task = None
@@ -80,6 +82,8 @@ class Advisor:
         except Exception:
             self.storage_ready = False
             self.status = "storage_read_only"
+        # Recommendation storage is independent: its corruption never blocks reports.
+        await self.recommendations.initialise()
 
     def changed(self, status):
         self.status = status
@@ -95,6 +99,7 @@ class Advisor:
             if self.data["reports"]
             else None,
             "running": self.running is not None,
+            "recommendations": self.recommendations.quality(),
         }
 
     def report_list(self, report_id=None):
@@ -208,6 +213,8 @@ class Advisor:
             }
             self.data["reports"] = (self.data["reports"] + [report])[-MAX_REPORTS:]
             await self.persist()
+            # Never raises; a recommendation store failure cannot fail a stored report.
+            await self.recommendations.add_report(report)
             self.changed("ready")
             return deepcopy(report)
         except asyncio.CancelledError:

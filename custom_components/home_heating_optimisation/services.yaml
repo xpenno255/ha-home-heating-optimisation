@@ -40,6 +40,91 @@ get_advisor_reports:
       selector:
         text:
 
+decide_recommendation:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    decision:
+      required: true
+      selector:
+        select:
+          options:
+            - accepted
+            - rejected
+            - deferred
+    note:
+      selector:
+        text:
+          multiline: true
+    defer_until:
+      selector:
+        datetime:
+mark_recommendation_applied:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    journal_event_id:
+      selector:
+        text:
+    intervention_note:
+      selector:
+        text:
+          multiline: true
+evaluate_recommendation:
+  fields:
+    recommendation_id:
+      required: true
+      selector:
+        text:
+    outcome:
+      required: true
+      selector:
+        select:
+          options:
+            - improved
+            - no_change
+            - worse
+            - inconclusive
+            - failed
+    window_start:
+      required: true
+      selector:
+        datetime:
+    window_end:
+      required: true
+      selector:
+        datetime:
+    note:
+      selector:
+        text:
+          multiline: true
+get_recommendations:
+  fields:
+    state:
+      selector:
+        select:
+          options:
+            - proposed
+            - accepted
+            - rejected
+            - deferred
+            - applied
+            - evaluated
+    report_id:
+      selector:
+        text:
+    room_id:
+      selector:
+        text:
+    include_private:
+      default: false
+      selector:
+        boolean:
+
 preview_control_import:
 import_controls:
 get_control_report:
