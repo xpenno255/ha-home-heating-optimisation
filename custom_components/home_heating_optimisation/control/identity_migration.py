@@ -273,6 +273,10 @@ def _mapping_for(legacy_entry, reg, scopes):
     return key, scope, action, reason, hho_key
 
 
+def _hho_domain(hho_key):
+    return "binary_sensor" if hho_key == "dhw" else "sensor"
+
+
 async def plan(hass, entry):
     heating = entry.runtime_data
     controls = heating.controls
@@ -280,7 +284,6 @@ async def plan(hass, entry):
     store = await store_for(heating)
     scopes = _room_scopes(controls)
     mappings, blockers, unsupported = [], [], []
-    hho_domain_for = lambda key: "binary_sensor" if key == "dhw" else "sensor"  # noqa: E731
     for domain in LEGACY:
         for legacy_entry in hass.config_entries.async_entries(domain):
             supported = legacy_entry.version == SUPPORTED_VERSIONS[domain]
@@ -321,7 +324,7 @@ async def plan(hass, entry):
                 ):
                     item.update(action="skip", reason="legacy entity disabled by user")
                 if item["action"] == "transfer":
-                    dom = hho_domain_for(hho_key)
+                    dom = _hho_domain(hho_key)
                     item["hho_unique_id"] = f"{entry.entry_id}:control:{scope}:{hho_key}"
                     item["hho_entity_id_current"] = registry.async_get_entity_id(
                         dom, DOMAIN, item["hho_unique_id"]
