@@ -120,6 +120,8 @@ In particular, target overshoot includes setbacks/off-floor targets and cannot a
 establish heating-induced overheating. Demand coverage is different from demand
 active share. Matched-response eligibility does not determine recovery eligibility.
 No energy savings claims are supported without metered energy and suitable context.
+When meters are configured, an allowlisted `energy` fact carries coverage and
+comparability limits only; see [metered energy evidence](energy-evidence.md).
 Detected target-recovery episodes are not a count of all heating or burner cycles.
 Recent-change coverage cannot establish physical sensor freshness, since unchanged
 values may still be freshly reported. Current shadow/observation-only state cannot

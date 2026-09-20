@@ -10,7 +10,9 @@ Each room gets temperature/target coverage, demand coverage, time in band, deman
 active share, deficit/overshoot degree hours, observed warm-up rate, successful
 recovery time, recovery success, scored recovery count and matched concurrent
 response ratio. System sensors show analysis status, daily comparison and journal
-count. These are rolling-window values, not accumulating energy counters.
+count. These are rolling-window values, not accumulating energy counters. Metered
+energy, when meters are configured, is recorded separately; see
+[metered energy evidence](energy-evidence.md).
 
 Time-in-band and degree-hour sensors require at least 80% temperature/target
 coverage; demand share requires 80% demand coverage. Below that, sensors and exported

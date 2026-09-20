@@ -205,20 +205,26 @@ class EnergyEvidence(DataUpdateCoordinator):
             ]
         )
 
-    def context_sample(self, now):
+    def context_sample(self, now, at=None):
+        """Context at *now*; freshness follows the history state policy like analytics."""
         states = {
             e: s
             for k in CONTEXT_KEYS
             if (e := self.config.get(k)) and (s := self.hass.states.get(e))
         }
+        held = self.config.get("history_state_policy", "recorded_state") == "recorded_state"
         values = {}
         for key in CONTEXT_KEYS:
             spec = SYSTEM_SOURCES[key]
             values[key] = read(
-                states, self.config.get(key), now, kind=spec.kind, max_age=spec.max_age
+                states,
+                self.config.get(key),
+                now,
+                kind=spec.kind,
+                max_age=None if held else spec.max_age,
             ).value
         return (
-            now.timestamp(),
+            at if at is not None else now.timestamp(),
             values["heating_active"],
             values["dhw_active"],
             values["outdoor_temperature"],
@@ -269,8 +275,10 @@ class EnergyEvidence(DataUpdateCoordinator):
     def build_bucket(self, now):
         end = int(now.timestamp() // BUCKET_SECONDS) * BUCKET_SECONDS
         start = end - BUCKET_SECONDS
-        samples = ([self.carry] if self.carry else []) + sorted(self.samples)
-        samples.append(self.context_sample(now))
+        # The closing sample is pinned to the bucket end so it carries into the next
+        # bucket as its opening state; event samples at the boundary take precedence.
+        samples = ([self.carry] if self.carry else []) + sorted(self.samples, key=lambda s: s[0])
+        samples.append(self.context_sample(now, at=end))
         context = bucket_context(samples, start, end)
         self.carry = samples[-1]
         self.samples = []

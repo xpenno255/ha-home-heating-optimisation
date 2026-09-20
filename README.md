@@ -155,7 +155,9 @@ IDs or temperature history. Source provenance remains visible locally on sensors
 See [historical analytics](docs/historical-analytics.md) for metrics, freshness,
 Recorder backfill, retention and the `record_adjustment` / `get_report` actions.
 History is optional and disabled by default. Reports gate window-wide metrics below
-80% known-state coverage. Unchanged available values are held during clean Recorder
+80% known-state coverage. Optional metered energy with weather, DHW and configuration
+context is described in [metered energy evidence](docs/energy-evidence.md); it never
+produces a savings figure when context is insufficient. Unchanged available values are held during clean Recorder
 runs; recent-change coverage is exposed separately. This is not proof of fresh
 physical sampling. The prior recent-change expiry policy remains selectable. Controller estimates remain separate from measured room air.
 

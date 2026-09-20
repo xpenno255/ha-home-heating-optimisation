@@ -1,0 +1,4 @@
+- Added optional metered energy evidence: up to three energy or gas counters recorded as five-minute kWh buckets with reset, rollover, gap and unit handling, plus heating/DHW share, outdoor temperature, configuration era and intervention context (90 days, private store).
+- Added `sensor.home_heating_optimisation_energy_evidence_status`, per-meter daily kWh sensors and the `get_energy_report` action with coverage, heating degree hours and comparability limits.
+- Comparisons state their limits and return `insufficient` rather than a savings number when coverage, weather, DHW share, configuration era or meter source make periods non-comparable; kWh per degree hour is labelled an association, not causal evidence.
+- Heating Advisor evidence gained an allowlisted `energy` fact (coverage and limits only; never raw readings).

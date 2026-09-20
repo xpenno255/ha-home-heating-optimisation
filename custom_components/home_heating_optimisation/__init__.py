@@ -69,10 +69,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     registry = er.async_get(hass)
     valid_rooms = {room["id"] for room in coordinator.config["rooms"]}
     prefix = f"{entry.entry_id}:room:"
+    energy_prefix = f"{entry.entry_id}:system:energy_"
+    energy_keys = set()
+    if coordinator.energy:
+        energy_keys = {"energy_status"} | {
+            f"energy_{slug}_daily_kwh" for slug in coordinator.energy.slugs
+        }
     for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
         if entity.unique_id.startswith(prefix):
             room_id = entity.unique_id[len(prefix) :].split(":", 1)[0]
             if room_id not in valid_rooms:
+                registry.async_remove(entity.entity_id)
+        elif entity.unique_id.startswith(energy_prefix):
+            # Meters are explicit configuration; removed meters leave no orphan entity.
+            if entity.unique_id[len(energy_prefix) - len("energy_") :] not in energy_keys:
                 registry.async_remove(entity.entity_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.start(entry)
