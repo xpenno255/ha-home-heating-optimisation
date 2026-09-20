@@ -173,6 +173,11 @@ class OTCoordinatorData:
     # Target
     schedule_setpoint: float | None = None
     schedule_source: str = "none"
+    # Optional RF schedule download diagnostics (never on the control path).
+    schedule_fetch_status: str = "not_attempted"
+    schedule_fetch_failure_class: str | None = None
+    schedule_fetch_attempts: int = 0
+    schedule_next_retry_at: datetime | None = None
     model_version: str = COMFORT_MODEL_VERSION
     target_ot: float | None = None
     adaptive_shift: float = 0.0
@@ -1339,6 +1344,11 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                 },
                 origin="source",
             )
+        fetch = self._schedule_fetcher.snapshot()
+        d.schedule_fetch_status = fetch["status"]
+        d.schedule_fetch_failure_class = fetch["failure_class"]
+        d.schedule_fetch_attempts = fetch["attempts"]
+        d.schedule_next_retry_at = fetch["next_retry_at"]
         d.schedule_setpoint, d.zone_setpoint = zone.schedule_setpoint, zone.current_setpoint
         d.next_switchpoint_at, d.next_switchpoint_setpoint = (
             zone.next_switchpoint_at,
