@@ -1,6 +1,7 @@
 """Own both engines and gate every actuator write against live ownership."""
 
 import asyncio
+import logging
 from dataclasses import asdict
 from datetime import timedelta
 
@@ -15,6 +16,12 @@ from .boiler.hub import BoilerFlowHub
 from .comfort.coordinator import OTCoordinator
 from .comfort.hub import OTHubData
 from .store import ControlStore
+
+_LOGGER = logging.getLogger(__name__)
+
+# How long a user-facing service waits for a coordinator refresh before returning.
+# The refresh itself keeps running; only the wait is bounded.
+REFRESH_WAIT_TIMEOUT = 30.0
 
 LEGACY = ("ot_thermostat_control", "boiler_flow_control")
 ROOM_SENSORS = {
@@ -265,9 +272,25 @@ class Controls:
 
     async def refresh(self):
         if self.boiler:
-            await self.boiler.async_refresh()
-        for c in self.rooms.values():
-            await c.async_refresh()
+            await self._bounded_refresh(self.boiler, "boiler")
+        for scope, c in self.rooms.items():
+            await self._bounded_refresh(c, scope)
+
+    async def _bounded_refresh(self, coordinator, scope):
+        """Refresh without letting a wedged cycle hang the caller.
+
+        The refresh continues in the background (shielded) so a slow actuator is
+        still bounded by the coordinator's own timeouts; the caller stops waiting.
+        """
+        task = self.hass.async_create_task(coordinator.async_refresh())
+        try:
+            await asyncio.wait_for(asyncio.shield(task), REFRESH_WAIT_TIMEOUT)
+        except TimeoutError:
+            _LOGGER.warning(
+                "%s: refresh did not complete within %.0f s; continuing without waiting",
+                scope,
+                REFRESH_WAIT_TIMEOUT,
+            )
 
     async def set_mode(self, scope, mode):
         async with self.lock:
@@ -292,7 +315,7 @@ class Controls:
                 {"from": previous, "to": mode, "outcome": "applied"},
                 origin="user",
             )
-            await c.async_refresh()
+            await self._bounded_refresh(c, scope)
 
     def journal_event(self, kind, scope, data, origin="controller"):
         """Record a control-level event; failures are logged and never propagate."""

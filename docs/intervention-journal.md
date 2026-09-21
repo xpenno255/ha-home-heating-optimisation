@@ -40,7 +40,7 @@ are accepted by the API today.
   (with zone bounds, schedule setpoint, model air setpoint and measured air);
   `command_requested`, then `command_sent` and `command_result` from the single
   `ramses_cc.set_zone_mode` call (outcomes: `service_succeeded`, `service_failed`,
-  `blocked`, `no_actuator`, `refused_out_of_bounds`); a `readback` whenever the
+  `service_timeout`, `blocked`, `no_actuator`, `refused_out_of_bounds`); a `readback` whenever the
   readback status, timeout flag, pending or confirmed target changes (including
   `readback_no_echo` with `timed_out: true`, `confirmed`, `readback_reverted`);
   `manual_override` when a manual hold is set or cleared; `schedule_change` when the
@@ -49,7 +49,8 @@ are accepted by the API today.
   bounds, curve value, outdoor temperature and demand); a DHW `decision` with
   `subject: "dhw"` on each DHW activity/status transition; command events from the
   single `number.set_value` call; `readback` on write-status transitions
-  (`pending_readback`, `unconfirmed_readback`, `confirmed`, `service_failed`);
+  (`pending_readback`, `unconfirmed_readback`, `confirmed`, `service_failed`,
+  `service_timeout`);
   `manual_override` when the manual hold is detected or expires.
 - **Control runtime**: `mode_change` for every mode selection (from/to), `handover`
   and `rollback` from the ownership services, including interrupted handovers.

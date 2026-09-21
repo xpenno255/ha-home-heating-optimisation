@@ -4,6 +4,11 @@ from __future__ import annotations
 
 DOMAIN = "home_heating_optimisation"
 
+# Supervision bounds (seconds). A wedged actuator service must never hold a
+# control cycle, and a wedged cycle must never stop the coordinator scheduling.
+ACTUATOR_CALL_TIMEOUT = 30.0
+CYCLE_TIMEOUT = 120.0
+
 # Entry types
 ENTRY_TYPE_HUB = "hub"
 ENTRY_TYPE_ROOM = "room"

@@ -22,6 +22,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    ACTUATOR_CALL_TIMEOUT,
     CONF_BOILER_RELAY_ENTITY,
     CONF_BURNER_POWER_ENTITY,
     CONF_CURRENT_FLOW_ENTITY,
@@ -53,6 +54,7 @@ from .const import (
     CONF_RETURN_TEMP_ENTITY,
     CONF_ROOM_CLIMATE_ENTITIES,
     CONF_ZONE_DEMAND_ENTITIES,
+    CYCLE_TIMEOUT,
     DEFAULT_DESIGN_FLOW,
     DEFAULT_DESIGN_OUTDOOR,
     DEFAULT_DHW_DELTA,
@@ -183,6 +185,7 @@ class BFCCoordinatorData:
     efficiency_profile: str = PROFILE_DISABLED
     efficiency_return_temperature: float | None = None
     disabled_features: list[str] = field(default_factory=list)
+    fallbacks: list[str] = field(default_factory=list)
 
 
 class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
@@ -206,6 +209,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._hub = hub
         self.journal = journal
         self._journal_last: dict[str, Any] = {}
+        self._last_write_failure = "service_failed"
         # v0.2.1 review fix 9: options are the complete authoritative config once
         # set (the options flow always submits every field, absent ones cleared);
         # merging `{**entry.data, **entry.options}` let a key removed in options
@@ -488,14 +492,25 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         elif unit == "K":
             value += 273.15
         try:
-            await self.hass.services.async_call(
-                "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
-            )
+            async with asyncio.timeout(ACTUATOR_CALL_TIMEOUT):
+                await self.hass.services.async_call(
+                    "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
+                )
             _LOGGER.debug("BFC: wrote %.1f to %s (%s)", value, entity_id, decision.reason)
             self._journal("command_sent", {**command, "outcome": "service_succeeded"})
             self._journal("command_result", {**command, "outcome": "service_succeeded"})
             return True
+        except TimeoutError:
+            self._last_write_failure = "service_timeout"
+            _LOGGER.warning(
+                "BFC: number.set_value for %s did not return within %.0f s; treating as failed",
+                entity_id,
+                ACTUATOR_CALL_TIMEOUT,
+            )
+            self._journal("command_result", {**command, "outcome": "service_timeout"})
+            return False
         except Exception as exc:  # noqa: BLE001
+            self._last_write_failure = "service_failed"
             _LOGGER.warning("BFC: number.set_value failed for %s", entity_id)
             self._journal(
                 "command_result",
@@ -679,11 +694,23 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
 
     async def _async_update_data(self) -> BFCCoordinatorData:
         try:
+            # The lock is released by ``async with`` whichever way the cycle ends,
+            # including the cancellation that asyncio.timeout uses to enforce the bound.
             async with self._cycle_lock:
-                data = await self._cycle()
+                async with asyncio.timeout(CYCLE_TIMEOUT):
+                    data = await self._cycle()
                 # Source events can arrive while control writes or storage await.
                 self._update_efficiency(data, dt_util.utcnow())
                 return data
+        except TimeoutError:
+            _LOGGER.error("BFC: control cycle exceeded %.0f s and was abandoned", CYCLE_TIMEOUT)
+            self._journal("decision", {"outcome": "cycle_timeout", "timeout_s": CYCLE_TIMEOUT})
+            if self.data is not None:
+                note = "cycle timed out; showing last good data"
+                if note not in self.data.fallbacks:
+                    self.data.fallbacks = [*self.data.fallbacks, note]
+                return self.data
+            raise UpdateFailed("control cycle timed out") from None
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("BFC: update failed")
             raise UpdateFailed(str(exc)) from exc
@@ -1115,7 +1142,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                     else "pending_readback"
                 )
         elif decision.action is Action.WRITE:
-            d.write_status = "service_failed"
+            d.write_status = self._last_write_failure
         d.confirmed_setpoint = self._confirmed_target
         d.last_written_setpoint, d.last_write = (
             self._hub.last_written_setpoint,

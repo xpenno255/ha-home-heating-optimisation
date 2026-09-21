@@ -5,6 +5,10 @@ from __future__ import annotations
 DOMAIN = "home_heating_optimisation"
 VERSION = "0.3.0"
 
+# Supervision bounds (seconds); see comfort/const.py for the rationale.
+ACTUATOR_CALL_TIMEOUT = 30.0
+CYCLE_TIMEOUT = 120.0
+
 # ---------------------------------------------------------------------------
 # Configured entities (§5) — required
 # ---------------------------------------------------------------------------
