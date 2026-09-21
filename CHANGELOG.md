@@ -2,6 +2,14 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.7.1 - bounded actuator calls (commissioning prerelease)
+
+Patch for a live incident class: a wedged `ramses_cc` service pipeline left blocking `set_zone_mode` calls awaiting forever, so active room coordinators sat inside their control cycle for hours and the mode-selection service hung behind their refresh. No control decision or confirmation rule changes.
+
+- Every actuator service call (`ramses_cc.set_zone_mode`, `number.set_value`) is bounded at 30 s. A call that does not return is treated as a failed write: `write_status` and the journal `command_result` outcome are `service_timeout`, memory is not advanced, and the existing bounded retry applies on the next cycle.
+- Coordinators are self-diagnosing: a control cycle exceeding 120 s is abandoned with an error log and a journal `decision` with `outcome: cycle_timeout`; the last good data is returned with the note `cycle timed out; showing last good data` so scheduling continues and the cycle lock is always released.
+- `set_mode` and the startup refresh persist and apply the mode first and wait at most 30 s for the coordinator refresh; a wedged refresh logs a warning and the service still returns.
+
 ## 0.7.0 - evidence, advisor workflow, reliability and migration (commissioning prerelease)
 
 Closes the remaining software items of the [handover backlog (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Physical commissioning ([#13](https://github.com/xpenno255/ha-home-heating-optimisation/issues/13) 24-hour review, [#14](https://github.com/xpenno255/ha-home-heating-optimisation/issues/14) boiler/DHW) is still outstanding; nothing here activates control or claims measured savings.

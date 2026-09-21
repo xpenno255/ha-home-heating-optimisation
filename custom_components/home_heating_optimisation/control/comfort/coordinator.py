@@ -24,6 +24,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
+    ACTUATOR_CALL_TIMEOUT,
     AFTERNOON_END,
     CONF_ADAPTIVE_ENABLED,
     CONF_ASYMMETRY_ENABLED,
@@ -64,6 +65,7 @@ from .const import (
     CONF_WINDOW_SETPOINT,
     CONF_ZONE_SETPOINT_MAX,
     CONF_ZONE_SETPOINT_MIN,
+    CYCLE_TIMEOUT,
     DEFAULT_CAP,
     DEFAULT_GROUND_TEMP,
     DEFAULT_HOUSE_DIR,
@@ -1284,8 +1286,20 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             data = {"entity_id": primary, "mode": "follow_schedule"}
         try:
             self.write_status = "attempted"
-            await self.hass.services.async_call("ramses_cc", "set_zone_mode", data, blocking=True)
+            async with asyncio.timeout(ACTUATOR_CALL_TIMEOUT):
+                await self.hass.services.async_call(
+                    "ramses_cc", "set_zone_mode", data, blocking=True
+                )
             self.write_status = "service_succeeded"
+        except TimeoutError:
+            self.write_status = "service_timeout"
+            _LOGGER.warning(
+                "OT %s: ramses_cc.set_zone_mode did not return within %.0f s; treating as failed",
+                self.room_name,
+                ACTUATOR_CALL_TIMEOUT,
+            )
+            self._journal("command_result", {**command, "outcome": "service_timeout"})
+            return False
         except Exception as exc:  # noqa: BLE001
             self.write_status = "failed"
             _LOGGER.warning("OT %s: ramses_cc.set_zone_mode failed: %s", self.room_name, exc)
@@ -1332,8 +1346,24 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
     async def _async_update_data(self) -> OTCoordinatorData:
         try:
+            # The lock is released by ``async with`` whichever way the cycle ends,
+            # including the cancellation that asyncio.timeout uses to enforce the bound.
             async with self._cycle_lock:
-                return await self._cycle()
+                async with asyncio.timeout(CYCLE_TIMEOUT):
+                    return await self._cycle()
+        except TimeoutError:
+            _LOGGER.error(
+                "OT %s: control cycle exceeded %.0f s and was abandoned",
+                self.room_name,
+                CYCLE_TIMEOUT,
+            )
+            self._journal("decision", {"outcome": "cycle_timeout", "timeout_s": CYCLE_TIMEOUT})
+            if self.data is not None:
+                note = "cycle timed out; showing last good data"
+                if note not in self.data.fallbacks:
+                    self.data.fallbacks = [*self.data.fallbacks, note]
+                return self.data
+            raise UpdateFailed("control cycle timed out") from None
         except Exception as exc:  # noqa: BLE001
             _LOGGER.exception("OT %s: update failed", self.room_name)
             if self.data is not None:
@@ -1612,7 +1642,9 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                 # acknowledgement.  Preserve any older pending command for a
                 # later observation, while this attempted command is explicit.
                 self._readback_status = (
-                    "blocked" if self.write_status == "blocked" else "service_failed"
+                    self.write_status
+                    if self.write_status in ("blocked", "service_timeout")
+                    else "service_failed"
                 )
                 self.write_status = self._readback_status
                 memory = replace(
