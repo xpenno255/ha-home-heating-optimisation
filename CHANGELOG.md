@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.8.1 - DHW schedule allows on/off automations (commissioning prerelease)
+
+- Automations and scripts that only switch DHW on, off or to boost (`water_heater.set_operation_mode`, `ramses_cc.set_dhw_mode`/`reset_dhw_mode`/`set_dhw_boost`, on/off device actions) no longer block the DHW target schedule. Only target writers (`ramses_cc.set_dhw_params`/`reset_dhw_params`, `water_heater.set_temperature`, temperature device actions) block it.
+- A boost active at window start still delays the raise until it ends, within the window.
+
 ## 0.8.0 - DHW target schedule (commissioning prerelease)
 
 Optional, off by default. Nothing changes until it is enabled in **Configure → DHW target schedule**.

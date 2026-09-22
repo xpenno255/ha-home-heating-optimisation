@@ -24,7 +24,7 @@ Enabling, or changing the normal target, permits one write of the normal target 
 
 How a session runs:
 
-- At window start on a selected day, if handover is complete, no automation or script writes that water heater, no manual DHW override is active and the target is the normal value, HHO records the date and its intent, then raises the target. Starting HA mid-window skips that day. Each date is used at most once, including across DST changes.
+- At window start on a selected day, if handover is complete, no automation or script changes that water heater's target temperature, no temporary DHW override (such as a boost) is active and the target is the normal value, HHO records the date and its intent, then raises the target. Automations that only switch DHW on, off or to boost are allowed. A boost active at window start delays the raise until it ends, within the window. Starting HA mid-window skips that day. Each date is used at most once, including across DST changes.
 - It restores the normal target early once demand was seen, the measured temperature reached the higher target and demand has stayed off for 10 continuous minutes, or when Evohome's schedule turns DHW off after charging. Otherwise it restores at window end. Outcomes are `complete`, `incomplete`, `no_charge`, `target_not_reached`, `insufficient_evidence` or `interrupted`.
 - A target changed by anyone else is left alone: the schedule pauses (`paused`) until it is disabled and re-enabled or the normal target changes.
 - Unload, reload or restart restores an owned raised target first and never re-raises that session. Recovery still runs if the feature was disabled or removed.
