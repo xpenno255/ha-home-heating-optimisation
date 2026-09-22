@@ -36,6 +36,11 @@ from .control.configuration import (
     validate_control_rooms,
 )
 from .control.store import ControlStore
+from .dhw.policy import DEFAULTS as DHW_DEFAULTS
+from .dhw.policy import MAX_TARGET as DHW_MAX_TARGET
+from .dhw.policy import MIN_TARGET as DHW_MIN_TARGET
+from .dhw.policy import SECTION as DHW_SECTION
+from .dhw.policy import WEEKDAYS, dhw_config, read_params, validation_error
 from .energy.const import (
     DEFAULT_CALORIFIC_MJ_M3,
     DEFAULT_VOLUME_CORRECTION,
@@ -328,7 +333,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         self.current = effective_config(self.config_entry)
         return self.async_show_menu(
             step_id="init",
-            menu_options=["mapping", "control", "advisor", "gateways", "energy"],
+            menu_options=["mapping", "control", "advisor", "gateways", "energy", "dhw_schedule"],
         )
 
     async def async_step_mapping(self, user_input=None):
@@ -792,6 +797,67 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         }
         return self.async_show_form(
             step_id="gateways", errors=errors, data_schema=vol.Schema(schema)
+        )
+
+    async def async_step_dhw_schedule(self, user_input=None):
+        """Optional weekly higher cylinder target; Evohome keeps the DHW schedule."""
+        self.current = effective_config(self.config_entry)
+        old = dhw_config(self.current)
+        errors = {}
+        if user_input is not None:
+            values = {**DHW_DEFAULTS, **user_input}
+            values["weekdays"] = list(user_input.get("weekdays") or [])
+            entities = [values.get(k) for k in ("water_heater_entity", "demand_entity")]
+            entities.append(values.get("cylinder_temp_entity"))
+            error = validation_error(values)
+            if error is None and self.invalid_sources(entities):
+                error = "invalid_source"
+            if (
+                error is None
+                and values["enabled"]
+                and read_params(self.hass.states.get(values["water_heater_entity"])) is None
+            ):
+                error = "dhw_params_unavailable"
+            if error:
+                errors["base"] = error
+            else:
+                section = dhw_config({DHW_SECTION: values})
+                # Only an explicit enable or a new normal target permits one normal-target
+                # write and re-arms a paused schedule; other saves keep the revision.
+                rearm = section["enabled"] and (
+                    not old["enabled"] or section["normal_target"] != old["normal_target"]
+                )
+                section["revision"] = uuid4().hex if rearm else old["revision"]
+                return self.async_create_entry(
+                    title=NAME, data={**self.current, DHW_SECTION: section}
+                )
+        boiler = ((self.current.get("control") or {}).get("boiler") or {}).get("config") or {}
+        target = boiler.get("cylinder_target_entity") or ""
+        suggested = {
+            "water_heater_entity": old["water_heater_entity"]
+            or (target if target.startswith("water_heater.") else None),
+            "demand_entity": old["demand_entity"] or boiler.get("hw_relay_demand_entity"),
+            "cylinder_temp_entity": old["cylinder_temp_entity"]
+            or boiler.get("cylinder_temp_entity"),
+        }
+        temperature = vol.All(vol.Coerce(float), vol.Range(min=DHW_MIN_TARGET, max=DHW_MAX_TARGET))
+        schema = {
+            vol.Optional("enabled", default=old["enabled"]): bool,
+            optional("water_heater_entity", suggested): entity_selector(("water_heater",)),
+            optional("demand_entity", suggested): entity_selector(("binary_sensor", "sensor")),
+            optional("cylinder_temp_entity", suggested): entity_selector(("sensor",)),
+            vol.Required("normal_target", default=old["normal_target"]): temperature,
+            vol.Required("high_target", default=old["high_target"]): temperature,
+            vol.Optional("weekdays", default=old["weekdays"]): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(WEEKDAYS), multiple=True, translation_key="dhw_weekdays"
+                )
+            ),
+            vol.Required("window_start", default=old["window_start"]): selector.TimeSelector(),
+            vol.Required("window_end", default=old["window_end"]): selector.TimeSelector(),
+        }
+        return self.async_show_form(
+            step_id="dhw_schedule", errors=errors, data_schema=vol.Schema(schema)
         )
 
     async def async_step_advisor(self, user_input=None):

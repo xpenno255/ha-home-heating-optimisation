@@ -13,7 +13,7 @@ optional Heating Advisor remain available independently.
 
 See [control setup and handover](docs/control-and-handover.md),
 [controller configuration](docs/control-configuration.md), and
-[commissioning](docs/commissioning.md). The current release is v0.7.1, a commissioning prerelease: software validation is complete, but physical heating performance still requires a supervised trial. New setup and import both start in shadow. See the [changelog](CHANGELOG.md) and the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12) for what has shipped and what remains.
+[commissioning](docs/commissioning.md). The current release is v0.8.0, a commissioning prerelease: software validation is complete, but physical heating performance still requires a supervised trial. New setup and import both start in shadow. See the [changelog](CHANGELOG.md) and the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12) for what has shipped and what remains.
 
 ## Install
 
@@ -40,7 +40,7 @@ This repository supports HACS custom-repository installation; it is not included
 in HACS's default catalogue. It includes standard and high-resolution local brand
 icons, following the [Home Assistant branding guidance](https://developers.home-assistant.io/docs/core/integration/brand_images/).
 
-HACS installs the component from the selected release tag. The release ZIP is an alternative for manual installation. The 0.6.x and 0.7.x releases (currently v0.7.1) are published as prereleases; enable prerelease visibility in HACS or the HACS update entity will keep reporting the last stable 0.5.x tag as latest. A prerelease is not a claim of completed physical commissioning.
+HACS installs the component from the selected release tag. The release ZIP is an alternative for manual installation. The 0.6.x, 0.7.x and 0.8.x releases (currently v0.8.0) are published as prereleases; enable prerelease visibility in HACS or the HACS update entity will keep reporting the last stable 0.5.x tag as latest. A prerelease is not a claim of completed physical commissioning.
 Keep the existing controllers installed until the control import, shadow comparison
 and handover have been verified. The published v0.5.x releases are observation-only.
 

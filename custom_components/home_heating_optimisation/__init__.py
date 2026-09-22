@@ -13,6 +13,7 @@ from .analytics.coordinator import AnalyticsCoordinator
 from .const import DOMAIN
 from .control.runtime import Controls
 from .coordinator import HeatingCoordinator
+from .dhw.coordinator import DhwSchedule
 from .energy.coordinator import EnergyEvidence
 from .energy.meter import meter_specs
 from .gateway.monitor import GatewayMonitor
@@ -62,6 +63,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     # Any trial persisted as running is rolled back here; a restart never resumes one.
     coordinator.trials = Trials(hass, entry, coordinator)
     await coordinator.trials.initialise()
+    # Always loaded, even when disabled, so a persisted DHW elevation is still restored.
+    coordinator.dhw = DhwSchedule(hass, entry, coordinator)
+    await coordinator.dhw.initialise()
+    entry.async_on_unload(coordinator.dhw.close)
     await coordinator.async_config_entry_first_refresh()
     await coordinator.load_house()
     if coordinator.config.get("analytics_enabled", False):
@@ -105,6 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator.telemetry.listeners.append(lambda: coordinator.changed(None))
     await coordinator.controls.start()
     coordinator.trials.start()
+    coordinator.dhw.start()
     coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()
@@ -126,6 +132,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     # Roll running trials back to baseline while the controllers can still be written.
     if entry.runtime_data.trials:
         await entry.runtime_data.trials.stop()
+    if entry.runtime_data.dhw:
+        await entry.runtime_data.dhw.stop()
     await entry.runtime_data.controls.stop()
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded and entry.runtime_data.advisor:

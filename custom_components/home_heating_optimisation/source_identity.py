@@ -22,6 +22,8 @@ from homeassistant.helpers import entity_registry as er
 
 from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, SYSTEM_SOURCES
+from .dhw.policy import ENTITY_FIELDS as DHW_FIELDS
+from .dhw.policy import SECTION as DHW_SECTION
 
 # The key is intentionally outside hass.data[DOMAIN].  Controls temporarily
 # own that value during setup and replace it with their runtime namespace.
@@ -140,6 +142,9 @@ def update_source_references(
         boiler = control.get("boiler")
         if isinstance(boiler, dict):
             _replace_fields(boiler.get("config"), BOILER_FIELDS, old_entity_id, new_entity_id)
+
+    # A persisted DHW transaction follows its actuator by registry id instead.
+    _replace_fields(updated.get(DHW_SECTION), DHW_FIELDS, old_entity_id, new_entity_id)
 
     # mqtt_sources contains discovered bindings.  The topic and field are
     # retained because a registry rename does not change MQTT transport.
