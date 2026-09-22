@@ -36,15 +36,12 @@ ROOM_SENSORS = {
     "offset_final": "K",
     "flow_temp_used": "°C",
 }
-# Every supported service that can change a DHW setpoint or mode.
+# Every supported service that can change the DHW target. Mode, boost and on/off
+# changes leave the target alone; an active manual override is checked separately.
 DHW_SERVICES = {
     "ramses_cc.set_dhw_params",
     "ramses_cc.reset_dhw_params",
-    "ramses_cc.set_dhw_mode",
-    "ramses_cc.reset_dhw_mode",
-    "ramses_cc.set_dhw_boost",
     "water_heater.set_temperature",
-    "water_heater.set_operation_mode",
 }
 BOILER_SENSORS = {
     "mode": None,
@@ -274,11 +271,11 @@ class Controls:
         if self.conflicts():
             return "legacy controllers are still enabled"
         if self.dhw_automation_conflicts(entity):
-            return "an enabled automation or script may change the DHW target or mode"
+            return "an enabled automation or script may change the DHW target"
         return None
 
     def dhw_automation_conflicts(self, entity):
-        """Loaded automations/scripts whose actions may write the water heater."""
+        """Loaded automations/scripts whose actions may change the water heater's target."""
         registry = er.async_get(self.hass)
         registered = registry.async_get(entity)
         device = registered.device_id if registered else None
@@ -308,7 +305,12 @@ class Controls:
                     device and device in names(data.get("device_id"))
                 ):
                     return True
-            if value.get("domain") in ("water_heater", "ramses_cc") and "type" in value:
+            kind = value.get("type")
+            if (
+                value.get("domain") in ("water_heater", "ramses_cc")
+                and isinstance(kind, str)
+                and ("temperature" in kind or "param" in kind)
+            ):
                 # Device actions name the entity by registry id.
                 if targets(value.get("entity_id")) or (device and value.get("device_id") == device):
                     return True

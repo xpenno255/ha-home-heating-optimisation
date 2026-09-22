@@ -313,13 +313,35 @@ async def test_conflicting_automation_blocks_raise(hass, controlled, sources, fr
     await at(hass, freezer, schedule, monday(4))
     assert writes == []
     assert "automation" in schedule.report()["blocked"]
-    automation.raw_config = {"actions": [{"action": "ramses_cc.set_dhw_mode"}]}
-    assert controls.dhw_automation_conflicts(WH)
-    automation.raw_config = {"actions": [{"action": "light.turn_on", "target": {"entity_id": WH}}]}
-    assert controls.dhw_automation_conflicts(WH) == []
+    for service in ("ramses_cc.set_dhw_params", "ramses_cc.reset_dhw_params"):
+        automation.raw_config = {"actions": [{"action": service}]}
+        assert controls.dhw_automation_conflicts(WH)
+    # On/off, mode and boost writers (e.g. a voice boost) leave the target alone.
+    for action in (
+        {"action": "light.turn_on", "target": {"entity_id": WH}},
+        {"action": "water_heater.set_operation_mode", "target": {"entity_id": WH}},
+        {"action": "water_heater.turn_on", "target": {"entity_id": WH}},
+        {"action": "ramses_cc.set_dhw_mode", "data": {"mode": "permanent_override"}},
+        {"action": "ramses_cc.set_dhw_boost", "target": {"entity_id": WH}},
+        {"action": "ramses_cc.reset_dhw_mode"},
+        {"domain": "water_heater", "type": "turn_off", "entity_id": registered.id},
+    ):
+        automation.raw_config = {"actions": [action]}
+        assert controls.dhw_automation_conflicts(WH) == [], action
     # Room and boiler guards are unaffected by DHW-only writers.
     automation.raw_config = {"actions": [{"action": "ramses_cc.set_dhw_params"}]}
     assert controls.automation_conflicts("boiler") == []
+
+
+async def test_boost_at_window_start_delays_raise(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    heater(hass, mode="temporary_override")
+    await at(hass, freezer, schedule, monday(4))
+    assert writes == [] and schedule.status == "armed"
+    heater(hass)
+    await at(hass, freezer, schedule, monday(5))
+    assert writes == [{"entity_id": WH, "setpoint": 60.0, "overrun": 2, "differential": 7.5}]
+    assert schedule.status == "elevated"
 
 
 async def test_boiler_uses_scheduled_water_heater_target(hass, controlled, sources, freezer):  # noqa: F811
