@@ -46,6 +46,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
         from .gateway.entities import sensors as gateway_sensors
 
         entities.extend(gateway_sensors(coordinator.gateways))
+    if coordinator.dhw is not None:
+        from .dhw.sensor import DhwScheduleSensor
+
+        entities.append(DhwScheduleSensor(coordinator.dhw))
     async_add_entities(entities)
 
 

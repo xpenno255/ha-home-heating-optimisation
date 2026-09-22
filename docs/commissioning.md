@@ -29,3 +29,7 @@ Record trial time, enabled functions, observations, failures and any chosen tuni
 ## Bounded tuning trials
 
 Once a room is active or the boiler is in auto and commissioning is accepted, single-parameter tuning changes can be run as explicitly approved, self-reverting trials; see [Bounded heating trials](bounded-trials.md). A trial never activates control, never changes modes or DHW protection, and rolls back on expiry, on any stop criterion, on restart and on unload.
+
+## DHW target schedule
+
+Before enabling, note the water heater's current setpoint, overrun and differential and check no automation, script or other client changes them. Enable with one weekday and watch the first session: the target should rise at window start, the parameters other than setpoint should be unchanged, and the normal target should be back after the session (allow about a minute for HA to show each change). Check the sensor's outcome. If `recovery_pending` appears or a repair is raised, set the normal target on the controller yourself and confirm it has been read back. Disabling stops new sessions but does not undo an intentionally applied normal target. See [Control configuration](control-configuration.md#dhw-target-schedule) for behaviour and limits.

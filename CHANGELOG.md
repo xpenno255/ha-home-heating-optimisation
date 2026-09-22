@@ -2,6 +2,17 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.8.0 - DHW target schedule (commissioning prerelease)
+
+Optional, off by default. Nothing changes until it is enabled in **Configure → DHW target schedule**.
+
+- Normal cylinder target (default 50°C) plus a higher target (default 60°C) in a local-time window (default 04:00–06:00) on selected weekdays (none by default). Evohome keeps its DHW schedule and on/off control; HHO only changes the setpoint via `ramses_cc.set_dhw_params`, always resending the observed overrun and differential. No mode, boost, reset or schedule calls.
+- The raise happens once per date at window start, only with handover complete, no competing automation/script writer, no manual DHW override and the normal target in place. Intent is saved before any write; a save failure means no write. Starting mid-window skips that day.
+- Normal is restored after observed charging, the measured cylinder temperature reaching the higher target and 10 minutes of continuous off demand, or when Evohome's schedule turns DHW off, or at window end. Outcomes: `complete`, `incomplete`, `no_charge`, `target_not_reached`, `insufficient_evidence`, `interrupted`.
+- Any external target change pauses the schedule rather than being overwritten. Unload, reload and restart restore an owned raised target and never re-raise; recovery runs even if the feature was disabled or removed. Unconfirmed restores retry, then raise a `dhw_schedule_restore` repair.
+- `sensor.home_heating_optimisation_dhw_schedule` and a `dhw_schedule` block in `get_control_report`. When enabled, the boiler engine reads the cylinder target from the selected water heater and flags it unconfirmed while a change is pending.
+- Target scheduling only: not guaranteed thermal disinfection or legionella protection. See `docs/control-configuration.md`.
+
 ## 0.7.1 - bounded actuator calls (commissioning prerelease)
 
 Patch for a live incident class: a wedged `ramses_cc` service pipeline left blocking `set_zone_mode` calls awaiting forever, so active room coordinators sat inside their control cycle for hours and the mode-selection service hung behind their refresh. No control decision or confirmation rule changes.

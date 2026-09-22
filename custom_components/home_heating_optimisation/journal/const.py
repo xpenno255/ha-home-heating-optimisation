@@ -32,6 +32,7 @@ KINDS = (
     "advisor_report",
     "advisor_followup",
     "migration",
+    "dhw_schedule",
 )
 ORIGINS = ("controller", "user", "service", "source", "advisor", "unknown")
 UNKNOWN = "unknown"

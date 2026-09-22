@@ -202,8 +202,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         state_reader=None,
         write_guard=None,
         journal=None,
+        target_pending=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
+        self._target_pending = target_pending or (lambda: False)
         self._entry = entry
         self._store = store
         self._hub = hub
@@ -814,6 +816,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         )
         if target_entity and target_reading is None:
             disabled.append("cylinder target unavailable; using configured target")
+        if self._target_pending():
+            # A requested target is not confirmed until the controller's reply is observed.
+            disabled.append("cylinder target change requested; controller reply not yet confirmed")
         self._charge.update(
             d.dhw_active,
             d.cylinder_temp,

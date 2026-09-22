@@ -81,7 +81,8 @@
           "control": "Comfort and boiler control",
           "advisor": "Heating Advisor",
           "gateways": "Gateway monitoring",
-          "energy": "Metered energy evidence"
+          "energy": "Metered energy evidence",
+          "dhw_schedule": "DHW target schedule"
         }
       },
       "room": {
@@ -298,6 +299,27 @@
           "meter_3_kind": "Meter 3 measures",
           "meter_3_unit": "Meter 3 unit override"
         }
+      },
+      "dhw_schedule": {
+        "title": "DHW target schedule",
+        "description": "Raises the stored hot water target on the selected weekdays for the start-of-day heating window only, then returns it to the normal target. Evohome keeps its own DHW schedule, on/off control and cutoff; only the cylinder setpoint is changed, through RAMSES, keeping the current overrun and differential. No weekdays selected means no higher sessions. This is target scheduling, not guaranteed thermal disinfection or legionella protection.",
+        "data": {
+          "enabled": "Enable the DHW target schedule",
+          "water_heater_entity": "RAMSES stored hot water entity",
+          "demand_entity": "Physical DHW demand (for example the hot water relay)",
+          "cylinder_temp_entity": "Measured cylinder temperature",
+          "normal_target": "Normal target (\u00b0C)",
+          "high_target": "Higher target (\u00b0C)",
+          "weekdays": "Higher-target weekdays",
+          "window_start": "Window start (local time)",
+          "window_end": "Window end (local time)"
+        },
+        "data_description": {
+          "enabled": "Turning this on, or changing the normal target, sets the normal target once. Other saves and restarts never reapply it. If someone else changes the target, the schedule pauses until it is turned off and on again.",
+          "demand_entity": "Used as charging evidence. The water heater's on state only means heating is allowed, so it is not used for this.",
+          "high_target": "Raised at the window start. It returns to normal once the first charge has reached this temperature and demand has been off for 10 minutes, or when Evohome turns DHW off, or at the window end.",
+          "window_end": "A restart or settings change during a session returns the target to normal and does not resume the session."
+        }
       }
     },
     "error": {
@@ -325,7 +347,11 @@
       "invalid_energy_meter": "Choose sensor entities with the energy or gas device class that currently have a state.",
       "duplicate_energy_meter": "Each meter sensor can only be selected once.",
       "missing_notify_event": "Select at least one notification event, or turn notifications off.",
-      "invalid_notify_target": "Notification services must be notify.* services."
+      "invalid_notify_target": "Notification services must be notify.* services.",
+      "dhw_invalid_targets": "Targets must be between 35 and 85 \u00b0C in 0.5 \u00b0C steps, and the higher target must be above the normal target.",
+      "dhw_invalid_window": "The window must start before it ends, within one day.",
+      "dhw_missing_entity": "Select the water heater, demand and cylinder temperature entities to enable the schedule.",
+      "dhw_params_unavailable": "The water heater does not report its setpoint, overrun and differential. Check RAMSES before enabling."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
@@ -451,6 +477,19 @@
       },
       "trials": {
         "name": "Trials"
+      },
+      "dhw_schedule": {
+        "name": "DHW target schedule",
+        "state": {
+          "disabled": "Disabled",
+          "armed": "Armed",
+          "paused": "Paused (external change)",
+          "elevated": "Higher target requested",
+          "restoring": "Restoring normal target",
+          "recovery_pending": "Restore not confirmed",
+          "storage_read_only": "Storage unavailable",
+          "misconfigured": "Not configured"
+        }
       }
     },
     "binary_sensor": {
@@ -890,6 +929,10 @@
     "trial_rollback_failed": {
       "title": "Heating trial rollback could not be verified",
       "description": "The {scope} trial of {parameter} could not restore its baseline value {value}. Check the control number entity and set it back manually, then stop the trial."
+    },
+    "dhw_schedule_restore": {
+      "title": "DHW target could not be restored",
+      "description": "The DHW target schedule could not confirm that {entity} returned to {target} \u00b0C. Check the stored hot water setpoint in Evohome and set it back manually if needed. The schedule keeps trying and clears this when the normal target is observed."
     }
   },
   "selector": {
@@ -905,6 +948,17 @@
         "report_ready": "Report ready",
         "report_failed": "Report failed (timeout or invalid response)",
         "provider_failed": "Provider call failed"
+      }
+    },
+    "dhw_weekdays": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
       }
     }
   }

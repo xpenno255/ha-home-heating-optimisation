@@ -11,6 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
+from ..dhw.policy import dhw_config, usable
 from .boiler.coordinator import BFCCoordinator
 from .boiler.hub import BoilerFlowHub
 from .comfort.coordinator import OTCoordinator
@@ -34,6 +35,16 @@ ROOM_SENSORS = {
     "schedule_setpoint": "°C",
     "offset_final": "K",
     "flow_temp_used": "°C",
+}
+# Every supported service that can change a DHW setpoint or mode.
+DHW_SERVICES = {
+    "ramses_cc.set_dhw_params",
+    "ramses_cc.reset_dhw_params",
+    "ramses_cc.set_dhw_mode",
+    "ramses_cc.reset_dhw_mode",
+    "ramses_cc.set_dhw_boost",
+    "water_heater.set_temperature",
+    "water_heater.set_operation_mode",
 }
 BOILER_SENSORS = {
     "mode": None,
@@ -114,6 +125,11 @@ class Controls:
             "rooms": {},
         }
         boiler_spec = self.config["boiler"]
+        boiler_config = dict(boiler_spec["config"])
+        dhw = dhw_config(self.heating.config)
+        if usable(dhw):
+            # The scheduled water heater reports the controller's current cylinder target.
+            boiler_config["cylinder_target_entity"] = dhw["water_heater_entity"]
         boiler_seed = dict(boiler_spec.get("seed", {}))
         boiler_seed.setdefault("enabled", boiler_spec.get("enabled", True))
         store = await self.store("boiler", boiler_seed)
@@ -124,10 +140,11 @@ class Controls:
             self.entry,
             store,
             hub,
-            config=self.config["boiler"]["config"],
+            config=boiler_config,
             state_reader=self.heating.telemetry.get,
             write_guard=lambda: self.can_write("boiler"),
             journal=getattr(self.heating, "journal", None),
+            target_pending=lambda: bool(getattr(self.heating.dhw, "uncertain", False)),
         )
         # Do not act while configuration and all entities are still restoring.
         self.boiler.override = "shadow"
@@ -237,6 +254,72 @@ class Controls:
                     continue
                 if writes(getattr(entity, "raw_config", {})):
                     found.append(entity.entity_id)
+        return found
+
+    def dhw_guard_reason(self, entity, restore=False):
+        """Separate DHW gate; never routed through the boiler-flow or room checks.
+
+        Restoring an owned temporary target only needs the integration running.
+        """
+        if self.closed:
+            return "control shutdown in progress"
+        if restore:
+            return None
+        if not self.ready:
+            return "control setup or shutdown in progress"
+        if not self.settings.ready:
+            return "control storage unavailable"
+        if self.settings.get("ownership") != "ready":
+            return "complete legacy handover first"
+        if self.conflicts():
+            return "legacy controllers are still enabled"
+        if self.dhw_automation_conflicts(entity):
+            return "an enabled automation or script may change the DHW target or mode"
+        return None
+
+    def dhw_automation_conflicts(self, entity):
+        """Loaded automations/scripts whose actions may write the water heater."""
+        registry = er.async_get(self.hass)
+        registered = registry.async_get(entity)
+        device = registered.device_id if registered else None
+
+        def names(value):
+            if isinstance(value, str):
+                return [value]
+            return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+        def targets(entities):
+            return any(
+                "{{" in e or er.async_resolve_entity_id(registry, e) == entity
+                for e in names(entities)
+            )
+
+        def writes(value):
+            if isinstance(value, list):
+                return any(writes(v) for v in value)
+            if not isinstance(value, dict):
+                return False
+            service = value.get("action", value.get("service"))
+            if isinstance(service, str) and service in DHW_SERVICES:
+                data = {**value.get("data", {}), **value.get("target", {})}
+                if data.get("entity_id") is None and data.get("device_id") is None:
+                    return True
+                if targets(data.get("entity_id")) or (
+                    device and device in names(data.get("device_id"))
+                ):
+                    return True
+            if value.get("domain") in ("water_heater", "ramses_cc") and "type" in value:
+                # Device actions name the entity by registry id.
+                if targets(value.get("entity_id")) or (device and value.get("device_id") == device):
+                    return True
+            return any(writes(v) for v in value.values() if isinstance(v, (dict, list)))
+
+        found = []
+        for domain in ("automation", "script"):
+            component = self.hass.data.get(domain)
+            for item in getattr(component, "entities", []):
+                if item.is_on and writes(getattr(item, "raw_config", {})):
+                    found.append(item.entity_id)
         return found
 
     def can_write(self, scope):
@@ -355,7 +438,17 @@ class Controls:
                 if c.data
             },
             "gateways": self.gateway_report(),
+            "dhw_schedule": self.dhw_report(),
         }
+
+    def dhw_report(self):
+        schedule = getattr(self.heating, "dhw", None)
+        if schedule is None:
+            return {"status": "unconfigured"}
+        try:
+            return schedule.report()
+        except Exception as err:  # noqa: BLE001 - reporting must not break the report
+            return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 
     def gateway_report(self):
         monitor = getattr(self.heating, "gateways", None)
