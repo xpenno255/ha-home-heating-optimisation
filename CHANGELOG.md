@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.8.2 - only external openings affect room control (commissioning prerelease)
+
+- Internal door contacts no longer change room control. Previously any contact under `sensors.contacts` that was not an opening's `contact_sensor` was treated as an adjacent door and made the room write its plain schedule target (`door_open`), so an open kitchen-to-hall door stopped the kitchen optimising.
+- Only contacts attached to external openings (windows and outdoor doors, via `openings.items[].contact_sensor`) count. They drive the existing window override: after the open delay the room drops to the window setpoint (default 10°C) and returns after the close delay.
+- The `door_open` room state and the `adjacent_door_open` diagnostic are removed.
+
 ## 0.8.1 - DHW schedule allows on/off automations (commissioning prerelease)
 
 - Automations and scripts that only switch DHW on, off or to boost (`water_heater.set_operation_mode`, `ramses_cc.set_dhw_mode`/`reset_dhw_mode`/`set_dhw_boost`, on/off device actions) no longer block the DHW target schedule. Only target writers (`ramses_cc.set_dhw_params`/`reset_dhw_params`, `water_heater.set_temperature`, temperature device actions) block it.

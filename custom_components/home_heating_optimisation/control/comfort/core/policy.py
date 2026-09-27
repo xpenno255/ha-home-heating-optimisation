@@ -19,7 +19,6 @@ class State(str, Enum):
     OUTSIDE_WINDOW = "outside_window"
     MANUAL = "manual"
     WINDOW_OPEN = "window_open"
-    DOOR_OPEN = "door_open"
     PREHEAT = "preheat"
     SHADOW = "shadow"
     ACTIVE = "active"
@@ -93,7 +92,6 @@ class PolicyInputs:
     zone: ZoneState
     memory: OverrideMemory
     any_window_open: bool = False
-    any_adjacent_door_open: bool = False
     # The primary thermostat returned to the exact, still-valid HHO command
     # captured before our latest write.  The coordinator only sets this after
     # observing a different service-local projection first, so the return is a
@@ -400,7 +398,7 @@ def decide(inp: PolicyInputs) -> Decision:
         if back_at_schedule or echo_of_ours:
             m = replace(m, manual_detected_at=None, manual_release_at=None, manual_setpoint=None)
 
-    # 4. Window / door overrides beat the model.
+    # 4. Window override (windows and external doors) beats the model.
     if _window_override_active(m, inp):
         target = p.window_setpoint
         state, reason = (
@@ -417,19 +415,6 @@ def decide(inp: PolicyInputs) -> Decision:
                 would_write=_bound(target, p),
             )
         return _write(state, target, reason, inp, m)
-
-    if inp.any_adjacent_door_open and inp.zone.schedule_setpoint is not None:
-        target = inp.zone.schedule_setpoint
-        if inp.shadow_mode:
-            return Decision(
-                State.SHADOW,
-                Action.NONE,
-                None,
-                "adjacent door open (shadow)",
-                m,
-                would_write=_bound(target, p),
-            )
-        return _write(State.DOOR_OPEN, target, "adjacent door open; plain schedule target", inp, m)
 
     # 5. Nothing to correct with.
     if inp.computed_setpoint is None:
