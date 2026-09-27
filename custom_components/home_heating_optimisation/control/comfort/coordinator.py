@@ -238,7 +238,6 @@ class OTCoordinatorData:
     installed_output_dt50_w: float | None = None
     # Overrides
     window_override_active: bool = False
-    adjacent_door_open: bool = False
     time_window_active: bool = True
     # Diagnostics
     fallbacks: list[str] = field(default_factory=list)
@@ -1497,7 +1496,6 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
         # --- policy -----------------------------------------------------------
         window_ids = geometry.window_contacts if geometry else []
-        door_ids = geometry.adjacent_door_contacts if geometry else []
         inputs = PolicyInputs(
             now=now,
             room_enabled=self._enabled,
@@ -1509,7 +1507,6 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             zone=zone,
             memory=self._memory(),
             any_window_open=self._any_on(window_ids),
-            any_adjacent_door_open=self._any_on(door_ids),
             command_reverted=self._command_reverted,
             retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
             params=self._policy_params(),
@@ -1562,7 +1559,6 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.window_override_active = decision.state is State.WINDOW_OPEN or (
             decision.state is State.SHADOW and inputs.any_window_open
         )
-        d.adjacent_door_open = inputs.any_adjacent_door_open
         d.fallbacks = fallbacks
 
         memory = decision.memory

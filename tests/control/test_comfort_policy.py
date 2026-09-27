@@ -278,15 +278,11 @@ def test_window_close_delay_keeps_setback_then_resumes():
     assert d2.state is State.ACTIVE and d2.action is Action.WRITE and d2.setpoint == 19.5
 
 
-def test_adjacent_door_open_writes_plain_schedule():
-    d = decide(inputs(any_adjacent_door_open=True))
-    assert d.state is State.DOOR_OPEN and d.setpoint == 19.0
-
-
-def test_window_beats_door():
+def test_open_external_door_writes_window_setpoint():
+    # An outdoor door (e.g. the bifold) is an opening contact, so it drives the window override.
     m = OverrideMemory(window_open_since=T0 - timedelta(minutes=10))
-    d = decide(inputs(any_window_open=True, any_adjacent_door_open=True, memory=m))
-    assert d.state is State.WINDOW_OPEN
+    d = decide(inputs(any_window_open=True, memory=m))
+    assert d.state is State.WINDOW_OPEN and d.setpoint == 10.0
 
 
 # --- pre-heat ----------------------------------------------------------------
@@ -475,11 +471,6 @@ def test_non_finite_targets_are_never_written():
     inf = float("inf")
     d = decide(inputs(computed_setpoint=inf))
     assert d.action is Action.NONE and "non-finite" in d.reason
-    # door branch with an infinite schedule target
-    d2 = decide(
-        inputs(computed_setpoint=None, any_adjacent_door_open=True, zone=ZoneState(None, inf))
-    )
-    assert d2.action is not Action.WRITE
     # shadow preview matches: nothing to preview
     d3 = decide(inputs(shadow_mode=True, computed_setpoint=inf))
     assert d3.would_write is None

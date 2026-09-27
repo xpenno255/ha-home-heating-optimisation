@@ -83,7 +83,7 @@ def test_utility_has_roof_and_garage_surfaces():
     assert not [w for w in r.warnings if "skipped" in w], r.warnings
 
 
-def test_window_contacts_split_from_door_contacts(tmp_path):
+def test_only_external_opening_contacts_are_window_contacts(tmp_path):
     h = load_house(FIXTURES / "house.yaml")
     (tmp_path / "rooms").mkdir()
     (tmp_path / "rooms" / "k.yaml").write_text(
@@ -106,7 +106,6 @@ sensors:
     )
     r = load_room(tmp_path / "rooms" / "k.yaml", h)
     assert r.window_contacts == ["binary_sensor.bifold_a", "binary_sensor.bifold_b"]
-    assert r.adjacent_door_contacts == ["binary_sensor.kitchen_door"]
     assert r.warnings == []
 
 

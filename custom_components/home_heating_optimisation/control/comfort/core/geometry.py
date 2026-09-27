@@ -93,7 +93,6 @@ class RoomGeometry:
     climate_primary: str | None
     climate_backup: str | None
     window_contacts: list[str]
-    adjacent_door_contacts: list[str]
     asymmetry_enabled: bool
     warnings: list[str]
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -263,8 +262,8 @@ def load_room(path: str | Path, house: House) -> RoomGeometry:
             Emitter(name=f"rad_{e.get('plan_number', len(emitters) + 1)}", output_dt50_w=float(out))
         )
 
-    sensors = data.get("sensors") or {}
-    contacts = [c for c in (sensors.get("contacts") or []) if not str(c).endswith("_window_open")]
+    # Only contacts on external openings (windows and outdoor doors) affect
+    # control; internal door contacts listed under sensors.contacts are ignored.
     window_contacts: list[str] = []
     for o in openings:
         cs = o.get("contact_sensor")
@@ -272,7 +271,6 @@ def load_room(path: str | Path, house: House) -> RoomGeometry:
             window_contacts.extend(str(x) for x in cs)
         elif cs:
             window_contacts.append(str(cs))
-    door_contacts = [c for c in contacts if c not in window_contacts]
 
     if floor_area is None:
         warnings.append(f"{rid}: floor_area_m2 missing")
@@ -290,7 +288,6 @@ def load_room(path: str | Path, house: House) -> RoomGeometry:
         climate_primary=heating.get("climate_primary"),
         climate_backup=heating.get("climate_backup"),
         window_contacts=window_contacts,
-        adjacent_door_contacts=door_contacts,
         asymmetry_enabled=bool(((data.get("model") or {}).get("asymmetry_enabled")) or False),
         warnings=warnings,
         raw=data,
