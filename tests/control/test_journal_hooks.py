@@ -303,3 +303,50 @@ async def test_controllers_without_journal_still_run(hass, controlled, sources):
     await c.set_mode("boiler", "auto")
     await c.set_mode("study", "active")
     assert {kind for kind, _ in calls} == {"number", "ramses"}
+
+
+async def test_unchanged_boiler_reassertion_is_routine(hass, controlled, sources, freezer):
+    entry, c, calls = await start(hass, controlled)
+    journal = entry.runtime_data.journal
+    await handover(c)
+    await c.set_mode("boiler", "auto")
+
+    def boiler_commands():
+        return [e for e in journal.events(kinds=["command_sent"]) if e["scope"] == "boiler"]
+
+    first = len(boiler_commands())
+    assert first >= 1
+    for _ in range(3):
+        freezer.tick(timedelta(seconds=61))
+        await c.boiler.async_refresh()
+    writes = [kind for kind, _ in calls if kind == "number"]
+    assert len(writes) > first  # the boiler kept re-asserting its target ...
+    assert len(boiler_commands()) == first  # ... without journalling each repeat
+    journal.level = "debug"
+    freezer.tick(timedelta(seconds=61))
+    await c.boiler.async_refresh()
+    assert len(boiler_commands()) == first + 1
+
+
+async def test_repeated_blocked_room_write_is_journalled_once(hass, controlled, sources):
+    entry, c, calls = await start(hass, controlled)
+    journal = entry.runtime_data.journal
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    c.ready = False
+
+    def blocked():
+        return [
+            e
+            for e in journal.events(kinds=["command_result"], room_id="study")
+            if e["data"]["outcome"] == "blocked"
+        ]
+
+    decision = Decision(State.ACTIVE, Action.WRITE, 19.5, "model setpoint", None)
+    for _ in range(3):
+        assert await room._perform(decision) is False
+    assert len(blocked()) == 1
+    # A different blocked command, or one after a successful write, is new evidence.
+    assert await room._perform(replace(decision, setpoint=19.6)) is False
+    assert len(blocked()) == 2

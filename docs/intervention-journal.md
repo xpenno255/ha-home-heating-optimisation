@@ -61,6 +61,21 @@ Decisions are recorded on change, not every cycle, so an unchanged shadow decisi
 does not grow the journal each minute. Commands and readbacks are recorded as they
 happen, so a write that is sent and reverted within a minute produces both events.
 
+### Detail level
+
+**Configure → Journal detail** (`journal_level`) chooses how much is kept:
+
+- **Standard** (default) skips routine repeats: the boiler's once-a-minute re-assertion
+  of an unchanged target (only a successful one; its failures are always kept), and
+  repeats of a room write the ownership guard keeps blocking (the first block of each
+  command is kept). Target changes, failures, readbacks and manual holds are always
+  recorded. A typical house records about 1,300 events a day, so the 20,000-event cap
+  covers about two weeks.
+- **Debug** records every event. The boiler re-assertion alone adds about 4,300 events
+  a day, so the cap is reached in about three days.
+
+The level is shown in the journal status sensor attributes and in diagnostics.
+
 ## Persistence, bounds and failure behaviour
 
 Events live in `.storage/home_heating_optimisation.<entry_id>.journal`. Saves are

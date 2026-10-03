@@ -546,8 +546,12 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
     # Inputs
     # ------------------------------------------------------------------
 
-    def _schedule(self) -> ZoneState:
-        """Scheduled target from the evohome cloud entity, else the ramses schedule attribute."""
+    def _schedule(self, now: datetime | None = None) -> ZoneState:
+        """Scheduled target from the evohome cloud entity, else the ramses schedule attribute.
+
+        `now` is the control cycle's clock: the switchpoint grace compares the recorded
+        change time against it, so both must come from the same reading."""
+        now = now or dt_util.utcnow()
         primary = self._config.get(CONF_PRIMARY_CLIMATE)
         backup = self._config.get(CONF_BACKUP_CLIMATE)
         current = self._temperature_attr(primary, "temperature")
@@ -609,7 +613,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             self._schedule_source = "evohome"
             # Cloud lag: if the next switchpoint time has passed but evohome still reports the
             # previous period, the zone is already on the new value. Use it.
-            if nxt_at is not None and nxt_sp is not None and dt_util.utcnow() >= nxt_at:
+            if nxt_at is not None and nxt_sp is not None and now >= nxt_at:
                 sched = nxt_sp
                 self._schedule_source = "evohome (next switchpoint, cloud lagging)"
         # Track schedule value changes so the policy can excuse a zone briefly lagging a switchpoint.
@@ -617,7 +621,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         if sched is not None:
             if last is not None and abs(float(last) - sched) > 1e-6:
                 self._store.set("prev_schedule_setpoint", float(last))
-                self._store.set("schedule_changed_at", dt_util.utcnow().isoformat())
+                self._store.set("schedule_changed_at", now.isoformat())
             if last is None or abs(float(last) - sched) > 1e-6:
                 self._store.set("last_schedule_setpoint", sched)
         prev_sp = self._store.get("prev_schedule_setpoint")
@@ -1092,7 +1096,13 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
     # Journal hooks: optional, defensive, never affect control
     # ------------------------------------------------------------------
 
-    def _journal(self, kind: str, data: dict[str, Any], origin: str = "controller") -> None:
+    def _journal(
+        self,
+        kind: str,
+        data: dict[str, Any],
+        origin: str = "controller",
+        routine: bool = False,
+    ) -> None:
         journal = self.journal
         if journal is None:
             return
@@ -1108,6 +1118,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     "model_version": COMFORT_MODEL_VERSION,
                     "schedule_source": self._schedule_source,
                 },
+                routine=routine,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.debug("OT %s: journal hook failed", self.room_name, exc_info=True)
@@ -1243,10 +1254,17 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             "reason": decision.reason,
             "service": "ramses_cc.set_zone_mode",
         }
-        self._journal("command_requested", {**command, "outcome": "requested"})
-        if not self._write_guard():
+        allowed = self._write_guard()
+        # A guard that keeps blocking the same command every cycle is journalled once
+        # at the standard level; the repeats are routine.
+        first_block = self._journal_changed(
+            "blocked", None if allowed else (command["action"], command["setpoint"])
+        )
+        routine = not allowed and not first_block
+        self._journal("command_requested", {**command, "outcome": "requested"}, routine=routine)
+        if not allowed:
             self.write_status = "blocked"
-            self._journal("command_result", {**command, "outcome": "blocked"})
+            self._journal("command_result", {**command, "outcome": "blocked"}, routine=routine)
             return False
         primary = self._config.get(CONF_PRIMARY_CLIMATE)
         if not primary:
@@ -1393,7 +1411,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
         # --- target -------------------------------------------------------
         await self._maybe_fetch_ramses_schedule(self._config.get(CONF_PRIMARY_CLIMATE))
-        zone = self._schedule()
+        zone = self._schedule(now)
         d.schedule_source = self._schedule_source
         if self._journal_changed("schedule", (zone.schedule_setpoint, self._schedule_source)):
             self._journal(

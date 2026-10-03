@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.8.3 - journal detail level, quiet-sensor freshness, switchpoint timing (commissioning prerelease)
+
+- **Journal detail level.** New **Configure → Journal detail** option. *Standard* (default) no longer records the boiler's unchanged once-a-minute re-assertion or repeats of a room write the guard keeps blocking; target changes, failures, readbacks and manual holds are still recorded. *Debug* keeps everything. On the live house the boiler re-assertion was about 4,300 of 5,600 events a day, so the 20,000-event cap held only about three days; standard keeps about two weeks.
+- **Quiet room sensors.** A room air sensor counts as fresh when it, or any other entity on the same device (humidity, battery), reported in the last 30 minutes. Battery sensors that only report on change were blocking writes for hours on steady days (live: Hall, Bedroom and Spare Room blocked roughly half the time). An unavailable sibling is not evidence.
+- **Switchpoint grace.** The schedule-change time is now stamped with the control cycle's own clock. It was read a few microseconds later than the cycle time, so in the cycle that first saw a switchpoint the "zone still on the previous value" grace window was negative and every room reaching a switchpoint before its thermostat reported the new value was flagged as set by hand for up to 5 minutes.
+- **Version.** The runtime version (device info, journal provenance) now matches the manifest; it had stayed at 0.8.1 in 0.8.2.
+
 ## 0.8.2 - only external openings affect room control (commissioning prerelease)
 
 - Internal door contacts no longer change room control. Previously any contact under `sensors.contacts` that was not an opening's `contact_sensor` was treated as an adjacent door and made the room write its plain schedule target (`door_open`), so an open kitchen-to-hall door stopped the kitchen optimising.

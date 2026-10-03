@@ -437,7 +437,13 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
     # Journal hooks: optional, defensive, never affect control
     # ------------------------------------------------------------------
 
-    def _journal(self, kind: str, data: dict[str, Any], origin: str = "controller") -> None:
+    def _journal(
+        self,
+        kind: str,
+        data: dict[str, Any],
+        origin: str = "controller",
+        routine: bool = False,
+    ) -> None:
         journal = self.journal
         if journal is None:
             return
@@ -448,6 +454,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 origin=origin,
                 data=data,
                 provenance={"model_version": EFFICIENCY_MODEL_VERSION},
+                routine=routine,
             )
         except Exception:  # noqa: BLE001
             _LOGGER.debug("BFC: journal hook failed", exc_info=True)
@@ -478,7 +485,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             "target_changed": decision.target_changed,
             "service": "number.set_value",
         }
-        self._journal("command_requested", {**command, "outcome": "requested"})
+        # The 60 s re-assertion of an unchanged target is routine: only its failures
+        # are kept at the standard journal level.
+        routine = not decision.target_changed
+        self._journal("command_requested", {**command, "outcome": "requested"}, routine=routine)
         if not self._write_guard():
             self._journal("command_result", {**command, "outcome": "blocked"})
             return False
@@ -499,8 +509,12 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                     "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
                 )
             _LOGGER.debug("BFC: wrote %.1f to %s (%s)", value, entity_id, decision.reason)
-            self._journal("command_sent", {**command, "outcome": "service_succeeded"})
-            self._journal("command_result", {**command, "outcome": "service_succeeded"})
+            self._journal(
+                "command_sent", {**command, "outcome": "service_succeeded"}, routine=routine
+            )
+            self._journal(
+                "command_result", {**command, "outcome": "service_succeeded"}, routine=routine
+            )
             return True
         except TimeoutError:
             self._last_write_failure = "service_timeout"

@@ -1,6 +1,7 @@
 """Install package must contain the integration and no local evaluation data."""
 
 import json
+import re
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -31,3 +32,10 @@ def test_install_archive(tmp_path):
     first = output.read_bytes()
     build(output)
     assert output.read_bytes() == first
+
+
+def test_runtime_version_matches_manifest():
+    root = Path("custom_components/home_heating_optimisation")
+    version = re.search(r'^VERSION = "([^"]+)"$', (root / "const.py").read_text(), re.M)
+    assert version is not None
+    assert version.group(1) == json.loads((root / "manifest.json").read_text())["version"]
