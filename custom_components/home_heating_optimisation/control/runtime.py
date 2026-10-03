@@ -204,10 +204,7 @@ class Controls:
             if air is None:
                 return "room temperature unavailable"
             air_entity = air_source.removesuffix(".current_temperature")
-            air_state = c._state(air_entity)
-            if air_state is None or not timedelta(0) <= now - air_state.last_reported <= timedelta(
-                minutes=30
-            ):
+            if not self.device_reported(c, air_entity, now):
                 return "room temperature stale"
             if c._schedule().schedule_setpoint is None:
                 return "schedule unavailable"
@@ -323,6 +320,36 @@ class Controls:
                 if item.is_on and writes(getattr(item, "raw_config", {})):
                     found.append(item.entity_id)
         return found
+
+    def device_reported(self, c, entity_id, now):
+        """The entity, or another entity on its device, reported in the last 30 minutes.
+
+        Battery sensors that only report on change stay silent while a room is steady;
+        a recent humidity or battery report shows the device is still alive, so its
+        unchanged temperature is current."""
+        limit = timedelta(minutes=30)
+
+        def fresh(eid):
+            st = c._state(eid)
+            return (
+                st is not None
+                and st.state not in ("unavailable", "unknown")
+                and timedelta(0) <= now - st.last_reported <= limit
+            )
+
+        if fresh(entity_id):
+            return True
+        if c._state(entity_id) is None:
+            return False
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(entity_id)
+        if entry is None or entry.device_id is None:
+            return False
+        return any(
+            fresh(sibling.entity_id)
+            for sibling in er.async_entries_for_device(registry, entry.device_id)
+            if sibling.entity_id != entity_id
+        )
 
     def can_write(self, scope):
         return self.guard_reason(scope) is None

@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -1192,3 +1194,55 @@ async def test_readback_hint_does_not_alter_reversion_retry_budget(
     # The hint is derived state only: reversion flags are untouched by publishing it.
     assert not room._reversion_retry_used
     assert room._pending_target is not None
+
+
+async def test_quiet_air_sensor_is_fresh_while_its_device_reports(
+    hass, controlled, sources, freezer
+):
+    """A battery sensor reporting only on change stays usable while its device checks in."""
+    registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    device_entry = MockConfigEntry(domain="test")
+    device_entry.add_to_hass(hass)
+    device = devices.async_get_or_create(
+        config_entry_id=device_entry.entry_id, identifiers={("test", "air")}
+    )
+    registry.async_get_or_create(
+        "sensor", "test", "air_t", suggested_object_id="air", device_id=device.id
+    )
+    registry.async_get_or_create(
+        "sensor", "test", "air_h", suggested_object_id="air_humidity", device_id=device.id
+    )
+    _, c, calls = await start(hass, controlled)
+    await handover(c)
+    freezer.tick(timedelta(minutes=31))
+    # The thermostat keeps reporting; only the room air sensor has gone quiet.
+    hass.states.async_set(
+        "climate.study", "auto", hass.states.get("climate.study").attributes, force_update=True
+    )
+    assert c.guard_reason("study") == "room temperature stale"
+    hass.states.async_set("sensor.air_humidity", 55)
+    assert c.guard_reason("study") is None
+    # A sibling that is itself unavailable is no evidence the device is alive.
+    freezer.tick(timedelta(minutes=31))
+    hass.states.async_set(
+        "climate.study", "auto", hass.states.get("climate.study").attributes, force_update=True
+    )
+    hass.states.async_set("sensor.air_humidity", "unavailable")
+    assert c.guard_reason("study") == "room temperature stale"
+
+
+async def test_switchpoint_change_time_uses_the_cycle_clock(hass, controlled, sources, freezer):
+    """A schedule change seen in a cycle is stamped with that cycle's time, so the zone
+    still holding the previous value is excused in the same cycle (live 2026-10-03:
+    a microsecond-later stamp made the grace window negative and flagged a manual hold)."""
+    _, c, _ = await start(hass, controlled)
+    room = c.rooms["study"]
+    hass.states.async_set("climate.cloud", "auto", {"status": {"setpoints": {"this_sp_temp": 18}}})
+    room._schedule()
+    hass.states.async_set("climate.cloud", "auto", {"status": {"setpoints": {"this_sp_temp": 19}}})
+    now = dt_util.utcnow()
+    freezer.tick(timedelta(milliseconds=5))
+    zone = room._schedule(now)
+    assert zone.previous_schedule_setpoint == 18 and zone.schedule_setpoint == 19
+    assert zone.schedule_changed_at == now

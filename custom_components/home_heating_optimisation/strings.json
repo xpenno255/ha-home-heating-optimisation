@@ -43,13 +43,15 @@
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
           "history_state_policy": "Historical state coverage",
-          "journal_enabled": "Enable intervention journal"
+          "journal_enabled": "Enable intervention journal",
+          "journal_level": "Journal detail"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
           "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
           "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy.",
-          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics."
+          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics.",
+          "journal_level": "Standard skips routine repeats: the boiler's unchanged once-a-minute re-assertion and repeats of a room write that stays blocked. Debug records every event and fills the 20,000-event journal within a few days."
         }
       },
       "survey_rooms": {
@@ -119,13 +121,15 @@
           "recovery_minutes": "Recovery deadline (minutes)",
           "survey_directory": "House survey directory (optional)",
           "history_state_policy": "Historical state coverage",
-          "journal_enabled": "Enable intervention journal"
+          "journal_enabled": "Enable intervention journal",
+          "journal_level": "Journal detail"
         },
         "data_description": {
           "analytics_enabled": "Collect private history and backfill from Recorder. Coverage must reach 80% before window-wide comfort and duty metrics are shown.",
           "survey_directory": "Directory containing house.yaml and rooms/*.yaml, relative to your Home Assistant config directory or an absolute path inside it. Files are read only.",
           "history_state_policy": "Recorded state availability holds unchanged available values during clean Recorder runs. Recent-change coverage is reported separately; it does not prove physical sample freshness. Choose recent changes for the previous conservative expiry policy.",
-          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics."
+          "journal_enabled": "Record controller decisions, commands, readbacks, manual changes and notes as private events. Counts and status only appear in diagnostics.",
+          "journal_level": "Standard skips routine repeats: the boiler's unchanged once-a-minute re-assertion and repeats of a room write that stays blocked. Debug records every event and fills the 20,000-event journal within a few days."
         }
       },
       "survey_rooms": {

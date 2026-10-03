@@ -18,7 +18,9 @@ from homeassistant.util import dt as dt_util
 from ..const import VERSION
 from ..control.configuration import actuator_fingerprint
 from .const import (
+    DEFAULT_LEVEL,
     KINDS,
+    LEVELS,
     MAX_SAVE_FAILURES,
     ORIGINS,
     PRIVATE_KEYS,
@@ -92,6 +94,8 @@ class Journal:
         self.hass, self.entry, self.heating = hass, entry, heating
         self.store = JournalStore(hass, entry.entry_id)
         self.enabled = bool(heating.config.get("journal_enabled", True))
+        level = heating.config.get("journal_level", DEFAULT_LEVEL)
+        self.level = level if level in LEVELS else DEFAULT_LEVEL
         self.closed = False
         self._save_cancel = None
         self._save_failures = 0
@@ -121,11 +125,22 @@ class Journal:
         }
 
     def record(
-        self, kind, room_id=None, scope=None, origin="controller", data=None, provenance=None
+        self,
+        kind,
+        room_id=None,
+        scope=None,
+        origin="controller",
+        data=None,
+        provenance=None,
+        routine=False,
     ):
-        """Append one event. Synchronous, never raises; None when nothing was recorded."""
+        """Append one event. Synchronous, never raises; None when nothing was recorded.
+
+        Routine events are kept only at the debug level."""
         try:
             if not self.enabled or self.closed or self.store.status == "storage_read_only":
+                return None
+            if routine and self.level != "debug":
                 return None
             if kind not in KINDS:
                 LOGGER.warning("Heating journal ignored unknown event kind %r", kind)
@@ -179,6 +194,7 @@ class Journal:
         """Counts and status only: safe for diagnostics downloads."""
         return {
             "status": self.status,
+            "level": self.level,
             "event_count": len(self.store.events),
             "counts_by_kind": self.counts_by_kind(),
         }
@@ -190,6 +206,7 @@ class Journal:
             return datetime.fromtimestamp(stamp, dt_util.UTC).isoformat()
 
         return {
+            "level": self.level,
             "event_count": len(events),
             "oldest_at": iso(events[0]["time"]) if events else None,
             "newest_at": iso(events[-1]["time"]) if events else None,

@@ -320,6 +320,7 @@ async def test_service_status_sensor_and_diagnostics_expose_counts_only(hass, co
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert diagnostics["journal"] == {
         "status": "ready",
+        "level": "standard",
         "event_count": 2,
         "counts_by_kind": {"adjustment_note": 1, "decision": 1},
     }
@@ -370,6 +371,30 @@ async def test_disabled_journal_records_nothing(hass, config, sources):
     assert result == {"events": [], "count": 0, "truncated": False, "status": "disabled"}
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert diagnostics["journal"]["status"] == "disabled"
+
+
+async def test_routine_events_are_kept_only_at_debug_level(hass, config, sources):
+    entry = await setup(hass, config)
+    journal = entry.runtime_data.journal
+    assert journal.level == "standard"
+    assert journal.attributes()["level"] == "standard"
+    assert journal.record("decision", routine=True) is None
+    assert journal.record("decision") is not None
+    journal.level = "debug"
+    assert journal.record("decision", routine=True) is not None
+
+
+async def test_debug_level_comes_from_config(hass, config, sources):
+    config["journal_level"] = "debug"
+    entry = await setup(hass, config)
+    assert entry.runtime_data.journal.level == "debug"
+    assert (await async_get_config_entry_diagnostics(hass, entry))["journal"]["level"] == "debug"
+
+
+async def test_unknown_level_falls_back_to_standard(hass, config, sources):
+    config["journal_level"] = "verbose"
+    entry = await setup(hass, config)
+    assert entry.runtime_data.journal.level == "standard"
 
 
 async def test_load_exception_does_not_block_setup(hass, config, sources):

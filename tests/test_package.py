@@ -31,3 +31,10 @@ def test_install_archive(tmp_path):
     first = output.read_bytes()
     build(output)
     assert output.read_bytes() == first
+
+
+def test_runtime_version_matches_manifest():
+    from custom_components.home_heating_optimisation.const import VERSION
+
+    root = Path("custom_components/home_heating_optimisation")
+    assert VERSION == json.loads((root / "manifest.json").read_text())["version"]

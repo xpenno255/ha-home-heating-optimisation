@@ -10,6 +10,10 @@ SAVE_DELAY_SECONDS = 30
 SAVE_BACKOFF_MAX_SECONDS = 8 * 60
 MAX_SAVE_FAILURES = 10
 QUERY_MAX_EVENTS = 2000
+# "standard" skips routine repeats (unchanged boiler re-asserts, repeated blocked
+# attempts); "debug" records every event and fills MAX_EVENTS in a few days.
+LEVELS = ("standard", "debug")
+DEFAULT_LEVEL = "standard"
 QUERY_MAX_HOURS = 720
 QUERY_DEFAULT_HOURS = 24
 
