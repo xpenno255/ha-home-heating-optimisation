@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.9.1 - DHW cutoff leaves boosts alone after a restart (commissioning prerelease)
+
+- New optional **Evohome cloud water heater** field in **Configure → DHW measured-temperature cutoff** (suggested automatically when exactly one is loaded). While it shows any mode other than `FollowSchedule`, or the schedule has DHW off, the cutoff stays in standby.
+- Why: on 4 Oct HA restarted in the middle of a user boost. Afterwards the RAMSES water heater showed `follow_schedule` while the controller stayed in its permanent override, so the cutoff treated the boost as a scheduled charge and held DHW off at 52 °C. The cloud entity kept the real mode throughout.
+- If the cloud entity is missing or unavailable, the cutoff falls back to the RAMSES mode check as before.
+- Replayed on 26 Sep – 4 Oct history: all 9 scheduled morning charges still stop at 51.2–52.6 °C; all 7 boosts are left alone.
+
 ## 0.9.0 - DHW measured-temperature cutoff (commissioning prerelease)
 
 Optional, off by default. Nothing changes until it is enabled in **Configure → DHW measured-temperature cutoff**.

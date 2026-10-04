@@ -44,6 +44,7 @@ How it acts:
 - Only while the water heater follows its schedule, the demand entity shows a charge, and HA's cylinder reading is under 10 minutes old and at or above the Evohome target plus the margin (default 1 °C). Boosts and manual overrides are left alone.
 - It sends `ramses_cc.set_dhw_mode` with a 60-minute temporary override, DHW off. The controller ends that override by itself, so HA stopping or restarting never leaves DHW off longer than the remaining hour.
 - While HA still measures the cylinder at or above the controller's reheat point (target minus differential), the hold is renewed shortly before it ends, up to 4 hours in total. Once HA measures it below that point, DHW is handed back to the schedule (`follow_schedule`), so the next charge starts on the controller's own terms.
+- With the optional **Evohome cloud water heater** set, it also stays out of the way while that entity shows an override or the schedule has DHW off. Its mode survives an HA restart, when the RAMSES entity can briefly show `follow_schedule` in the middle of a boost.
 - A stop the controller does not echo within 3 minutes is sent once more, then dropped until that charge ends. Automations or scripts that write the DHW target block it, as for the target schedule.
 - On a higher-target day the cutoff follows that higher target.
 

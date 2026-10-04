@@ -334,12 +334,14 @@
           "water_heater_entity": "RAMSES stored hot water entity",
           "demand_entity": "Physical DHW demand (for example the hot water relay)",
           "cylinder_temp_entity": "Measured cylinder temperature",
-          "margin": "Margin above the Evohome target (\u00b0C)"
+          "margin": "Margin above the Evohome target (\u00b0C)",
+          "cloud_entity": "Evohome cloud water heater (optional)"
         },
         "data_description": {
           "demand_entity": "The cutoff only acts while this shows a charge is running.",
           "cylinder_temp_entity": "Readings older than 10 minutes are never used to stop a charge.",
-          "margin": "With a 50 \u00b0C target and a 1 \u00b0C margin the charge stops at the first reading of 51 \u00b0C or more. On days with a higher DHW target schedule the cutoff follows that target."
+          "margin": "With a 50 \u00b0C target and a 1 \u00b0C margin the charge stops at the first reading of 51 \u00b0C or more. On days with a higher DHW target schedule the cutoff follows that target.",
+          "cloud_entity": "Recommended. Its mode survives a Home Assistant restart, when the RAMSES entity can briefly show the schedule in the middle of a boost. While it shows an override, or the schedule has DHW off, the cutoff stays out of the way."
         }
       }
     },

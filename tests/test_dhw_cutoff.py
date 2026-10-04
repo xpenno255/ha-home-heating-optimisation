@@ -9,6 +9,7 @@ from homeassistant.util import dt as dt_util
 from custom_components.home_heating_optimisation.const import DOMAIN, effective_config
 from custom_components.home_heating_optimisation.control.migration import handover
 from custom_components.home_heating_optimisation.dhw.cutoff_policy import (
+    cloud_override,
     cutoff_config,
     is_hold,
     recent_temperature,
@@ -24,6 +25,20 @@ SENSOR = f"sensor.{DOMAIN}_dhw_cutoff"
 PARAMS = {"setpoint": 50.0, "overrun": 0, "differential": 5.0}
 HOLD = {"mode": "temporary_override", "active": False, "until": None}
 SCHEDULE = {"mode": "follow_schedule", "active": True, "until": None}
+CLOUD = "water_heater.dhw_controller"
+
+
+def cloud(hass, mode="FollowSchedule", scheduled="On"):
+    hass.states.async_set(
+        CLOUD,
+        "auto",
+        {
+            "status": {
+                "state_status": {"state": "On", "mode": mode},
+                "setpoints": {"this_sp_state": scheduled},
+            }
+        },
+    )
 
 
 def with_cutoff(config, **extra):
@@ -283,6 +298,7 @@ async def test_options_flow_saves_the_section(hass, controlled, sources):  # noq
     await hass.async_block_till_done()
     section = effective_config(entry)["dhw_cutoff"]
     assert section["enabled"] and section["margin"] == 2.0
+    assert section["cloud_entity"] is None
     assert effective_config(entry)["rooms"] == controlled["rooms"]
 
 
@@ -309,3 +325,68 @@ async def test_hold_is_renewed_while_the_cylinder_stays_hot(
     assert cutoff.stops == 1
     events = [e["data"]["event"] for e in entry.runtime_data.journal.events(kinds=["dhw_cutoff"])]
     assert events == ["stop", "renew", "renew", "renew"]
+
+
+def test_cloud_override_reasons():
+    def state(mode, scheduled, value="auto"):
+        return type(
+            "S",
+            (),
+            {
+                "state": value,
+                "attributes": {
+                    "status": {
+                        "state_status": {"mode": mode},
+                        "setpoints": {"this_sp_state": scheduled},
+                    }
+                },
+            },
+        )()
+
+    assert cloud_override(state("FollowSchedule", "On")) is None
+    assert cloud_override(state("PermanentOverride", "Off")) == "Evohome mode PermanentOverride"
+    assert cloud_override(state("FollowSchedule", "Off")) == "Evohome schedule has DHW off"
+    # No usable answer falls back to the RAMSES mode check.
+    assert cloud_override(state("FollowSchedule", "On", "unavailable")) is None
+    assert cloud_override(None) is None
+
+
+async def test_boost_hidden_by_a_restart_is_left_alone(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    """Live 4 Oct: after an HA restart mid-boost the RAMSES entity showed follow_schedule
+    while the controller (and the cloud entity) stayed in a permanent override."""
+    cloud(hass, "PermanentOverride", "Off")
+    _, cutoff, calls = await begin(hass, controlled, cloud_entity=CLOUD)
+    hass.states.async_set("sensor.hw", 100)
+    cylinder(hass, 52.0)
+    await tick(hass, freezer, cutoff)
+    assert calls == []
+    assert cutoff.status == "standby"
+    assert cutoff.report()["standby_reason"] == "Evohome mode PermanentOverride"
+    # A charge outside the schedule (the schedule has DHW off) is someone else's too.
+    cloud(hass, "FollowSchedule", "Off")
+    await tick(hass, freezer, cutoff)
+    assert calls == []
+    # A scheduled charge is still stopped.
+    cloud(hass, "FollowSchedule", "On")
+    cylinder(hass, 52.1)
+    await tick(hass, freezer, cutoff)
+    assert len(calls) == 1 and calls[0]["mode"] == "temporary_override"
+
+
+async def test_unavailable_cloud_entity_falls_back_to_ramses_mode(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    hass.states.async_set(CLOUD, "unavailable")
+    _, cutoff, calls = await begin(hass, controlled, cloud_entity=CLOUD)
+    hass.states.async_set("sensor.hw", 100)
+    cylinder(hass, 52.0)
+    await tick(hass, freezer, cutoff)
+    assert len(calls) == 1
