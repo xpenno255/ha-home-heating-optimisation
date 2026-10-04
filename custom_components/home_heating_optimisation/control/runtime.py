@@ -468,6 +468,7 @@ class Controls:
             },
             "gateways": self.gateway_report(),
             "dhw_schedule": self.dhw_report(),
+            "dhw_cutoff": self.dhw_cutoff_report(),
         }
 
     def dhw_report(self):
@@ -476,6 +477,15 @@ class Controls:
             return {"status": "unconfigured"}
         try:
             return schedule.report()
+        except Exception as err:  # noqa: BLE001 - reporting must not break the report
+            return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
+
+    def dhw_cutoff_report(self):
+        cutoff = getattr(self.heating, "dhw_cutoff", None)
+        if cutoff is None:
+            return {"status": "unconfigured"}
+        try:
+            return cutoff.report()
         except Exception as err:  # noqa: BLE001 - reporting must not break the report
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 

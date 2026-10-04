@@ -14,6 +14,7 @@ from .const import DOMAIN
 from .control.runtime import Controls
 from .coordinator import HeatingCoordinator
 from .dhw.coordinator import DhwSchedule
+from .dhw.cutoff import DhwCutoff
 from .energy.coordinator import EnergyEvidence
 from .energy.meter import meter_specs
 from .gateway.monitor import GatewayMonitor
@@ -67,6 +68,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator.dhw = DhwSchedule(hass, entry, coordinator)
     await coordinator.dhw.initialise()
     entry.async_on_unload(coordinator.dhw.close)
+    coordinator.dhw_cutoff = DhwCutoff(hass, entry, coordinator)
+    entry.async_on_unload(coordinator.dhw_cutoff.close)
     await coordinator.async_config_entry_first_refresh()
     await coordinator.load_house()
     if coordinator.config.get("analytics_enabled", False):
@@ -111,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     await coordinator.controls.start()
     coordinator.trials.start()
     coordinator.dhw.start()
+    coordinator.dhw_cutoff.start()
     coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()

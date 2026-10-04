@@ -84,7 +84,8 @@
           "advisor": "Heating Advisor",
           "gateways": "Gateway monitoring",
           "energy": "Metered energy evidence",
-          "dhw_schedule": "DHW target schedule"
+          "dhw_schedule": "DHW target schedule",
+          "dhw_cutoff": "DHW measured-temperature cutoff"
         }
       },
       "room": {
@@ -324,6 +325,22 @@
           "high_target": "Raised at the window start. It returns to normal once the first charge has reached this temperature and demand has been off for 10 minutes, or when Evohome turns DHW off, or at the window end.",
           "window_end": "A restart or settings change during a session returns the target to normal and does not resume the session."
         }
+      },
+      "dhw_cutoff": {
+        "title": "DHW measured-temperature cutoff",
+        "description": "Stops a stored hot water charge when Home Assistant's own cylinder reading passes the Evohome target plus a margin. Use this when the controller misses cylinder sensor reports and overheats the cylinder. DHW is held off with 60-minute temporary overrides that the controller ends by itself; while still needed they are renewed, up to 4 hours, and DHW is handed back to the schedule as soon as the cylinder cools below the controller's reheat point (target minus differential). Only acts while the water heater follows its schedule: boosts and manual overrides are left alone.",
+        "data": {
+          "enabled": "Enable the DHW cutoff",
+          "water_heater_entity": "RAMSES stored hot water entity",
+          "demand_entity": "Physical DHW demand (for example the hot water relay)",
+          "cylinder_temp_entity": "Measured cylinder temperature",
+          "margin": "Margin above the Evohome target (\u00b0C)"
+        },
+        "data_description": {
+          "demand_entity": "The cutoff only acts while this shows a charge is running.",
+          "cylinder_temp_entity": "Readings older than 10 minutes are never used to stop a charge.",
+          "margin": "With a 50 \u00b0C target and a 1 \u00b0C margin the charge stops at the first reading of 51 \u00b0C or more. On days with a higher DHW target schedule the cutoff follows that target."
+        }
       }
     },
     "error": {
@@ -355,7 +372,8 @@
       "dhw_invalid_targets": "Targets must be between 35 and 85 \u00b0C in 0.5 \u00b0C steps, and the higher target must be above the normal target.",
       "dhw_invalid_window": "The window must start before it ends, within one day.",
       "dhw_missing_entity": "Select the water heater, demand and cylinder temperature entities to enable the schedule.",
-      "dhw_params_unavailable": "The water heater does not report its setpoint, overrun and differential. Check RAMSES before enabling."
+      "dhw_params_unavailable": "The water heater does not report its setpoint, overrun and differential. Check RAMSES before enabling.",
+      "dhw_cutoff_invalid_margin": "Enter a margin between 0.5 and 10 \u00b0C."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
@@ -493,6 +511,17 @@
           "recovery_pending": "Restore not confirmed",
           "storage_read_only": "Storage unavailable",
           "misconfigured": "Not configured"
+        }
+      },
+      "dhw_cutoff": {
+        "name": "DHW cutoff",
+        "state": {
+          "disabled": "Disabled",
+          "misconfigured": "Not configured",
+          "watching": "Watching",
+          "holding": "Holding DHW off",
+          "unconfirmed": "Stop not confirmed",
+          "standby": "Standby (boost or override)"
         }
       }
     },
