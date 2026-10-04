@@ -32,3 +32,19 @@ How a session runs:
 `sensor.home_heating_optimisation_dhw_schedule` shows the state (`disabled`, `armed`, `elevated`, `restoring`, `recovery_pending`, `paused`, `storage_read_only`, `misconfigured`), targets, next window, charge evidence and last outcome; the control report includes the same under `dhw_schedule`.
 
 Limits: HA shows the controller's reply about a minute after a change, and a successful service call is not RF confirmation. RAMSES offers no compare-and-set, so a same-value manual change or a simultaneous external write cannot always be detected. Nothing can restore the target while HA or the RF link is down. Unconfirmed restores are retried a few times, then raise a repair and retry slowly. This is target scheduling only; it does not guarantee thermal disinfection or legionella protection. UK HSE guidance is to store hot water at 60°C or above.
+
+## DHW measured-temperature cutoff
+
+**Configure → DHW measured-temperature cutoff** stops a stored hot water charge from Home Assistant's own cylinder reading. It is off by default and independent of the DHW target schedule and the engines' modes.
+
+Why: Evohome switches DHW from the last cylinder temperature the controller received. If it misses the sensor's reports just above its target, it keeps charging until the sensor next reports. Once the temperature settles that can be an hour later, so the cylinder overshoots (live: about 61 °C for a 50 °C target). HA's gateways often hear the sensor better than the controller does.
+
+How it acts:
+
+- Only while the water heater follows its schedule, the demand entity shows a charge, and HA's cylinder reading is under 10 minutes old and at or above the Evohome target plus the margin (default 1 °C). Boosts and manual overrides are left alone.
+- It sends `ramses_cc.set_dhw_mode` with a 60-minute temporary override, DHW off. The controller ends that override by itself, so HA stopping or restarting never leaves DHW off longer than the remaining hour.
+- While HA still measures the cylinder at or above the controller's reheat point (target minus differential), the hold is renewed shortly before it ends, up to 4 hours in total. Once HA measures it below that point, DHW is handed back to the schedule (`follow_schedule`), so the next charge starts on the controller's own terms.
+- A stop the controller does not echo within 3 minutes is sent once more, then dropped until that charge ends. Automations or scripts that write the DHW target block it, as for the target schedule.
+- On a higher-target day the cutoff follows that higher target.
+
+`sensor.home_heating_optimisation_dhw_cutoff` shows `watching`, `holding`, `unconfirmed` or `standby`, with the current cutoff temperature, hold end and last action. Every stop, renewal and release is journalled (`dhw_cutoff`).

@@ -36,6 +36,12 @@ from .control.configuration import (
     validate_control_rooms,
 )
 from .control.store import ControlStore
+from .dhw.cutoff_policy import DEFAULTS as CUTOFF_DEFAULTS
+from .dhw.cutoff_policy import MAX_MARGIN as CUTOFF_MAX_MARGIN
+from .dhw.cutoff_policy import MIN_MARGIN as CUTOFF_MIN_MARGIN
+from .dhw.cutoff_policy import SECTION as CUTOFF_SECTION
+from .dhw.cutoff_policy import cutoff_config
+from .dhw.cutoff_policy import validation_error as cutoff_validation_error
 from .dhw.policy import DEFAULTS as DHW_DEFAULTS
 from .dhw.policy import MAX_TARGET as DHW_MAX_TARGET
 from .dhw.policy import MIN_TARGET as DHW_MIN_TARGET
@@ -342,7 +348,15 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         self.current = effective_config(self.config_entry)
         return self.async_show_menu(
             step_id="init",
-            menu_options=["mapping", "control", "advisor", "gateways", "energy", "dhw_schedule"],
+            menu_options=[
+                "mapping",
+                "control",
+                "advisor",
+                "gateways",
+                "energy",
+                "dhw_schedule",
+                "dhw_cutoff",
+            ],
         )
 
     async def async_step_mapping(self, user_input=None):
@@ -867,6 +881,55 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         }
         return self.async_show_form(
             step_id="dhw_schedule", errors=errors, data_schema=vol.Schema(schema)
+        )
+
+    async def async_step_dhw_cutoff(self, user_input=None):
+        """Optional stop of a DHW charge from HA's own cylinder reading."""
+        self.current = effective_config(self.config_entry)
+        old = cutoff_config(self.current)
+        errors = {}
+        if user_input is not None:
+            values = {**CUTOFF_DEFAULTS, **user_input}
+            entities = [values.get(k) for k in ("water_heater_entity", "demand_entity")]
+            entities.append(values.get("cylinder_temp_entity"))
+            error = cutoff_validation_error(values)
+            if error is None and self.invalid_sources(entities):
+                error = "invalid_source"
+            if (
+                error is None
+                and values["enabled"]
+                and read_params(self.hass.states.get(values["water_heater_entity"])) is None
+            ):
+                error = "dhw_params_unavailable"
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_create_entry(
+                    title=NAME,
+                    data={**self.current, CUTOFF_SECTION: cutoff_config({CUTOFF_SECTION: values})},
+                )
+        schedule = dhw_config(self.current)
+        boiler = ((self.current.get("control") or {}).get("boiler") or {}).get("config") or {}
+        suggested = {
+            "water_heater_entity": old["water_heater_entity"] or schedule["water_heater_entity"],
+            "demand_entity": old["demand_entity"]
+            or schedule["demand_entity"]
+            or boiler.get("hw_relay_demand_entity"),
+            "cylinder_temp_entity": old["cylinder_temp_entity"]
+            or schedule["cylinder_temp_entity"]
+            or boiler.get("cylinder_temp_entity"),
+        }
+        schema = {
+            vol.Optional("enabled", default=old["enabled"]): bool,
+            optional("water_heater_entity", suggested): entity_selector(("water_heater",)),
+            optional("demand_entity", suggested): entity_selector(("binary_sensor", "sensor")),
+            optional("cylinder_temp_entity", suggested): entity_selector(("sensor",)),
+            vol.Required("margin", default=old["margin"]): vol.All(
+                vol.Coerce(float), vol.Range(min=CUTOFF_MIN_MARGIN, max=CUTOFF_MAX_MARGIN)
+            ),
+        }
+        return self.async_show_form(
+            step_id="dhw_cutoff", errors=errors, data_schema=vol.Schema(schema)
         )
 
     async def async_step_advisor(self, user_input=None):

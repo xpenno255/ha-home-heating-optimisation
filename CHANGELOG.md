@@ -2,6 +2,17 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.9.0 - DHW measured-temperature cutoff (commissioning prerelease)
+
+Optional, off by default. Nothing changes until it is enabled in **Configure → DHW measured-temperature cutoff**.
+
+- Stops a stored hot water charge when HA's own cylinder reading reaches the Evohome target plus a margin (default 1 °C). On the live house the controller misses 5–30 % of the cylinder sensor's reports. When it missed the ones just above 50 °C it kept charging until the sensor's next report, about an hour later, and the cylinder reached 61 °C (1–4 Oct). HA's gateways heard 155 of 156 of the same reports.
+- Uses `ramses_cc.set_dhw_mode` only: a 60-minute temporary override with DHW off. The controller ends it by itself, so HA stopping can never leave DHW off for longer. While the cylinder is still above the controller's reheat point (target minus differential) the hold is renewed, up to 4 hours; once HA measures it below that point, DHW is handed back to the schedule.
+- Acts only while the water heater follows its schedule, a charge is running (demand entity) and the reading is under 10 minutes old. Boosts and manual overrides are left alone. An unconfirmed stop is sent once more, then dropped until that charge ends. The same automation/script guard as the DHW target schedule applies.
+- On a higher-target day from the DHW target schedule the cutoff follows that target.
+- `sensor.home_heating_optimisation_dhw_cutoff` (watching / holding / unconfirmed / standby) and a `dhw_cutoff` block in `get_control_report`; every stop, renewal and release is journalled as `dhw_cutoff`.
+- Replayed against 26 Sep – 4 Oct radio logs: every charge would have stopped at 51.2–52.6 °C, including the four that reached 61 °C.
+
 ## 0.8.3 - journal detail level, quiet-sensor freshness, switchpoint timing (commissioning prerelease)
 
 - **Journal detail level.** New **Configure → Journal detail** option. *Standard* (default) no longer records the boiler's unchanged once-a-minute re-assertion or repeats of a room write the guard keeps blocking; target changes, failures, readbacks and manual holds are still recorded. *Debug* keeps everything. On the live house the boiler re-assertion was about 4,300 of 5,600 events a day, so the 20,000-event cap held only about three days; standard keeps about two weeks.

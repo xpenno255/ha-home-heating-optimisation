@@ -50,6 +50,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
         from .dhw.sensor import DhwScheduleSensor
 
         entities.append(DhwScheduleSensor(coordinator.dhw))
+    if coordinator.dhw_cutoff is not None:
+        from .dhw.sensor import DhwCutoffSensor
+
+        entities.append(DhwCutoffSensor(coordinator.dhw_cutoff))
     async_add_entities(entities)
 
 
