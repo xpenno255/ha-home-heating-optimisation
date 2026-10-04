@@ -22,6 +22,7 @@ from .cutoff_policy import (
     MAX_ATTEMPTS,
     MAX_HOLD,
     RENEW_BEFORE,
+    cloud_override,
     cutoff_config,
     cutoff_temperature,
     is_hold,
@@ -68,6 +69,8 @@ class DhwCutoff:
             return
         entities = [self.cfg[k] for k in ("water_heater_entity", "demand_entity")]
         entities.append(self.cfg["cylinder_temp_entity"])
+        if self.cfg["cloud_entity"]:
+            entities.append(self.cfg["cloud_entity"])
         self._unsub.append(async_track_state_change_event(self.hass, entities, self._changed))
         self._unsub.append(async_track_time_interval(self.hass, self._changed, TICK))
         self._kick()
@@ -118,6 +121,11 @@ class DhwCutoff:
         if current != "follow_schedule":
             # A boost, user override or unknown mode: never overridden here.
             self.standby_reason = f"water heater mode {current}"
+            return
+        # After an HA restart the RAMSES entity can show follow_schedule mid-boost; the
+        # cloud entity keeps the controller's real mode (live 4 Oct 13:29).
+        if reason := cloud_override(self.hass.states.get(cfg["cloud_entity"] or "")):
+            self.standby_reason = reason
             return
         self.standby_reason = None
         if not self.gave_up and should_stop(demand, temperature, params, cfg["margin"]):

@@ -892,6 +892,8 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             values = {**CUTOFF_DEFAULTS, **user_input}
             entities = [values.get(k) for k in ("water_heater_entity", "demand_entity")]
             entities.append(values.get("cylinder_temp_entity"))
+            if values.get("cloud_entity"):
+                entities.append(values["cloud_entity"])
             error = cutoff_validation_error(values)
             if error is None and self.invalid_sources(entities):
                 error = "invalid_source"
@@ -918,12 +920,14 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             "cylinder_temp_entity": old["cylinder_temp_entity"]
             or schedule["cylinder_temp_entity"]
             or boiler.get("cylinder_temp_entity"),
+            "cloud_entity": old["cloud_entity"] or self.cloud_water_heater(),
         }
         schema = {
             vol.Optional("enabled", default=old["enabled"]): bool,
             optional("water_heater_entity", suggested): entity_selector(("water_heater",)),
             optional("demand_entity", suggested): entity_selector(("binary_sensor", "sensor")),
             optional("cylinder_temp_entity", suggested): entity_selector(("sensor",)),
+            optional("cloud_entity", suggested): entity_selector(("water_heater",)),
             vol.Required("margin", default=old["margin"]): vol.All(
                 vol.Coerce(float), vol.Range(min=CUTOFF_MIN_MARGIN, max=CUTOFF_MAX_MARGIN)
             ),
@@ -931,6 +935,16 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         return self.async_show_form(
             step_id="dhw_cutoff", errors=errors, data_schema=vol.Schema(schema)
         )
+
+    def cloud_water_heater(self):
+        """The Evohome cloud water heater, when exactly one is loaded."""
+        found = [
+            st.entity_id
+            for st in self.hass.states.async_all("water_heater")
+            if isinstance(st.attributes.get("status"), dict)
+            and "state_status" in st.attributes["status"]
+        ]
+        return found[0] if len(found) == 1 else None
 
     async def async_step_advisor(self, user_input=None):
         self.current = effective_config(self.config_entry)

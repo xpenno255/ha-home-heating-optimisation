@@ -23,6 +23,9 @@ DEFAULTS = {
     "water_heater_entity": None,
     "demand_entity": None,
     "cylinder_temp_entity": None,
+    # Optional Evohome cloud water heater: its mode survives an HA restart, when the
+    # RAMSES entity can briefly show follow_schedule in the middle of a boost.
+    "cloud_entity": None,
     # Evohome normally stops at its first report a little above target (51-52 °C for a
     # 50 °C target); 1 °C catches the overruns without racing that by much.
     "margin": 1.0,
@@ -46,7 +49,7 @@ def cutoff_config(config):
     raw = raw if isinstance(raw, dict) else {}
     out = {**DEFAULTS, **{k: raw[k] for k in DEFAULTS if k in raw}}
     out["enabled"] = bool(out["enabled"])
-    for key in ENTITY_FIELDS:
+    for key in (*ENTITY_FIELDS, "cloud_entity"):
         out[key] = out[key] if isinstance(out[key], str) and out[key] else None
     try:
         out["margin"] = float(out["margin"])
@@ -113,3 +116,23 @@ def is_hold(mode):
         and mode.get("mode") == "temporary_override"
         and mode.get("active") is False
     )
+
+
+def cloud_override(state):
+    """Why the Evohome cloud entity shows DHW is not following a scheduled charge.
+
+    None when it follows the schedule with the schedule on, or when it gives no usable
+    answer (missing, unavailable, no status): the RAMSES mode check still applies.
+    """
+    if state is None or state.state in ("unavailable", "unknown"):
+        return None
+    status = state.attributes.get("status")
+    if not isinstance(status, dict):
+        return None
+    mode = (status.get("state_status") or {}).get("mode")
+    if isinstance(mode, str) and mode and mode != "FollowSchedule":
+        return f"Evohome mode {mode}"
+    scheduled = (status.get("setpoints") or {}).get("this_sp_state")
+    if mode == "FollowSchedule" and scheduled == "Off":
+        return "Evohome schedule has DHW off"
+    return None
