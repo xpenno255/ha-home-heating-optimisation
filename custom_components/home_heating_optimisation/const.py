@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 DOMAIN = "home_heating_optimisation"
 NAME = "Home Heating Optimisation"
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 ROOMS = "rooms"
 ZONES = "zones"
 ROOM_MAX_AGE = 30 * 60
