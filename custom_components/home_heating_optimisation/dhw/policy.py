@@ -239,7 +239,9 @@ class Evidence:
             self.off_since = mono
         if self.charged and temperature is not None and temperature >= high:
             self.reached = True
-        if self.charged and allowed is False:
+        # A running charge shows the controller allows DHW, so an inactive mode read
+        # alongside it is stale (live 10 Oct: RAMSES kept the previous day's mode).
+        if self.charged and allowed is False and demand is not True:
             self.schedule_off = True
 
     def result(self, mono):

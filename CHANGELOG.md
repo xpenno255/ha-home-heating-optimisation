@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.9.2 - DHW target schedule ignores a stale inactive mode (commissioning prerelease)
+
+- The DHW target schedule no longer ends a higher-target session as `incomplete` while a charge is running. A water heater mode that reads inactive during a charge is treated as stale; schedule-off is judged once demand has stopped.
+- Why: on 10 Oct Evohome started the 04:40 charge while the RAMSES water heater still showed the previous day's inactive mode. The session was restored to 50 °C in the same second, so the cutoff stopped the charge at 51.8 °C instead of 60 °C.
+
 ## 0.9.1 - DHW cutoff leaves boosts alone after a restart (commissioning prerelease)
 
 - New optional **Evohome cloud water heater** field in **Configure → DHW measured-temperature cutoff** (suggested automatically when exactly one is loaded). While it shows any mode other than `FollowSchedule`, or the schedule has DHW off, the cutoff stays in standby.

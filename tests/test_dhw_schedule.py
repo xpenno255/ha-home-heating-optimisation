@@ -182,6 +182,29 @@ async def test_schedule_off_after_charging_ends_early_as_incomplete(
     assert schedule.store.data["last"]["outcome"] == "incomplete"
 
 
+async def test_charge_while_mode_reads_inactive_keeps_the_higher_target(
+    hass,
+    controlled,  # noqa: F811
+    sources,
+    freezer,
+):
+    # Live 10 Oct: the charge began while RAMSES still showed the previous day's
+    # inactive mode, and the session was restored to 50 °C in the same second.
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    await at(hass, freezer, schedule, monday(4))
+    heater(hass, 60.0, active=False)
+    await at(hass, freezer, schedule, minutes=30)
+    hass.states.async_set("sensor.hw", 100)
+    await at(hass, freezer, schedule, minutes=20)
+    assert len(writes) == 1 and schedule.status == "elevated"
+    hass.states.async_set("sensor.cylinder", 60.5, {"unit_of_measurement": "°C"})
+    hass.states.async_set("sensor.hw", 0)
+    await at(hass, freezer, schedule, minutes=1)
+    assert writes[-1]["setpoint"] == 50.0
+    await at(hass, freezer, schedule, minutes=2)
+    assert schedule.store.data["last"]["outcome"] == "complete"
+
+
 async def test_external_change_pauses_without_overwriting(hass, controlled, sources, freezer):  # noqa: F811
     _, schedule, writes = await begin(hass, controlled, freezer)
     await at(hass, freezer, schedule, monday(4))
@@ -434,6 +457,14 @@ def test_evidence_needs_charge_target_and_continuous_off():
     ev.observe(310, False, None, True, 60)
     assert ev.result(900) is None
     assert ev.result(910) == "complete"
+
+
+def test_evidence_ignores_inactive_mode_during_a_charge():
+    ev = Evidence()
+    ev.observe(0, True, None, False, 60)
+    assert ev.charged and not ev.schedule_off and ev.result(10) is None
+    ev.observe(20, False, None, False, 60)
+    assert ev.result(30) == "incomplete"
 
 
 def test_rename_updates_dhw_section():
