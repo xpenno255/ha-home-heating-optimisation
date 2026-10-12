@@ -85,7 +85,8 @@
           "gateways": "Gateway monitoring",
           "energy": "Metered energy evidence",
           "dhw_schedule": "DHW target schedule",
-          "dhw_cutoff": "DHW measured-temperature cutoff"
+          "dhw_cutoff": "DHW measured-temperature cutoff",
+          "optimum": "Optimum start predictor (shadow)"
         }
       },
       "room": {
@@ -343,6 +344,24 @@
           "margin": "With a 50 \u00b0C target and a 1 \u00b0C margin the charge stops at the first reading of 51 \u00b0C or more. On days with a higher DHW target schedule the cutoff follows that target.",
           "cloud_entity": "Recommended. Its mode survives a Home Assistant restart, when the RAMSES entity can briefly show the schedule in the middle of a boost. While it shows an override, or the schedule has DHW off, the cutoff stays out of the way."
         }
+      },
+      "optimum": {
+        "title": "Optimum start predictor (shadow)",
+        "description": "Learns how fast each room warms and cools from the analytics history, predicts when it should start warming before an upward schedule change and when heating could stop before a downward one, and scores those predictions against what Evohome's own Optimum Start did. It only predicts and records: it never changes any heating setting. Requires historical analytics. Needs a few comparable warm-ups and cool-downs per room before it reports ready.",
+        "data": {
+          "enabled": "Enable the shadow predictor",
+          "max_lead_minutes": "Longest warm-up lead (minutes)",
+          "margin_minutes": "Safety margin added to each start (minutes)",
+          "coast_drop": "Allowed drop below target before a switchpoint (\u00b0C)",
+          "min_warmups": "Warm-ups needed per room",
+          "min_cooldowns": "Cool-downs needed per room",
+          "boost_flow": "What-if flow temperature (\u00b0C)",
+          "forecast_entity": "Weather forecast (optional)"
+        },
+        "data_description": {
+          "boost_flow": "Only used to estimate how much sooner a hotter flow would get the room warm. It is never applied.",
+          "forecast_entity": "An hourly outdoor forecast improves predictions on mornings that are warming or cooling. Without it the current outdoor temperature is used."
+        }
       }
     },
     "error": {
@@ -375,7 +394,8 @@
       "dhw_invalid_window": "The window must start before it ends, within one day.",
       "dhw_missing_entity": "Select the water heater, demand and cylinder temperature entities to enable the schedule.",
       "dhw_params_unavailable": "The water heater does not report its setpoint, overrun and differential. Check RAMSES before enabling.",
-      "dhw_cutoff_invalid_margin": "Enter a margin between 0.5 and 10 \u00b0C."
+      "dhw_cutoff_invalid_margin": "Enter a margin between 0.5 and 10 \u00b0C.",
+      "optimum_invalid_value": "A setting is outside its allowed range."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
@@ -524,6 +544,15 @@
           "holding": "Holding DHW off",
           "unconfirmed": "Stop not confirmed",
           "standby": "Standby (boost or override)"
+        }
+      },
+      "optimum_start": {
+        "name": "Optimum start",
+        "state": {
+          "disabled": "Disabled",
+          "needs_analytics": "Needs analytics",
+          "learning": "Learning",
+          "ready": "Ready"
         }
       }
     },

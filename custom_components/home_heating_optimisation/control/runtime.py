@@ -469,6 +469,7 @@ class Controls:
             "gateways": self.gateway_report(),
             "dhw_schedule": self.dhw_report(),
             "dhw_cutoff": self.dhw_cutoff_report(),
+            "optimum": self.optimum_report(),
         }
 
     def dhw_report(self):
@@ -486,6 +487,15 @@ class Controls:
             return {"status": "unconfigured"}
         try:
             return cutoff.report()
+        except Exception as err:  # noqa: BLE001 - reporting must not break the report
+            return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
+
+    def optimum_report(self):
+        optimum = getattr(self.heating, "optimum", None)
+        if optimum is None:
+            return {"status": "unconfigured"}
+        try:
+            return optimum.report()
         except Exception as err:  # noqa: BLE001 - reporting must not break the report
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 

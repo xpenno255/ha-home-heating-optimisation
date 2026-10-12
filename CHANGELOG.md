@@ -2,6 +2,17 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.10.0 - shadow optimum start / stop predictor (commissioning prerelease)
+
+Optional, off by default. Nothing changes until it is enabled in **Configure → Optimum start predictor (shadow)**. Shadow only: it predicts, journals and scores, and never writes to any device (the only service it calls is the read-only `weather.get_forecasts`).
+
+- Learns each room's warm-up pace from what happened: every time the target rose by 0.5 K or more with the room at least 0.5 K short, how many minutes the room took to arrive (events are kept, newest 60 per room, so learning outlasts the 15-day analytics window). The start lead is the recency-weighted median minutes per kelvin times the climb still needed, plus the margin; an outdoor term is used only with 8 or more events and only if it beats the plain median on leave-one-out error. The evening coast rate from demand-off cool-downs gives the stop estimate, and only when the house is actually cooling.
+- Why not a physics model: a thermal fit was not identifiable on the live house in mild weather, with 0.1–0.3 K target nudges and a pulsing burner.
+- Scores every start against what Evohome's Optimum Start actually did: when Evohome started, when the room arrived, the model's warm-up error, an estimate of how late HHO's own start would have been, and a what-if of a hotter flow (default 65 °C, from the room's usual supply temperature) to show whether boosting would have fixed a late morning. The what-if is never applied.
+- Optional hourly weather forecast for the outdoor temperature; falls back to the current outdoor reading, and each prediction records which it used.
+- `sensor.home_heating_optimisation_optimum_start` (disabled / needs_analytics / learning / ready, rolling scores), per-room optimum start and stop timestamp sensors, an `optimum` block in `get_control_report`, and `optimum` journal events (`start_predicted`, `start_scored`, `stop_predicted`). The journal kind list in the `get_journal` service now also offers `dhw_schedule` and `dhw_cutoff`.
+- Why: on 12 Oct Evohome's Optimum Stop silently dropped the Spare Room to 18 °C and was turned off, and morning warm-ups are slow (Kitchen and Living Room 0.4–1.5 K under target until 08:00–09:00). HHO's own predictor is built in shadow first so it can be scored against Evohome's Optimum Start before anything is activated.
+
 ## 0.9.2 - DHW target schedule ignores a stale inactive mode (commissioning prerelease)
 
 - The DHW target schedule no longer ends a higher-target session as `incomplete` while a charge is running. A water heater mode that reads inactive during a charge is treated as stale; schedule-off is judged once demand has stopped.

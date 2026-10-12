@@ -20,6 +20,7 @@ from .energy.meter import meter_specs
 from .gateway.monitor import GatewayMonitor
 from .journal.coordinator import Journal
 from .observations import watched_entities
+from .optimum.coordinator import Optimum
 from .services import async_register_services
 from .source_identity import async_register_source_identity
 from .trials.coordinator import Trials
@@ -77,6 +78,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
             hass, entry, coordinator.config, coordinator.telemetry.get
         )
         await coordinator.analytics.initialise()
+    coordinator.optimum = Optimum(hass, entry, coordinator)
+    entry.async_on_unload(coordinator.optimum.close)
+    await coordinator.optimum.initialise()
     coordinator.advisor = Advisor(hass, entry, coordinator)
     await coordinator.advisor.initialise()
     coordinator.gateways = GatewayMonitor(hass, entry, coordinator)
@@ -115,6 +119,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
     coordinator.trials.start()
     coordinator.dhw.start()
     coordinator.dhw_cutoff.start()
+    coordinator.optimum.start()
     coordinator.advisor.start()
     if coordinator.analytics:
         coordinator.analytics.start()

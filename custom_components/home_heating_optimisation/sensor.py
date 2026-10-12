@@ -54,6 +54,16 @@ async def async_setup_entry(hass, entry, async_add_entities):
         from .dhw.sensor import DhwCutoffSensor
 
         entities.append(DhwCutoffSensor(coordinator.dhw_cutoff))
+    if coordinator.optimum is not None:
+        from .optimum.sensor import OptimumRoomSensor, OptimumStartSensor
+
+        entities.append(OptimumStartSensor(coordinator.optimum))
+        if coordinator.optimum.cfg["enabled"]:
+            for room_id, c in coordinator.controls.rooms.items():
+                for kind in ("start", "stop"):
+                    entities.append(
+                        OptimumRoomSensor(coordinator.optimum, room_id, c.room_name, kind)
+                    )
     async_add_entities(entities)
 
 
