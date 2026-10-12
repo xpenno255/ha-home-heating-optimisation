@@ -43,6 +43,9 @@ get_journal:
             - advisor_report
             - advisor_followup
             - migration
+            - dhw_schedule
+            - dhw_cutoff
+            - optimum
     room_id:
       selector:
         text:

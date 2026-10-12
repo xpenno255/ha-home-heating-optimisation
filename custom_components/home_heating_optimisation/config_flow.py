@@ -60,6 +60,12 @@ from .gateway.monitor import (
     MIN_OFFLINE_MINUTES,
     gateway_config,
 )
+from .optimum.policy import DEFAULTS as OPTIMUM_DEFAULTS
+from .optimum.policy import INTEGERS as OPTIMUM_INTEGERS
+from .optimum.policy import LIMITS as OPTIMUM_LIMITS
+from .optimum.policy import SECTION as OPTIMUM_SECTION
+from .optimum.policy import optimum_config
+from .optimum.policy import validation_error as optimum_validation_error
 from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
@@ -356,6 +362,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 "energy",
                 "dhw_schedule",
                 "dhw_cutoff",
+                "optimum",
             ],
         )
 
@@ -934,6 +941,37 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         }
         return self.async_show_form(
             step_id="dhw_cutoff", errors=errors, data_schema=vol.Schema(schema)
+        )
+
+    async def async_step_optimum(self, user_input=None):
+        """Shadow optimum start / stop predictor: predicts and scores, never acts."""
+        self.current = effective_config(self.config_entry)
+        old = optimum_config(self.current)
+        errors = {}
+        if user_input is not None:
+            values = {**OPTIMUM_DEFAULTS, **user_input}
+            error = optimum_validation_error(values)
+            if error is None and self.invalid_sources([values.get("forecast_entity")]):
+                error = "invalid_source"
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_create_entry(
+                    title=NAME,
+                    data={
+                        **self.current,
+                        OPTIMUM_SECTION: optimum_config({OPTIMUM_SECTION: values}),
+                    },
+                )
+        schema = {vol.Optional("enabled", default=old["enabled"]): bool}
+        for key, (low, high) in OPTIMUM_LIMITS.items():
+            coerce = int if key in OPTIMUM_INTEGERS else float
+            schema[vol.Required(key, default=old[key])] = vol.All(
+                vol.Coerce(coerce), vol.Range(min=low, max=high)
+            )
+        schema[optional("forecast_entity", old)] = entity_selector(("weather",))
+        return self.async_show_form(
+            step_id="optimum", errors=errors, data_schema=vol.Schema(schema)
         )
 
     def cloud_water_heater(self):

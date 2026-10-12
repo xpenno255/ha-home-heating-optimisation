@@ -38,6 +38,7 @@ KINDS = (
     "migration",
     "dhw_schedule",
     "dhw_cutoff",
+    "optimum",
 )
 ORIGINS = ("controller", "user", "service", "source", "advisor", "unknown")
 UNKNOWN = "unknown"

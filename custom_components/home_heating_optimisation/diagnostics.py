@@ -19,6 +19,9 @@ async def async_get_config_entry_diagnostics(hass, entry):
         "journal": entry.runtime_data.journal.summary()
         if entry.runtime_data.journal
         else {"status": "disabled"},
+        "optimum": entry.runtime_data.optimum.quality()
+        if entry.runtime_data.optimum
+        else {"status": "disabled"},
         "energy": entry.runtime_data.energy.quality()
         if entry.runtime_data.energy
         else {"enabled": False},
