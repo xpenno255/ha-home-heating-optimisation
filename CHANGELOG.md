@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.10.1 - optimum predictor: learn after history loads, show the next warm-up (commissioning prerelease)
+
+- Learning waits until the analytics history has finished loading after a restart. On 12 Oct the first pass ran 20 seconds before the history loaded, so every room showed no events and no prediction for 10 minutes. The status report shows `waiting` (`history loading` / `no history yet`) meanwhile.
+- A room's optimum start sensor stays `unknown` until its next warm-up is within the maximum lead (3 h by default). It now also shows `next_warmup`, `next_warmup_from`, `next_warmup_to` and `predicting_from`, found from the RAMSES weekly schedule when the next switchpoint is a step down.
+
 ## 0.10.0 - shadow optimum start / stop predictor (commissioning prerelease)
 
 Optional, off by default. Nothing changes until it is enabled in **Configure → Optimum start predictor (shadow)**. Shadow only: it predicts, journals and scores, and never writes to any device (the only service it calls is the read-only `weather.get_forecasts`).

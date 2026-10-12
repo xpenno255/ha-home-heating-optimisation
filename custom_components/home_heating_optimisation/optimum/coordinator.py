@@ -59,6 +59,7 @@ class Optimum:
         self.closed = False
         self.fits = {}
         self.events = {}  # room id -> warm-up events, kept across the analytics window
+        self.waiting = None  # why learning has not run yet, for the status sensor
         self.forecast = Forecast()
         self.forecast_attempt = None
         self.learned_at = None
@@ -189,6 +190,26 @@ class Optimum:
             return None
         return current, dt_util.as_utc(upcoming[0][0]), upcoming[0][1]
 
+    def _next_warmup(self, c, now, switch):
+        """(switchpoint, from, to) of the next upward step, or None when unknown.
+
+        The cloud schedule gives only the next switchpoint; the RAMSES weekly schedule, when
+        cached, finds an upward one further ahead (e.g. tomorrow 07:00 from tonight).
+        """
+        if switch is not None and switch[2] - switch[0] >= MIN_STEP_K:
+            return switch[1], switch[0], switch[2]
+        try:
+            schedule = c._ramses_schedule(c._config.get("primary_climate"))
+            local = dt_util.as_local(now)
+            previous = setpoint_at(schedule, local)
+            for at, setpoint in next_switchpoints(schedule, local, 8):
+                if previous is not None and setpoint - previous >= MIN_STEP_K:
+                    return dt_util.as_utc(at), previous, setpoint
+                previous = setpoint
+        except Exception:  # noqa: BLE001 - no schedule just means no hint
+            return None
+        return None
+
     # -- evaluation --------------------------------------------------------
 
     async def step(self, now=None):
@@ -254,6 +275,15 @@ class Optimum:
             due = now - self.learned_at >= RELEARN_RETRY
         if not due:
             return
+        # After a restart the analytics history loads in the background; learning from an
+        # empty or half-loaded store would leave every room unfitted until the next retry.
+        if getattr(self.analytics, "backfill_status", None) in ("pending", "running"):
+            self.waiting = "history loading"
+            return
+        if not self.analytics.store.observations:
+            self.waiting = "no history yet"
+            return
+        self.waiting = None
         self.learned_at = now
         options = self.heating.config
         params = {
@@ -285,6 +315,7 @@ class Optimum:
         view = {"start": None, "stop": None}
         self.latest[room_id] = view
         switch = self._next_switch(c, now)
+        view["warmup"] = self._next_warmup(c, now, switch)
         if fit is not None and temp is not None and switch is not None:
             self._predict(now, room_id, switch, temp, fit, outdoor_at, source, records, view)
         for rec in records:
@@ -455,6 +486,10 @@ class Optimum:
             return "needs_analytics"
         return "ready" if any(f.status == "ready" for f in self.fits.values()) else "learning"
 
+    @property
+    def waiting_reason(self):
+        return self.waiting
+
     def room_view(self, room_id):
         """Start and stop predictions for a room sensor: (start_at, stop_at, attributes)."""
         view = self.latest.get(room_id) or {}
@@ -490,6 +525,16 @@ class Optimum:
                 boost_lead_minutes=pred.boost_lead_minutes,
                 boost_gain_minutes=pred.boost_gain_minutes,
             )
+        elif warmup := view.get("warmup"):
+            # No prediction yet: say which warm-up is next and when predicting starts.
+            at, low, high = warmup
+            begins = at - timedelta(minutes=self.cfg["max_lead_minutes"])
+            attrs.update(
+                next_warmup=_iso(at),
+                next_warmup_from=low,
+                next_warmup_to=high,
+                predicting_from=_iso(max(begins, dt_util.utcnow())),
+            )
         if stop:
             attrs.update(stop_coast_minutes=stop["coast_minutes"], stop_rate=stop["rate"])
         return (pred.start_at if pred else None), (stop["off_at"] if stop else None), attrs
@@ -511,6 +556,7 @@ class Optimum:
             "outdoor_source": self.outdoor_source,
             "forecast_entity": self.cfg["forecast_entity"],
             "forecast_fetched_at": _iso(self.forecast.fetched_at),
+            "waiting": self.waiting,
             "scores": rolling(self.scores),
             "rooms": rooms,
             "last_error": self.last_error,
