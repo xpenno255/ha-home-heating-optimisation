@@ -152,3 +152,40 @@ async def test_forecast_failure_falls_back_to_current_outdoor(hass, controlled):
     assert entry.runtime_data.optimum.outdoor_source == "current"
     assert entry.runtime_data.optimum.last_error is None
     entry.runtime_data.analytics = None
+
+
+async def test_learning_waits_for_history_and_hints_the_next_warmup(
+    hass,
+    controlled,  # noqa: F811
+    freezer,
+):
+    # Live 12 Oct: the first pass ran 20 s before the history finished loading and every
+    # room stayed unfitted for 10 minutes.
+    freezer.move_to(datetime(2026, 9, 19, 20, 0, tzinfo=timezone.utc))
+    switch = datetime(2026, 9, 20, 6, 0, tzinfo=timezone.utc)
+    entry, controls, calls = await start(hass, with_optimum(controlled, forecast_entity=None))
+    hass.states.async_set("sensor.outdoor", 5, {"unit_of_measurement": "°C"})
+    climate(hass, 19.0, 16.0)
+    cloud(hass, 16.0, 21.0, switch)
+    heating = entry.runtime_data
+    store = SimpleNamespace(observations=[])
+    heating.analytics = SimpleNamespace(store=store, backfill_status="running")
+    optimum = heating.optimum
+    await controls.refresh()
+    await optimum.step()
+    assert optimum.fits == {} and optimum.learned_at is None
+    assert optimum.report()["waiting"] == "history loading"
+
+    heating.analytics.backfill_status = "complete"
+    store.observations = history()
+    await optimum.step()
+    assert optimum.fits["study"].status == "ready" and optimum.report()["waiting"] is None
+
+    # Ten hours ahead: no prediction yet, but the sensor says which warm-up is next.
+    start_at, _, attrs = optimum.room_view("study")
+    assert start_at is None
+    assert attrs["next_warmup"] == switch.isoformat()
+    assert (attrs["next_warmup_from"], attrs["next_warmup_to"]) == (16.0, 21.0)
+    assert attrs["predicting_from"] == (switch - timedelta(minutes=180)).isoformat()
+    assert calls == []
+    heating.analytics = None
