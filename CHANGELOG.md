@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.10.2 - optimum predictor: aim at HHO's commanded target, learn the response delay, fix scoring (commissioning prerelease)
+
+- The goal is now HHO's commanded target (next switchpoint plus the room's model offset, limited to -1 to +2 K), not the bare schedule. Records, journal events and room attributes carry both `schedule_target` and `goal`.
+- Warm-up events record a `delay_minutes` (event start to the first reading 0.1 K above the start temperature). Pace is measured after that dead time, and a prediction is `delay + pace x climb`. Stored events without a delay count none.
+- Scoring fixed. A room already at its goal when the switchpoint arrives is `not_needed` and left out of the rolling scores. Evohome's start is the switchpoint unless the zone setpoint was raised before it (`evohome_early`); arrival is only searched from that start. Model error compares predicted with actual heating minutes; a lead-0 prediction is judged from when it was made. Boost lateness scales only the pace part.
+- Why: on 13 Oct the Kitchen and Living Room stepped 18 to 19 °C at 06:30 while HHO commanded 19.3 / 19.4. The predictor aimed at 19.0, said lead 0, and the rooms took 78 and 85 minutes (about 45 of them dead time) to arrive. Scoring then reported a "reached" time before the switchpoint.
+
 ## 0.10.1 - optimum predictor: learn after history loads, show the next warm-up (commissioning prerelease)
 
 - Learning waits until the analytics history has finished loading after a restart. On 12 Oct the first pass ran 20 seconds before the history loaded, so every room showed no events and no prediction for 10 minutes. The status report shows `waiting` (`history loading` / `no history yet`) meanwhile.

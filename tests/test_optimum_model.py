@@ -18,6 +18,7 @@ from custom_components.home_heating_optimisation.optimum.learning import (
 from custom_components.home_heating_optimisation.optimum.model import (
     StartParams,
     boost_factor,
+    climb,
     fit_model,
     next_switchpoints,
     predict_start,
@@ -29,7 +30,7 @@ from custom_components.home_heating_optimisation.optimum.policy import (
     optimum_config,
     validation_error,
 )
-from custom_components.home_heating_optimisation.optimum.scoring import score_start
+from custom_components.home_heating_optimisation.optimum.scoring import rolling, score_start
 
 T0 = datetime(2026, 1, 15, 4, 0, tzinfo=timezone.utc)
 BASE = datetime(2026, 9, 12, tzinfo=timezone.utc)
@@ -396,3 +397,134 @@ def test_score_start_against_evohome():
     assert score["boost_lateness_estimate_min"] < score["evohome_lateness_min"] + 70
     assert score["hho_lateness_estimate_min"] is not None
     assert score["forecast_error_k"] is None
+
+
+# -- response delay -----------------------------------------------------------
+
+
+def lagged(start, t0, goal, delay, minutes):
+    """A warm-up whose room only starts to respond ``delay`` minutes after the target rises."""
+    points = [point(start - 5, t0, 16.0)]
+    for m in range(0, int(minutes) + 31, 5):
+        frac = max(0.0, min(1.0, (m - delay) / (minutes - delay)))
+        points.append(point(start + m, t0 + (goal - t0) * frac, goal))
+    return points
+
+
+def test_delay_is_time_to_first_response():
+    found = warmup_events(lagged(60, 18.0, 19.0, 40, 64), "z", 0.3)
+    assert len(found) == 1
+    assert (
+        40 <= found[0]["delay_minutes"] <= 50 and found[0]["delay_minutes"] <= found[0]["minutes"]
+    )
+
+
+def test_delay_and_pace_prediction_for_small_climbs():
+    now = (BASE + timedelta(days=30)).timestamp()
+    events = [
+        {**event(27, 0.5, 64.0, goal=19.0), "delay_minutes": 40.0},
+        {**event(28, 1.1, 82.0, goal=19.0), "delay_minutes": 40.0},
+        {**event(29, 0.9, 88.0, goal=19.0), "delay_minutes": 42.0},
+    ]
+    model = fit_model(events, now)
+    assert model.delay_minutes == 40.0
+    # Pace after the dead time: 48, 38 and 51 minutes per kelvin.
+    assert 35 < model.minutes_per_k < 52
+    params = StartParams(margin_minutes=10, max_lead_minutes=180)
+    switch = T0 + timedelta(hours=3)
+    pred = predict_start(T0, switch, 19.3, 18.9, model, None, 65.0, params)
+    assert pred.delay_minutes == 40.0
+    assert math.isclose(pred.heating_minutes, 40 + model.minutes_per_k * 0.4, abs_tol=0.1)
+    assert pred.lead_minutes == math.ceil(pred.heating_minutes + 10)
+    # Room already within tolerance of the goal: nothing to start, no dead time either.
+    done = predict_start(T0, switch, 19.3, 19.1, model, None, 65.0, params)
+    assert done.lead_minutes == 0 and done.heating_minutes == 0
+    assert climb(19.3, 19.1, 0.3) == 0.0
+
+
+def test_stored_events_without_a_delay_count_none():
+    now = (BASE + timedelta(days=30)).timestamp()
+    old = [event(d, 2.0, 40.0) for d in range(20, 24)]
+    assert fit_model(old, now).delay_minutes == 0.0
+    assert math.isclose(fit_model(old, now).minutes_per_k, 20.0)
+    mixed = [*old, {**event(29, 2.0, 70.0), "delay_minutes": 30.0}]
+    model = fit_model(mixed, now)
+    assert model.delay_minutes == 30.0  # only the event that recorded one counts
+
+
+# -- scoring replays of 13 Oct ------------------------------------------------
+
+SWITCH = (BASE + timedelta(hours=7)).timestamp()
+
+
+def at(m):
+    return SWITCH + m * 60
+
+
+def replay(temp, setpoint, **extra):
+    """Samples every 5 minutes from 120 minutes before the switchpoint to 120 after."""
+    samples = [[at(m), temp(m), setpoint(m), 5.0] for m in range(-120, 121, 5)]
+    return {
+        "switch_ts": SWITCH,
+        "target": 19.3,
+        "schedule_target": 19.0,
+        "mpk": 30.0,
+        "delay_minutes": 40.0,
+        "median_supply": 45.0,
+        "boost_flow": 65.0,
+        "samples": samples,
+        "outdoor_source": "current",
+        "forecast_mean": None,
+        "frozen": {"start_ts": at(0), "lead_minutes": 0, "frozen_at": at(4)},
+        **extra,
+    }
+
+
+def slow_rise(m):
+    return 18.9 + max(0, m - 40) * 0.025
+
+
+def test_score_not_needed_when_already_at_target():
+    record = replay(lambda m: 19.2, lambda m: 19.0 if m >= 0 else 18.0)
+    score = score_start(record)
+    assert score["outcome"] == "not_needed"
+    assert score["evohome_lateness_min"] is None and score["model_error_min"] is None
+    assert score["hho_lateness_estimate_min"] is None
+    assert rolling([score])["scored"] == 0
+
+
+def test_score_evohome_does_nothing_early_and_ignores_pre_switch_samples():
+    # Two warm samples before the switchpoint (the room then cooled to 18.9): not arrival.
+    def temp(m):
+        return 19.2 if -60 <= m <= -55 else 18.9 if m <= 40 else slow_rise(m)
+
+    score = score_start(replay(temp, lambda m: 19.0 if m >= 0 else 18.0))
+    assert score["outcome"] == "scored"
+    assert score["evohome_early"] is False
+    assert score["evohome_start"] == datetime.fromtimestamp(SWITCH, timezone.utc).isoformat()
+    assert score["reached"] == datetime.fromtimestamp(at(45), timezone.utc).isoformat()
+    assert score["evohome_lateness_min"] == 45.0
+    # Predicted 40 + 30 * 0.4 = 52 minutes against 45 actual.
+    assert score["model_error_min"] == 7.0
+    # Frozen at 4 minutes past its (lead 0) start: judged from the climb at that moment.
+    assert score["hho_lateness_estimate_min"] == 56.0
+    assert score["boost_lateness_estimate_min"] < 52.0
+    assert rolling([score])["scored"] == 1
+
+
+def test_score_when_evohome_raises_the_zone_early():
+    score = score_start(
+        replay(lambda m: 18.9 if m <= 40 else slow_rise(m), lambda m: 19.0 if m >= -60 else 18.0)
+    )
+    assert score["evohome_early"] is True
+    assert score["evohome_start"] == datetime.fromtimestamp(at(-60), timezone.utc).isoformat()
+    assert score["evohome_lateness_min"] == 45.0
+
+
+def test_closing_follows_the_schedule_target_not_the_goal():
+    from custom_components.home_heating_optimisation.optimum.coordinator import Optimum
+
+    rec = {"schedule_target": 19.0, "target": 19.3, "switch_ts": SWITCH}
+    now = datetime.fromtimestamp(SWITCH + 40 * 60, timezone.utc)
+    assert Optimum._closing(rec, now, 19.0) is False
+    assert Optimum._closing(rec, now, 18.0) is True
