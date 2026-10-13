@@ -135,7 +135,8 @@ def score_start(record, tolerance=0.3):
 
 def rolling(scores):
     """Median model error (minutes, absolute) and Evohome lateness over scored records."""
-    scores = [s for s in scores if s.get("outcome") != "not_needed"]
+    # Scores from before 0.10.2 have no outcome and used a different goal; leave them out.
+    scores = [s for s in scores if s.get("outcome") not in (None, "not_needed")]
     errors = [abs(s["model_error_min"]) for s in scores if s.get("model_error_min") is not None]
     late = [s["evohome_lateness_min"] for s in scores if s.get("evohome_lateness_min") is not None]
     return {

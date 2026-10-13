@@ -16,8 +16,12 @@ from zoneinfo import ZoneInfo
 from ..analytics.const import MAX_GAP_SECONDS
 from .model import RoomModel, fit_model
 
-# A rise of at least this in the target starts an event, and the room must be this short.
+# A rise of at least this in the target (over RISE_WINDOW, so a schedule step followed a
+# minute later by HHO's own offset counts once) starts an event.
 RISE_K = 0.5
+RISE_WINDOW_SECONDS = 15 * 60
+# The room must be short of the arrival line (goal - tolerance) by at least this.
+SHORTFALL_K = 0.1
 ABANDON_DROP_K = 0.3
 HOLD_SECONDS = 600
 # The room has responded once it reads this far above where the event began.
@@ -62,23 +66,34 @@ def _mean(values):
 def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
     """Completed warm-ups of one zone, oldest first.
 
-    Start: target up >= 0.5 K on the previous sample with the room >= 0.5 K short. Later
-    target changes are ignored unless the target drops 0.3 K below the goal (abandoned),
+    Start: target up >= 0.5 K within 15 minutes with the room at least 0.1 K below the
+    arrival line (goal - tolerance). A further rise within those 15 minutes raises the goal
+    (live 13 Oct: 18.0 -> 19.0 schedule, then 19.3 a minute later). Later target changes
+    are ignored unless the target drops 0.3 K below the goal (abandoned),
     as are a data gap over 30 minutes or an event running past 4 hours. Success: the room
     within ``tolerance`` of the goal for 10 minutes; minutes run to the first of those.
     """
     zone_tz = ZoneInfo(tz)
-    events, current, previous = [], None, None
+    events, current, previous, recent = [], None, None, []
     for obs in observations:
         t = obs["time"]
         z = obs["zones"].get(zone, {})
         if previous is not None and t - previous["t"] > MAX_GAP_SECONDS:
             current = previous = None
+            recent = []
         if not _valid(z, t):
             current = previous = None
+            recent = []
             continue
         temp, target = z["temperature"], z["target"]
+        recent = [(rt, rv) for rt, rv in recent if t - rt <= RISE_WINDOW_SECONDS]
         ended = False
+        if (
+            current is not None
+            and target > current["goal"]
+            and t - current["start"] <= RISE_WINDOW_SECONDS
+        ):
+            current["goal"] = target
         if current is not None:
             current["outdoor"].append(obs["context"].get("outdoor"))
             current["supply"].append(obs["context"].get("supply"))
@@ -89,9 +104,18 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
                 or target < current["goal"] - ABANDON_DROP_K
             ):
                 current = None
-            elif temp >= current["goal"] - tolerance:
+            elif temp >= min(current["goal"], target) - tolerance:
+                # HHO may trim its target during the warm-up (live 12 Oct, Kitchen 19.5 ->
+                # 19.4 at 07:48); arrival is judged against the lower of the two.
+                current["arrival"] = min(current["goal"], target)
                 current["hit"] = current["hit"] or t
-                if t - current["hit"] >= HOLD_SECONDS:
+                if (
+                    t - current["hit"] >= HOLD_SECONDS
+                    and current["arrival"] - current["t0"] < tolerance + SHORTFALL_K - 1e-9
+                ):
+                    # A trimmed target left almost nothing to climb: not a warm-up.
+                    current, ended = None, True
+                elif t - current["hit"] >= HOLD_SECONDS:
                     minutes = round((current["hit"] - current["start"]) / 60, 1)
                     rise = current["rise"] or current["hit"]
                     local = datetime.fromtimestamp(current["start"], zone_tz)
@@ -99,8 +123,8 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
                         {
                             "start": current["start"],
                             "t0": current["t0"],
-                            "goal": current["goal"],
-                            "deficit": round(current["goal"] - current["t0"], 2),
+                            "goal": current["arrival"],
+                            "deficit": round(current["arrival"] - current["t0"], 2),
                             "minutes": minutes,
                             # Dead time before the room first responds (relay and boiler lag).
                             "delay_minutes": min(minutes, round((rise - current["start"]) / 60, 1)),
@@ -115,9 +139,10 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
         if (
             current is None
             and not ended
-            and previous is not None
-            and target - previous["target"] >= RISE_K
-            and target - temp >= RISE_K
+            and recent
+            and target - min(rv for _, rv in recent) >= RISE_K
+            and target > previous["target"]
+            and target - tolerance - temp >= SHORTFALL_K - 1e-9
         ):
             current = {
                 "start": t,
@@ -129,6 +154,7 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
                 "supply": [obs["context"].get("supply")],
             }
         previous = {"t": t, "target": target}
+        recent.append((t, target))
     return events
 
 

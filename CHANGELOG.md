@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.10.3 - optimum predictor: catch stepped warm-ups, steadier dead time
+
+- A warm-up now starts on a target rise of 0.5 K or more within 15 minutes, with the room at least 0.1 K below the arrival line; a further rise in that window raises the goal. On 13 Oct the schedule's 19.0 and HHO's 19.3 a minute later were two small steps, and none of that morning's warm-ups were learned.
+- Arrival is judged against the lower of the goal and the current target, so HHO trimming its target mid warm-up no longer turns a real arrival into a miss (12 Oct Kitchen). Warm-ups left with under 0.4 K to climb are dropped.
+- The dead time is measured only on climbs of 0.8 K or more. With 0.1 K sensor steps the first rise on a small climb is often the arrival itself (13 Oct Kitchen), which made the delay swallow the whole warm-up. Pace now uses the room's dead time rather than each event's own.
+- Scores recorded before 0.10.2 are left out of the rolling figures.
+
 ## 0.10.2 - optimum predictor: aim at HHO's commanded target, learn the response delay, fix scoring (commissioning prerelease)
 
 - The goal is now HHO's commanded target (next switchpoint plus the room's model offset, limited to -1 to +2 K), not the bare schedule. Records, journal events and room attributes carry both `schedule_target` and `goal`.

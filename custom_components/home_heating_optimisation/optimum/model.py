@@ -21,6 +21,8 @@ HALF_LIFE_DAYS = 7.0
 MIN_CLIMB = 0.3
 # Floor for an outdoor-adjusted pace (minutes per kelvin).
 MIN_PACE = 1.0
+# Smallest climb whose first +0.1 K reading measures the dead time.
+DELAY_MIN_DEFICIT = 0.8
 # The outdoor term is only tried with this many events, and must beat the plain median.
 MIN_OUTDOOR_EVENTS = 8
 RADIATOR_EXPONENT = 1.3
@@ -92,19 +94,22 @@ def climb(target, temp, tolerance):
     return target - temp if temp < target - tolerance else 0.0
 
 
-def pace(event, tolerance):
-    """Minutes per kelvin after the dead time (stored events without one count none)."""
-    return (event["minutes"] - (event.get("delay_minutes") or 0.0)) / effective_deficit(
-        event, tolerance
-    )
+def pace(event, tolerance, delay):
+    """Minutes per kelvin after the room's dead time ``delay``."""
+    return max(0.0, event["minutes"] - delay) / effective_deficit(event, tolerance)
 
 
 def _delay(events, now_ts):
-    """Recency-weighted median dead time over events that recorded one (0 when none)."""
+    """Recency-weighted median dead time (0 when none recorded).
+
+    Only climbs of DELAY_MIN_DEFICIT or more measure it: sensors report in 0.1 K steps, so
+    on a small climb the first +0.1 K reading is often the arrival itself (live 13 Oct,
+    Kitchen 18.9 -> 19.2 in one report) and the "delay" would swallow the whole warm-up.
+    """
     pairs = [
         (e["delay_minutes"], recency_weight(e, now_ts))
         for e in events
-        if e.get("delay_minutes") is not None
+        if e.get("delay_minutes") is not None and e["deficit"] >= DELAY_MIN_DEFICIT
     ]
     if not pairs:
         return 0.0
@@ -135,8 +140,9 @@ def recency_weight(event, now_ts):
 
 
 def _plain(events, now_ts, tolerance):
+    delay = _delay(events, now_ts)
     return weighted_median(
-        [pace(e, tolerance) for e in events], [recency_weight(e, now_ts) for e in events]
+        [pace(e, tolerance, delay) for e in events], [recency_weight(e, now_ts) for e in events]
     )
 
 
@@ -176,12 +182,13 @@ def fit_model(events, now_ts, tolerance=0.3):
     chosen_error = plain_median
     with_outdoor = [e for e in events if isinstance(e.get("outdoor"), (int, float))]
     if len(with_outdoor) >= MIN_OUTDOOR_EVENTS and plain_error is not None:
-        fit = _line([(_x(e), pace(e, tolerance)) for e in with_outdoor])
+        delay = _delay(with_outdoor, now_ts)
+        fit = _line([(_x(e), pace(e, tolerance, delay)) for e in with_outdoor])
         if fit is not None and fit[1] > 0:
             loo = []
             for i, e in enumerate(with_outdoor):
                 rest = with_outdoor[:i] + with_outdoor[i + 1 :]
-                sub = _line([(_x(r), pace(r, tolerance)) for r in rest])
+                sub = _line([(_x(r), pace(r, tolerance, _delay(rest, now_ts))) for r in rest])
                 if sub is None:
                     loo = None
                     break
