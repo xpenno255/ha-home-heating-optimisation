@@ -1,5 +1,6 @@
 """Shadow optimum predictor in the runtime: learns, predicts, scores, never acts."""
 
+import math
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from homeassistant.core import SupportsResponse
 
 from custom_components.home_heating_optimisation.const import DOMAIN
+from custom_components.home_heating_optimisation.optimum.coordinator import Optimum
 from tests.control.test_runtime import controlled as controlled  # noqa: F401 - fixture
 from tests.control.test_runtime import start
 from tests.test_optimum_model import warmup
@@ -85,6 +87,7 @@ async def test_predicts_scores_and_never_acts(hass, controlled, freezer):  # noq
     heating = entry.runtime_data
     heating.analytics = SimpleNamespace(store=SimpleNamespace(observations=history()))
     optimum = heating.optimum
+    optimum._offset = lambda _c: 0.0  # the comfort model's offset is not under test here
     assert hass.states.get(f"sensor.{DOMAIN}_living_room_optimum_start") is not None
     await controls.refresh()
     await optimum.step()
@@ -97,12 +100,12 @@ async def test_predicts_scores_and_never_acts(hass, controlled, freezer):  # noq
     assert attrs["boost_lead_minutes"] <= attrs["lead_minutes"]
     assert hass.states.get(f"sensor.{DOMAIN}_living_room_optimum_start").state != "unknown"
 
-    # Evohome starts at 06:00; the room reaches target at 06:55. Run past the switchpoint.
+    # Evohome does nothing early: the room only warms from the switchpoint. Run past it.
     temp = 17.0
     while datetime.now(timezone.utc) < switch + timedelta(minutes=125):
         freezer.tick(timedelta(minutes=5))
         now = datetime.now(timezone.utc)
-        started = now >= switch - timedelta(hours=1)
+        started = now >= switch
         temp = min(21.0, temp + 0.5) if started else temp - 0.02
         climate(hass, temp, 21.0 if started else 16.0)
         cloud(
@@ -119,7 +122,8 @@ async def test_predicts_scores_and_never_acts(hass, controlled, freezer):  # noq
     score = optimum.scores[-1]
     assert score["room_id"] == "study"
     assert score["evohome_start"] is not None and score["reached"] is not None
-    assert score["evohome_lateness_min"] <= 0
+    assert score["outcome"] == "scored" and score["evohome_early"] is False
+    assert score["evohome_lateness_min"] > 0 and score["schedule_target"] == 21.0
     assert score["outdoor_source"] == "forecast"
     kinds = {e["data"]["event"] for e in heating.journal.events(kinds=["optimum"])}
     assert {"start_predicted", "start_scored"} <= kinds
@@ -189,3 +193,15 @@ async def test_learning_waits_for_history_and_hints_the_next_warmup(
     assert attrs["predicting_from"] == (switch - timedelta(minutes=180)).isoformat()
     assert calls == []
     heating.analytics = None
+
+
+def test_goal_offset_is_commanded_target_minus_schedule_and_clamped():
+    def room(air, schedule):
+        return SimpleNamespace(data=SimpleNamespace(air_setpoint=air, schedule_setpoint=schedule))
+
+    offset = Optimum._offset
+    assert math.isclose(offset(room(19.3, 19.0)), 0.3)
+    assert offset(room(25.0, 19.0)) == 2.0
+    assert offset(room(10.0, 19.0)) == -1.0
+    assert offset(room(None, 19.0)) == 0.0
+    assert offset(room(19.3, None)) == 0.0

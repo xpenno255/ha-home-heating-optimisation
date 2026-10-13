@@ -40,6 +40,8 @@ CLOSE_AFTER = timedelta(minutes=120)
 # plan (manual hold, next period), which ends the record early.
 CHANGE_AFTER = timedelta(minutes=30)
 MIN_STEP_K = 0.25
+# HHO's model offset (commanded air target minus schedule) allowed into the goal.
+OFFSET_MIN, OFFSET_MAX = -1.0, 2.0
 MAX_SAMPLES = 400
 MAX_SCORES = 30
 CALL_TIMEOUT = 30.0
@@ -317,7 +319,7 @@ class Optimum:
         switch = self._next_switch(c, now)
         view["warmup"] = self._next_warmup(c, now, switch)
         if fit is not None and temp is not None and switch is not None:
-            self._predict(now, room_id, switch, temp, fit, outdoor_at, source, records, view)
+            self._predict(now, room_id, c, switch, temp, fit, outdoor_at, source, records, view)
         for rec in records:
             self._freeze(now, room_id, rec)
         for stop in self.stops.get(room_id, {}).values():
@@ -329,18 +331,19 @@ class Optimum:
             del stops[key]
         return changed
 
-    def _predict(self, now, room_id, switch, temp, fit, outdoor_at, source, records, view):
+    def _predict(self, now, room_id, c, switch, temp, fit, outdoor_at, source, records, view):
         current_sp, switch_at, next_sp = switch
         until = (switch_at - now).total_seconds() / 60
         if until > self.cfg["max_lead_minutes"]:
             return
         if next_sp - current_sp >= MIN_STEP_K and fit.model is not None:
             model = fit.model
+            goal = next_sp + self._offset(c)
             params = StartParams(self.cfg["margin_minutes"], self.cfg["max_lead_minutes"])
             pred = predict_start(
                 now,
                 switch_at,
-                next_sp,
+                goal,
                 temp,
                 model,
                 outdoor_at,
@@ -363,8 +366,10 @@ class Optimum:
                 outdoor_at(now + timedelta(minutes=m)) for m in range(0, int(until) + 1, 30)
             ]
             rec.update(
-                target=next_sp,
+                target=goal,
+                schedule_target=next_sp,
                 from_setpoint=current_sp,
+                delay_minutes=pred.delay_minutes,
                 boost_flow=self.cfg["boost_flow"],
                 mpk=pred.minutes_per_k,
                 median_supply=model.median_supply,
@@ -412,6 +417,8 @@ class Optimum:
         pred = rec["prediction"]
         return {
             "switchpoint": _iso(dt_util.utc_from_timestamp(rec["switch_ts"])),
+            "schedule_target": rec["schedule_target"],
+            "goal": rec["target"],
             "target": rec["target"],
             "temperature": rec["temp"],
             "start_at": _iso(pred.start_at),
@@ -419,6 +426,7 @@ class Optimum:
             "late_minutes": pred.late_minutes,
             "minutes_per_k": pred.minutes_per_k,
             "heating_minutes": pred.heating_minutes,
+            "delay_minutes": pred.delay_minutes,
             "outdoor_model": pred.outdoor_used,
             "boost_flow": rec["boost_flow"],
             "boost_lead_minutes": pred.boost_lead_minutes,
@@ -441,7 +449,7 @@ class Optimum:
 
     @staticmethod
     def _closing(rec, now, setpoint):
-        if "target" not in rec:
+        if "schedule_target" not in rec:
             return False
         after = now.timestamp() - rec["switch_ts"]
         if after >= CLOSE_AFTER.total_seconds():
@@ -449,8 +457,18 @@ class Optimum:
         return (
             after >= CHANGE_AFTER.total_seconds()
             and setpoint is not None
-            and abs(setpoint - rec["target"]) > 0.05
+            and abs(setpoint - rec["schedule_target"]) > 0.05
         )
+
+    @staticmethod
+    def _offset(c):
+        """HHO's commanded air target above the schedule, within -1.0 to +2.0 K, else 0."""
+        data = c.data
+        try:
+            offset = data.air_setpoint - data.schedule_setpoint
+        except TypeError:
+            return 0.0
+        return min(OFFSET_MAX, max(OFFSET_MIN, offset)) if offset == offset else 0.0
 
     def _score(self, room_id, rec):
         score = score_start(rec, self._tolerance())
@@ -505,6 +523,7 @@ class Optimum:
             "outdoor_model": model.outdoor_model if model else False,
             "loo_error_min": model.loo_error_min if model else None,
             "median_supply": model.median_supply if model else None,
+            "delay_minutes": model.delay_minutes if model else None,
             "cooldowns": fit.cooldowns if fit else 0,
             "coast_rate": fit.coast_rate if fit else None,
             "stop_reason": fit.coast_reason if fit else "insufficient cool-downs",
@@ -516,11 +535,13 @@ class Optimum:
         }
         if start and pred:
             attrs.update(
-                target=start["target"],
+                target=start["schedule_target"],
+                goal=start["target"],
                 switchpoint=_iso(dt_util.utc_from_timestamp(start["switch_ts"])),
                 lead_minutes=pred.lead_minutes,
                 late_minutes=pred.late_minutes,
                 heating_minutes=pred.heating_minutes,
+                delay_minutes=pred.delay_minutes,
                 boost_flow=start["boost_flow"],
                 boost_lead_minutes=pred.boost_lead_minutes,
                 boost_gain_minutes=pred.boost_gain_minutes,

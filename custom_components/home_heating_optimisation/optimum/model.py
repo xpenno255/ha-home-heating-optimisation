@@ -40,6 +40,8 @@ class RoomModel:
     median_supply: float | None
     events: int
     loo_error_min: float | None
+    # Dead time before a room responds, median over events that recorded one.
+    delay_minutes: float = 0.0
 
     @property
     def outdoor_model(self):
@@ -62,6 +64,7 @@ class StartPrediction:
     lead_minutes: int
     heating_minutes: float
     minutes_per_k: float
+    delay_minutes: float
     # Predicted minutes past the switchpoint when the lead would exceed the cap; 0 on time.
     late_minutes: int
     # What-if at the boost flow (never applied); all None when the supply is unknown.
@@ -90,7 +93,26 @@ def climb(target, temp, tolerance):
 
 
 def pace(event, tolerance):
-    return event["minutes"] / effective_deficit(event, tolerance)
+    """Minutes per kelvin after the dead time (stored events without one count none)."""
+    return (event["minutes"] - (event.get("delay_minutes") or 0.0)) / effective_deficit(
+        event, tolerance
+    )
+
+
+def _delay(events, now_ts):
+    """Recency-weighted median dead time over events that recorded one (0 when none)."""
+    pairs = [
+        (e["delay_minutes"], recency_weight(e, now_ts))
+        for e in events
+        if e.get("delay_minutes") is not None
+    ]
+    if not pairs:
+        return 0.0
+    return weighted_median([d for d, _ in pairs], [w for _, w in pairs])
+
+
+def predicted_minutes(event, delay, pace_value, tolerance):
+    return delay + pace_value * effective_deficit(event, tolerance)
 
 
 def weighted_median(values, weights):
@@ -145,7 +167,9 @@ def fit_model(events, now_ts, tolerance=0.3):
         rest = events[:i] + events[i + 1 :]
         guess = _plain(rest, now_ts, tolerance) if rest else None
         if guess is not None:
-            errors.append(abs(guess * effective_deficit(e, tolerance) - e["minutes"]))
+            errors.append(
+                abs(predicted_minutes(e, _delay(rest, now_ts), guess, tolerance) - e["minutes"])
+            )
     plain_error = statistics.fmean(errors) if errors else None
     plain_median = statistics.median(errors) if errors else None
     a = b = None
@@ -162,7 +186,9 @@ def fit_model(events, now_ts, tolerance=0.3):
                     loo = None
                     break
                 guess = max(MIN_PACE, sub[0] + sub[1] * _x(e))
-                loo.append(abs(guess * effective_deficit(e, tolerance) - e["minutes"]))
+                loo.append(
+                    abs(predicted_minutes(e, _delay(rest, now_ts), guess, tolerance) - e["minutes"])
+                )
             if loo and statistics.fmean(loo) < plain_error:
                 a, b = fit
                 chosen_error = statistics.median(loo)
@@ -174,6 +200,7 @@ def fit_model(events, now_ts, tolerance=0.3):
         median_supply=statistics.median(supplies) if supplies else None,
         events=len(events),
         loo_error_min=None if chosen_error is None else round(chosen_error, 1),
+        delay_minutes=round(_delay(events, now_ts), 1),
     )
 
 
@@ -210,20 +237,22 @@ def predict_start(now, switch_at, target, t_now, model, outdoor_at, boost_flow, 
     used = False
     if model.outdoor_model and outdoor_at is not None and need > 0:
         for _ in range(2):
-            span = max(1, round(pace_now * need))
+            span = max(1, round(model.delay_minutes + pace_now * need))
             samples = [outdoor_at(switch_at - timedelta(minutes=span * f / 4)) for f in range(5)]
             samples = [s for s in samples if s is not None]
             if not samples:
                 break
             pace_now = pace_at(model, target, sum(samples) / len(samples))
             used = True
-    heating = pace_now * need
+    heating = model.delay_minutes + pace_now * need if need > 0 else 0.0
     lead = math.ceil(heating + params.margin_minutes) if heating > 0 else 0
     total = min(params.max_lead_minutes, lead)
     factor = boost_factor(model.median_supply, boost_flow, t_now, target) if heating > 0 else None
     boost_lead = boost_late = boost_gain = None
     if factor is not None:
-        boost_total = math.ceil(heating * factor + params.margin_minutes)
+        boost_total = math.ceil(
+            model.delay_minutes + pace_now * need * factor + params.margin_minutes
+        )
         boost_lead = min(params.max_lead_minutes, boost_total)
         boost_late = max(0, boost_total - params.max_lead_minutes)
         boost_gain = lead - boost_total
@@ -232,6 +261,7 @@ def predict_start(now, switch_at, target, t_now, model, outdoor_at, boost_flow, 
         lead_minutes=total,
         heating_minutes=round(heating, 1),
         minutes_per_k=round(pace_now, 2),
+        delay_minutes=model.delay_minutes if need > 0 else 0.0,
         late_minutes=max(0, lead - params.max_lead_minutes),
         boost_lead_minutes=boost_lead,
         boost_late_minutes=boost_late,

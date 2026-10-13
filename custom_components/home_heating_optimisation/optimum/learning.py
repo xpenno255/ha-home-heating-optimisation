@@ -20,6 +20,8 @@ from .model import RoomModel, fit_model
 RISE_K = 0.5
 ABANDON_DROP_K = 0.3
 HOLD_SECONDS = 600
+# The room has responded once it reads this far above where the event began.
+RESPONSE_K = 0.1
 MAX_EVENT_SECONDS = 4 * 3600
 KEEP_EVENTS = 60
 # Radiators keep giving heat for a while after demand ends; those minutes are skipped.
@@ -80,6 +82,8 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
         if current is not None:
             current["outdoor"].append(obs["context"].get("outdoor"))
             current["supply"].append(obs["context"].get("supply"))
+            if current["rise"] is None and temp >= current["t0"] + RESPONSE_K:
+                current["rise"] = t
             if (
                 t - current["start"] > MAX_EVENT_SECONDS
                 or target < current["goal"] - ABANDON_DROP_K
@@ -88,6 +92,8 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
             elif temp >= current["goal"] - tolerance:
                 current["hit"] = current["hit"] or t
                 if t - current["hit"] >= HOLD_SECONDS:
+                    minutes = round((current["hit"] - current["start"]) / 60, 1)
+                    rise = current["rise"] or current["hit"]
                     local = datetime.fromtimestamp(current["start"], zone_tz)
                     events.append(
                         {
@@ -95,7 +101,9 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
                             "t0": current["t0"],
                             "goal": current["goal"],
                             "deficit": round(current["goal"] - current["t0"], 2),
-                            "minutes": round((current["hit"] - current["start"]) / 60, 1),
+                            "minutes": minutes,
+                            # Dead time before the room first responds (relay and boiler lag).
+                            "delay_minutes": min(minutes, round((rise - current["start"]) / 60, 1)),
                             "outdoor": _mean(current["outdoor"]),
                             "supply": _mean(current["supply"]),
                             "hour": local.hour,
@@ -116,6 +124,7 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
                 "t0": temp,
                 "goal": target,
                 "hit": None,
+                "rise": None,
                 "outdoor": [obs["context"].get("outdoor")],
                 "supply": [obs["context"].get("supply")],
             }
@@ -223,7 +232,12 @@ def build_fit(events, downs, params, now_ts):
         coast_rate=None if rate is None else round(rate, 3),
         coast_reason=reason,
         last_events=[
-            {"start": e["start"], "deficit": e["deficit"], "minutes": e["minutes"]}
+            {
+                "start": e["start"],
+                "deficit": e["deficit"],
+                "minutes": e["minutes"],
+                "delay_minutes": e.get("delay_minutes"),
+            }
             for e in events[-3:]
         ],
     )
