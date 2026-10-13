@@ -104,6 +104,28 @@ def test_small_target_nudges_are_ignored():
     assert warmup_events(warm, "z", 0.3) == []
 
 
+def test_a_stepped_rise_counts_once_at_the_final_goal():
+    # Live 13 Oct, Kitchen: schedule 18.0 -> 19.0 at 06:31 (room 18.9, so not yet short),
+    # HHO's 19.3 a minute later; the room arrived (19.0) 78 minutes after that.
+    points = [point(0, 18.9, 18.0), point(1, 18.9, 19.0), point(2, 18.9, 19.3)]
+    for m in range(5, 120, 5):
+        points.append(point(m, 18.9 if m < 80 else 19.1, 19.3, active=True))
+    events = warmup_events(points, "z", 0.3)
+    assert len(events) == 1
+    assert events[0]["goal"] == 19.3 and events[0]["t0"] == 18.9
+    assert events[0]["start"] == points[2]["time"] and events[0]["minutes"] == 78.0
+
+
+def test_legacy_scores_are_left_out_of_the_rolling_figures():
+    legacy = {"evohome_lateness_min": -175.2, "model_error_min": None}
+    scored = {"outcome": "scored", "evohome_lateness_min": 20.0, "model_error_min": -7.0}
+    assert rolling([legacy, scored]) == {
+        "scored": 1,
+        "median_model_error_min": 7.0,
+        "median_evohome_lateness_min": 20.0,
+    }
+
+
 def test_later_target_changes_are_ignored_but_a_drop_abandons():
     points = warmup(60, 18.0, 21.0, 90)
     # The target creeps up 0.2 K during the warm-up: still one event at the original goal.
@@ -427,14 +449,15 @@ def test_delay_and_pace_prediction_for_small_climbs():
         {**event(29, 0.9, 88.0, goal=19.0), "delay_minutes": 42.0},
     ]
     model = fit_model(events, now)
-    assert model.delay_minutes == 40.0
-    # Pace after the dead time: 48, 38 and 51 minutes per kelvin.
+    # Only climbs of 0.8 K or more measure the dead time (0.1 K sensor steps): 40 and 42.
+    assert model.delay_minutes == 42.0
+    # Pace after that dead time: 44, 36 and 51 minutes per kelvin.
     assert 35 < model.minutes_per_k < 52
     params = StartParams(margin_minutes=10, max_lead_minutes=180)
     switch = T0 + timedelta(hours=3)
     pred = predict_start(T0, switch, 19.3, 18.9, model, None, 65.0, params)
-    assert pred.delay_minutes == 40.0
-    assert math.isclose(pred.heating_minutes, 40 + model.minutes_per_k * 0.4, abs_tol=0.1)
+    assert pred.delay_minutes == 42.0
+    assert math.isclose(pred.heating_minutes, 42 + model.minutes_per_k * 0.4, abs_tol=0.1)
     assert pred.lead_minutes == math.ceil(pred.heating_minutes + 10)
     # Room already within tolerance of the goal: nothing to start, no dead time either.
     done = predict_start(T0, switch, 19.3, 19.1, model, None, 65.0, params)
@@ -450,6 +473,9 @@ def test_stored_events_without_a_delay_count_none():
     mixed = [*old, {**event(29, 2.0, 70.0), "delay_minutes": 30.0}]
     model = fit_model(mixed, now)
     assert model.delay_minutes == 30.0  # only the event that recorded one counts
+    # A small climb never measures the dead time: its first +0.1 K is often the arrival.
+    small = [*old, {**event(29, 0.5, 70.0), "delay_minutes": 70.0}]
+    assert fit_model(small, now).delay_minutes == 0.0
 
 
 # -- scoring replays of 13 Oct ------------------------------------------------
