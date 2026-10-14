@@ -2,6 +2,10 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.10.4 - optimum predictor: keep scoring a warm-up until the room arrives
+
+- A warm-up record was closed 30 minutes after the switchpoint whenever the zone setpoint differed from the schedule. HHO's own commanded target sits above the schedule (14 Oct: 19.5 for a 19.0 step), so every morning record closed before the room arrived and scored no arrival, lateness or model error. Records now close early only when the setpoint falls 0.3 K below the warm-up's target; otherwise 120 minutes after the switchpoint.
+
 ## 0.10.3 - optimum predictor: catch stepped warm-ups, steadier dead time
 
 - A warm-up now starts on a target rise of 0.5 K or more within 15 minutes, with the room at least 0.1 K below the arrival line; a further rise in that window raises the goal. On 13 Oct the schedule's 19.0 and HHO's 19.3 a minute later were two small steps, and none of that morning's warm-ups were learned.

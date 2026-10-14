@@ -35,6 +35,8 @@ STATES = ("disabled", "needs_analytics", "learning", "ready")
 TICK = timedelta(minutes=5)
 RELEARN = timedelta(hours=1)
 RELEARN_RETRY = timedelta(minutes=10)
+# A setpoint this far below the warm-up's target ends it early.
+ABANDON_K = 0.3
 CLOSE_AFTER = timedelta(minutes=120)
 # A setpoint that differs from the target this long after the switchpoint is a change of
 # plan (manual hold, next period), which ends the record early.
@@ -454,10 +456,14 @@ class Optimum:
         after = now.timestamp() - rec["switch_ts"]
         if after >= CLOSE_AFTER.total_seconds():
             return True
+        # Close early only when the target has come down again (a new period or a manual
+        # change). HHO's own commanded target sits above the schedule (live 14 Oct: 19.5 for
+        # a 19.0 step), which is the warm-up itself, not a change.
+        low = min(rec["schedule_target"], rec.get("goal", rec["schedule_target"]))
         return (
             after >= CHANGE_AFTER.total_seconds()
             and setpoint is not None
-            and abs(setpoint - rec["schedule_target"]) > 0.05
+            and setpoint < low - ABANDON_K
         )
 
     @staticmethod
