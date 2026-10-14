@@ -119,6 +119,13 @@ from .core.policy import (
     infer_dhw_demand,
     zone_max_demand,
 )
+from .core.warmup import (
+    WarmupBoostParams,
+    WarmupBoostState,
+    boost_step,
+    house_demand,
+    return_scale,
+)
 from .hub import BoilerFlowHub
 from .store import BFCStore
 
@@ -179,6 +186,12 @@ class BFCCoordinatorData:
     cycling_status: str = "normal"
     room_correction: float = 0.0
     room_error: float | None = None
+    # Warm-up flow boost (mode off: untouched)
+    warmup_mode: str = "off"
+    house_demand: float | None = None
+    room_equivalents: float | None = None
+    warmup_boost: float = 0.0
+    boost_flow: float | None = None
     # Diagnostics
     estimated_running_efficiency: int | None = None
     efficiency_status: str = STATUS_DISABLED
@@ -203,9 +216,23 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         write_guard=None,
         journal=None,
         target_pending=None,
+        warmup_config=None,
+        warmup_rooms=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._target_pending = target_pending or (lambda: False)
+        # Warm-up flow boost: options come from their own section, rooms from the controls.
+        self._warmup_config = warmup_config or (lambda: {"mode": "off"})
+        self._warmup_rooms = warmup_rooms or (lambda: [])
+        self._warmup_state = WarmupBoostState()
+        self._warmup_on = False
+        self._warmup_journaled = 0.0
+        self._warmup_stats = {
+            "day": None,
+            "minutes": 0.0,
+            "peak_house_demand": 0.0,
+            "peak_uplift": 0.0,
+        }
         self._entry = entry
         self._store = store
         self._hub = hub
@@ -428,6 +455,97 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         return ManualHoldParams(
             hold_minutes=self._opt(CONF_MANUAL_HOLD_MINUTES, DEFAULT_MANUAL_HOLD_MINUTES)
         )
+
+    # ------------------------------------------------------------------
+    # Warm-up flow boost
+    # ------------------------------------------------------------------
+
+    def _warmup_boost(self, d, now, physical_mode, base, curve_params, freshness) -> float:
+        """Publish the boost; returns the uplift to add to the target (active mode only)."""
+        cfg = self._warmup_config()
+        mode = d.warmup_mode = cfg["mode"]
+        if mode == "off" or base is None or physical_mode is not Mode.HEATING:
+            if self._warmup_on:
+                self._warmup_journal("ended", d)
+            self._warmup_state, self._warmup_on, self._warmup_journaled = (
+                WarmupBoostState(),
+                False,
+                0.0,
+            )
+            return 0.0
+        rooms = []
+        for entity, output, enabled in self._warmup_rooms():
+            if not enabled:
+                continue
+            value = self._float_state(entity, freshness=freshness, now=now, attribute="heat_demand")
+            rooms.append((value if value is not None and 0 <= value <= 1 else None, output))
+        house = house_demand(rooms)
+        params = WarmupBoostParams(
+            start=cfg["start"],
+            full=cfg["full"],
+            boost_max=curve_params.flow_max,
+            decay_k_per_min=cfg["decay_k_per_min"],
+        )
+        scale = (
+            return_scale(self._return_filtered, self._return_params().return_ceiling, params)
+            if mode == "active"
+            else 1.0
+        )
+        previous = self._warmup_state
+        state = boost_step(previous, house.fraction if house else None, base, now, params, scale)
+        self._warmup_state = state
+        d.house_demand = None if house is None else round(house.fraction, 3)
+        d.room_equivalents = None if house is None else round(house.room_equivalents, 2)
+        d.warmup_boost = round(state.uplift, 2)
+        d.boost_flow = round(min(curve_params.flow_max, base + state.uplift), 1)
+        stats = self._warmup_stats
+        today = dt_util.as_local(now).date()
+        if stats["day"] != today:
+            stats.update(day=today, minutes=0.0, peak_house_demand=0.0, peak_uplift=0.0)
+        if state.uplift > 0 and previous.updated_at is not None:
+            stats["minutes"] += min(
+                10.0, max(0.0, (now - previous.updated_at).total_seconds() / 60)
+            )
+        stats["peak_house_demand"] = max(stats["peak_house_demand"], d.house_demand or 0.0)
+        stats["peak_uplift"] = max(stats["peak_uplift"], d.warmup_boost)
+        if d.warmup_boost > 0 and not self._warmup_on:
+            self._warmup_on, self._warmup_journaled = True, d.warmup_boost
+            self._warmup_journal("started", d)
+        elif d.warmup_boost <= 0 and self._warmup_on:
+            self._warmup_on, self._warmup_journaled = False, 0.0
+            self._warmup_journal("ended", d)
+        elif self._warmup_on and abs(d.warmup_boost - self._warmup_journaled) >= 2.0:
+            self._warmup_journaled = d.warmup_boost
+            self._warmup_journal("updated", d, routine=True)
+        return state.uplift if mode == "active" else 0.0
+
+    def _warmup_journal(self, event, d, routine=False):
+        self._journal(
+            "warmup_boost",
+            {
+                "event": event,
+                "outcome": event,
+                "mode": d.warmup_mode,
+                "house_demand": d.house_demand,
+                "room_equivalents": d.room_equivalents,
+                "uplift": d.warmup_boost,
+                "boost_flow": d.boost_flow,
+                "return_used": self._return_filtered,
+            },
+            routine=routine,
+        )
+
+    def warmup_report(self):
+        stats = self._warmup_stats
+        data = self.data
+        return {
+            "mode": self._warmup_config()["mode"],
+            "house_demand": data.house_demand if data else None,
+            "uplift": data.warmup_boost if data else 0.0,
+            "minutes_in_boost_today": round(stats["minutes"], 1),
+            "peak_house_demand": stats["peak_house_demand"],
+            "peak_uplift": stats["peak_uplift"],
+        }
 
     # ------------------------------------------------------------------
     # Action
@@ -995,6 +1113,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             if d.curve is not None
             else None
         )
+        uplift = self._warmup_boost(d, now, physical_mode, heating_value, curve_params, freshness)
+        if uplift and heating_value is not None:
+            heating_value = min(curve_params.flow_max, heating_value + uplift)
         if d.dhw_active:
             params = self._dhw_params()
             fallback = self._opt(CONF_DHW_FALLBACK_FLOW, params.dhw_flow_max)

@@ -19,6 +19,11 @@ from .control.boiler.core.efficiency import (
     PROFILE_BG430I_NATURAL_GAS,
     PROFILE_DISABLED,
 )
+from .control.boiler.warmup_policy import DEFAULTS as WARMUP_DEFAULTS
+from .control.boiler.warmup_policy import LIMITS as WARMUP_LIMITS
+from .control.boiler.warmup_policy import SECTION as WARMUP_SECTION
+from .control.boiler.warmup_policy import validation_error as warmup_validation_error
+from .control.boiler.warmup_policy import warmup_config
 from .control.configuration import (
     BOILER_DEFAULTS,
     HUB_DEFAULTS,
@@ -363,6 +368,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 "dhw_schedule",
                 "dhw_cutoff",
                 "optimum",
+                "warmup_boost",
             ],
         )
 
@@ -941,6 +947,38 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         }
         return self.async_show_form(
             step_id="dhw_cutoff", errors=errors, data_schema=vol.Schema(schema)
+        )
+
+    async def async_step_warmup_boost(self, user_input=None):
+        """Warm-up flow boost from whole-house demand; saved apart from the control config."""
+        self.current = effective_config(self.config_entry)
+        old = warmup_config(self.current)
+        errors = {}
+        if user_input is not None:
+            values = {**WARMUP_DEFAULTS, **user_input}
+            error = warmup_validation_error(values)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_create_entry(
+                    title=NAME,
+                    data={**self.current, WARMUP_SECTION: warmup_config({WARMUP_SECTION: values})},
+                )
+        schema = {
+            vol.Required("mode", default=old["mode"]): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["off", "shadow", "active"],
+                    translation_key="warmup_boost_mode",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        }
+        for key, (low, high) in WARMUP_LIMITS.items():
+            schema[vol.Required(key, default=old[key])] = vol.All(
+                vol.Coerce(float), vol.Range(min=low, max=high)
+            )
+        return self.async_show_form(
+            step_id="warmup_boost", errors=errors, data_schema=vol.Schema(schema)
         )
 
     async def async_step_optimum(self, user_input=None):

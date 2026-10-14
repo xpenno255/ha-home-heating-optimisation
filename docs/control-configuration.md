@@ -64,3 +64,13 @@ Why: Evohome's Optimum Start is the only thing that pre-heats a room before an u
 - **Forecast.** An optional weather entity's hourly forecast (fetched every 30 minutes) replaces the current outdoor reading; a missing or over three hours old forecast falls back to the current reading.
 
 `sensor.home_heating_optimisation_optimum_start` shows `disabled`, `needs_analytics`, `learning` or `ready` with per-room summaries and rolling scores. Each room has `..._<room name>_optimum_start` and `..._optimum_stop` timestamp sensors (e.g. `sensor.home_heating_optimisation_kitchen_optimum_start`) with the lead, target, events, minutes per kelvin, outdoor model use, leave-one-out error, median supply, coast rate, last three events, confidence, the boost what-if and the last score. A start sensor stays `unknown` until the room's next warm-up is within the maximum lead; meanwhile `next_warmup` and `predicting_from` say which warm-up is next and when predicting begins. Learning waits for the analytics history to load after a restart. The control report has an `optimum` block. Scoring in progress is lost on a restart; models and scores are kept.
+
+## Warm-up flow boost
+
+**Configure → Warm-up flow boost** raises the boiler flow target while the house is asking for a lot of heat. It is off by default, saved on its own (it never resets controllers to shadow) and applies to the boiler's heating mode only, never to hot water charging.
+
+- **Signal.** Each enabled room's `heat_demand` (0-1 on its primary climate, read only when fresh) weighted by the room's installed radiator output gives the share of the house's capacity being asked for. With fewer than half the rooms reporting there is no boost. `room_equivalents` is the plain sum of demands.
+- **Uplift.** Zero below the start share (default 0.15), the full gap to the maximum flow at the full share (default 0.40), linear between. It rises at once and falls no faster than the decay setting (default 1 K per minute). The boost flow is the weather-curve value plus uplift, never above the maximum flow.
+- **Modes.** `off`; `shadow` publishes `house_demand`, `room_equivalents`, `warmup_boost` and `boost_flow` and journals `warmup_boost` events without changing what is written; `active` adds the uplift to the written target and fades it out as the filtered return temperature approaches the return ceiling minus 5 K.
+- **Report.** The control report has a `warmup_boost` block: mode, current demand share and uplift, minutes in boost today, peak demand share and uplift. Evohome still decides when the boiler fires; a hotter target makes each burn deliver more heat.
+

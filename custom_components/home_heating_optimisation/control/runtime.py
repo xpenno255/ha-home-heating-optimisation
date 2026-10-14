@@ -14,6 +14,7 @@ from ..const import DOMAIN
 from ..dhw.policy import dhw_config, usable
 from .boiler.coordinator import BFCCoordinator
 from .boiler.hub import BoilerFlowHub
+from .boiler.warmup_policy import warmup_config
 from .comfort.coordinator import OTCoordinator
 from .comfort.hub import OTHubData
 from .store import ControlStore
@@ -142,6 +143,8 @@ class Controls:
             write_guard=lambda: self.can_write("boiler"),
             journal=getattr(self.heating, "journal", None),
             target_pending=lambda: bool(getattr(self.heating.dhw, "uncertain", False)),
+            warmup_config=lambda: warmup_config(self.heating.config),
+            warmup_rooms=self.warmup_rooms,
         )
         # Do not act while configuration and all entities are still restoring.
         self.boiler.override = "shadow"
@@ -470,6 +473,7 @@ class Controls:
             "dhw_schedule": self.dhw_report(),
             "dhw_cutoff": self.dhw_cutoff_report(),
             "optimum": self.optimum_report(),
+            "warmup_boost": self.warmup_boost_report(),
         }
 
     def dhw_report(self):
@@ -489,6 +493,26 @@ class Controls:
             return cutoff.report()
         except Exception as err:  # noqa: BLE001 - reporting must not break the report
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
+
+    def warmup_rooms(self):
+        """``[(climate entity, installed output W, enabled)]`` for the warm-up flow boost."""
+        return [
+            (
+                c._config.get("primary_climate"),
+                c.data.installed_output_dt50_w if c.data else None,
+                c.enabled,
+            )
+            for c in self.rooms.values()
+        ]
+
+    def warmup_boost_report(self):
+        boiler = self.boiler
+        if boiler is None:
+            return {"mode": "off"}
+        try:
+            return boiler.warmup_report()
+        except Exception as err:  # noqa: BLE001 - reporting must not break the report
+            return {"mode": "error", "last_error": f"{type(err).__name__}: {err}"}
 
     def optimum_report(self):
         optimum = getattr(self.heating, "optimum", None)
