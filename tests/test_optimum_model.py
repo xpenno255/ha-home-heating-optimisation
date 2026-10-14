@@ -554,3 +554,7 @@ def test_closing_follows_the_schedule_target_not_the_goal():
     now = datetime.fromtimestamp(SWITCH + 40 * 60, timezone.utc)
     assert Optimum._closing(rec, now, 19.0) is False
     assert Optimum._closing(rec, now, 18.0) is True
+    # Live 14 Oct: HHO commanded 19.5 for a 19.0 step; that is the warm-up, not a change.
+    rec = {"schedule_target": 19.0, "goal": 19.5, "switch_ts": SWITCH}
+    assert Optimum._closing(rec, now, 19.5) is False
+    assert Optimum._closing(rec, now, 18.5) is True
