@@ -46,6 +46,7 @@ get_journal:
             - dhw_schedule
             - dhw_cutoff
             - optimum
+            - warmup_boost
     room_id:
       selector:
         text:

@@ -86,7 +86,8 @@
           "energy": "Metered energy evidence",
           "dhw_schedule": "DHW target schedule",
           "dhw_cutoff": "DHW measured-temperature cutoff",
-          "optimum": "Optimum start predictor (shadow)"
+          "optimum": "Optimum start predictor (shadow)",
+          "warmup_boost": "Warm-up flow boost"
         }
       },
       "room": {
@@ -362,6 +363,20 @@
           "boost_flow": "Only used to estimate how much sooner a hotter flow would get the room warm. It is never applied.",
           "forecast_entity": "An hourly outdoor forecast improves predictions on mornings that are warming or cooling. Without it the current outdoor temperature is used."
         }
+      },
+      "warmup_boost": {
+        "title": "Warm-up flow boost",
+        "description": "While several rooms call for heat at once, raises the boiler flow target above the weather curve, up to the maximum flow, so each burn delivers more heat. The size of the boost follows how much of the house's radiator capacity is calling. Evohome still decides when the boiler fires. Shadow calculates and records the boost without changing the flow target; active applies it, and backs off as the return temperature nears its ceiling. Not applied while hot water is charging.",
+        "data": {
+          "mode": "Mode",
+          "start": "Demand share where the boost starts (0-1)",
+          "full": "Demand share for the full boost (0-1)",
+          "decay_k_per_min": "Slowest fall of the boost (K per minute)"
+        },
+        "data_description": {
+          "start": "For example 0.15 means 15% of the house's radiator capacity is calling.",
+          "full": "Must be above the starting share."
+        }
       }
     },
     "error": {
@@ -395,7 +410,8 @@
       "dhw_missing_entity": "Select the water heater, demand and cylinder temperature entities to enable the schedule.",
       "dhw_params_unavailable": "The water heater does not report its setpoint, overrun and differential. Check RAMSES before enabling.",
       "dhw_cutoff_invalid_margin": "Enter a margin between 0.5 and 10 \u00b0C.",
-      "optimum_invalid_value": "A setting is outside its allowed range."
+      "optimum_invalid_value": "A setting is outside its allowed range.",
+      "warmup_boost_invalid": "Check the values: the full share must be above the start share, and each must be in range."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
@@ -1023,6 +1039,13 @@
         "fri": "Friday",
         "sat": "Saturday",
         "sun": "Sunday"
+      }
+    },
+    "warmup_boost_mode": {
+      "options": {
+        "off": "Off",
+        "shadow": "Shadow (calculate and record only)",
+        "active": "Active (apply to the flow target)"
       }
     }
   }

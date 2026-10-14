@@ -39,6 +39,7 @@ KINDS = (
     "dhw_schedule",
     "dhw_cutoff",
     "optimum",
+    "warmup_boost",
 )
 ORIGINS = ("controller", "user", "service", "source", "advisor", "unknown")
 UNKNOWN = "unknown"

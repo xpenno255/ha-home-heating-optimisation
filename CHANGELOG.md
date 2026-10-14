@@ -2,6 +2,16 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.0 - warm-up flow boost from whole-house demand
+
+Optional, off by default. Set **Configure → Warm-up flow boost** to `shadow` to try it without changing anything.
+
+- While several rooms call for heat at once, the boiler flow target can rise above the weather curve towards the maximum flow. The size follows the share of the house's radiator capacity being asked for (each room's `heat_demand` weighted by its installed output): nothing below 15 %, full at 40 % (both settable), rising at once and falling no faster than 1 K per minute.
+- Modes: `off`, `shadow` (calculates and records `house_demand`, `room_equivalents`, `warmup_boost` and `boost_flow` on the boiler control entities and in the control report, but the written target is unchanged) and `active` (adds the uplift, capped at the maximum flow, and backs off as the filtered return nears its ceiling). Only in heating mode, never while hot water charges.
+- Journalled as `warmup_boost` (`started`, `ended`; `updated` at debug level), with a `warmup_boost` summary in `get_control_report` (minutes in boost today, peak demand share and uplift).
+- Why: on 14 Oct the Kitchen, Living Room and Hall took 50–75 minutes to arrive while 181–243 % of a room's demand was calling and the flow target stayed at the 50 °C floor; the existing demand correction only reacts to one zone above 70 % for 20 minutes. Return peaked at 35.5 °C, so there is condensing headroom.
+- Saved on its own, so changing it never resets the controllers to shadow.
+
 ## 0.10.4 - optimum predictor: keep scoring a warm-up until the room arrives
 
 - A warm-up record was closed 30 minutes after the switchpoint whenever the zone setpoint differed from the schedule. HHO's own commanded target sits above the schedule (14 Oct: 19.5 for a 19.0 step), so every morning record closed before the room arrived and scored no arrival, lateness or model error. Records now close early only when the setpoint falls 0.3 K below the warm-up's target; otherwise 120 minutes after the switchpoint.
