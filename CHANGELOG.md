@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.1 - saving the observation mapping keeps the other settings
+
+- Saving **Configure → Mapping** rebuilt the settings from a fixed list of sections and dropped the DHW target schedule, DHW cutoff, optimum predictor and warm-up flow boost sections, which then fell back to off. All sections owned by other options steps are now kept.
+- Why: on 16 Oct changing the return-temperature source through the mapping turned all four features off without warning.
+
 ## 0.11.0 - warm-up flow boost from whole-house demand
 
 Optional, off by default. Set **Configure → Warm-up flow boost** to `shadow` to try it without changing anything.

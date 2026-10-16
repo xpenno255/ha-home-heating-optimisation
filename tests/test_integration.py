@@ -120,6 +120,28 @@ async def test_options_clear_mappings_preserve_identity_and_remove_room(hass, co
     assert hass.states.get(old_air_id) is None
 
 
+async def test_saving_the_mapping_keeps_the_other_sections(hass, config, sources):
+    config["dhw_schedule"] = {"enabled": True, "water_heater_entity": "water_heater.hw"}
+    config["dhw_cutoff"] = {"enabled": True, "margin": 1.0}
+    config["optimum"] = {"enabled": True, "forecast_entity": "weather.home"}
+    config["warmup_boost"] = {"mode": "active"}
+    entry = await setup(hass, config)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "mapping"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"zones": ["climate.study"]}
+    )
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"name": "Study"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    saved = effective_config(entry)
+    for section in ("dhw_schedule", "dhw_cutoff", "optimum", "warmup_boost"):
+        assert saved[section] == config[section], section
+
+
 async def test_unload_stops_updates_and_reload_preserves_ids(hass, config, sources):
     entry = await setup(hass, config)
     old_coordinator = entry.runtime_data

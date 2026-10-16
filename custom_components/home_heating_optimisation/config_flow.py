@@ -139,6 +139,22 @@ def number_field(key, current, default, low, high):
     )
 
 
+# Sections owned by other options steps. The mapping steps rebuild everything else, so
+# these must be carried over or saving the mapping silently drops them (live 16 Oct: the
+# DHW schedule, DHW cutoff, optimum predictor and warm-up boost were all lost).
+KEPT_SECTIONS = (
+    "advisor",
+    "control",
+    "mqtt_sources",
+    "gateways",
+    "energy",
+    DHW_SECTION,
+    CUTOFF_SECTION,
+    OPTIMUM_SECTION,
+    WARMUP_SECTION,
+)
+
+
 class MappingFlow:
     """Shared setup/options steps; submitting options replaces all mappings."""
 
@@ -158,11 +174,7 @@ class MappingFlow:
             else:
                 self.pending = {
                     "rooms": [],
-                    **{
-                        k: self.current[k]
-                        for k in ("advisor", "control", "mqtt_sources", "gateways", "energy")
-                        if k in self.current
-                    },
+                    **{k: self.current[k] for k in KEPT_SECTIONS if k in self.current},
                 }
                 self.zones = list(zones)
                 self.room_index = 0
