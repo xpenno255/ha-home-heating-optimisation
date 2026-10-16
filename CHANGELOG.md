@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.2 - a replayed thermostat value after a restart no longer looks like a hand change
+
+- After a restart, a room's first thermostat target that contradicts what HHO last wrote, any standing manual hold and the schedule is no longer acted on at once. The same value has to be reported again at least 5 minutes later before it counts as a hand change. Values that agree reconcile straight away, as before, and the room keeps waiting (no writes) in the meantime.
+- Why: on 16 Oct, after the restart onto ramses_cc 0.61.0, RAMSES re-emitted old cached targets (Study 17.4, Utility 16.3, Bedroom 18.4, Studio 18.3) with fresh report times. The real values, HHO's own earlier writes, arrived 18 seconds later. Four rooms went into false manual holds and HHO dropped its record of its own writes.
+
 ## 0.11.1 - saving the observation mapping keeps the other settings
 
 - Saving **Configure → Mapping** rebuilt the settings from a fixed list of sections and dropped the DHW target schedule, DHW cutoff, optimum predictor and warm-up flow boost sections, which then fell back to off. All sections owned by other options steps are now kept.

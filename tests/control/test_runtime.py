@@ -741,6 +741,14 @@ async def test_restart_reconciles_manual_off_schedule_and_expired_ownership(
         "climate.study", "auto", {"current_temperature": 18, "temperature": target}
     )
     await room.async_refresh()
+    if target not in (18.2, 20.0):
+        # Contradicts persisted ownership and the schedule: needs a second report.
+        assert room.data.state == "no_data"
+        freezer.tick(timedelta(minutes=5))
+        hass.states.async_set(
+            "climate.study", "auto", {"current_temperature": 18, "temperature": target}
+        )
+        await room.async_refresh()
     assert room.data.state == expected
     if expected == "manual":
         assert room._memory().manual_setpoint == target
@@ -769,6 +777,13 @@ async def test_restart_preserves_or_reconciles_existing_manual_hold(
         "climate.study", "auto", {"current_temperature": 18, "temperature": final_target}
     )
     await room.async_refresh()
+    if final_target == 24:
+        assert room.data.state == "no_data"
+        freezer.tick(timedelta(minutes=5))
+        hass.states.async_set(
+            "climate.study", "auto", {"current_temperature": 18, "temperature": final_target}
+        )
+        await room.async_refresh()
     if final_target == 20:
         assert room.data.state == "shadow"
         assert room._memory().manual_detected_at is None
@@ -813,11 +828,73 @@ async def test_restart_waits_for_usable_post_settling_inputs(
     hass.states.async_set("climate.study", "auto", {"temperature": 23.0})
     hass.states.async_set("climate.cloud", "auto", {"status": {"setpoints": {"this_sp_temp": 20}}})
     await room.async_refresh()
+    assert room.data.state == "no_data"  # contradicting value awaits a confirming report
+    freezer.tick(timedelta(minutes=5))
+    hass.states.async_set("climate.study", "auto", {"temperature": 23.0})
+    await room.async_refresh()
     assert room.data.state == "manual"
     assert calls == []
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert room._retry_cancel is None
+
+
+async def test_restart_replayed_stale_target_does_not_create_manual_hold(
+    hass, controlled, sources, freezer
+):
+    # Live 2026-10-16: after a restart RAMSES re-emitted an old cached target (17.4)
+    # with a fresh report stamp, then the controller's real value (18.4, our write)
+    # arrived seconds later. The stale value must not become a manual hold.
+    controlled["control"]["rooms"]["study"]["seed"] = {
+        "last_written_setpoint": 18.4,
+        "last_written_at": (dt_util.utcnow() - timedelta(minutes=8)).isoformat(),
+    }
+    _, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    memory = room._memory()
+    freezer.tick(timedelta(minutes=3))
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 18, "temperature": 17.4})
+    await room.async_refresh()
+    assert room.data.state == "no_data"
+    assert room._memory() == memory
+    assert room._retry_cancel is not None
+
+    freezer.tick(timedelta(seconds=20))
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 18, "temperature": 18.4})
+    await room.async_refresh()
+    # Ownership is reconciled, so control resumes instead of holding a phantom change.
+    assert room.data.state == "active"
+    assert room._memory().manual_detected_at is None
+    assert room._memory().last_written_setpoint is not None
+
+
+async def test_restart_contradicting_target_needs_report_after_confirm_span(
+    hass, controlled, sources, freezer
+):
+    controlled["control"]["rooms"]["study"]["seed"] = {
+        "last_written_setpoint": 18.4,
+        "last_written_at": (dt_util.utcnow() - timedelta(minutes=8)).isoformat(),
+    }
+    _, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    freezer.tick(timedelta(minutes=3))
+    for minutes in (0, 2, 2):  # same value, but only 4 minutes apart: not yet confirmed
+        freezer.tick(timedelta(minutes=minutes))
+        hass.states.async_set(
+            "climate.study", "auto", {"current_temperature": 18, "temperature": 22.0}
+        )
+        await room.async_refresh()
+        assert room.data.state == "no_data"
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 18, "temperature": 22.0})
+    await room.async_refresh()
+    assert room.data.state == "manual"
+    assert room._memory().manual_setpoint == 22.0
+    assert calls == []
 
 
 @pytest.mark.parametrize("field", ["last_written_setpoint", "manual_release_at", "manual_setpoint"])
