@@ -141,6 +141,11 @@ ZONE_SETPOINT_MAX = 35.0
 # send.
 READBACK_TIMEOUT = timedelta(minutes=3)
 STARTUP_SETTLE_TIME = timedelta(minutes=2)
+# After a restart RAMSES can re-emit a cached zone target with a fresh
+# last_reported stamp.  A post-settling value that contradicts persisted
+# ownership must be reported again at least this much later before policy may
+# treat it as a hand change; agreeing values reconcile immediately.
+STARTUP_CONFIRM_SPAN = timedelta(minutes=5)
 READBACK_MAX_AGE = timedelta(minutes=5)
 # Same-temperature renewals stay unverified because RAMSES exposes no inbound
 # packet provenance to Home Assistant (docs/renewal-acknowledgement-2026-09-20.md).
@@ -317,6 +322,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             )
         )
         self._startup_reconcile_after: datetime | None = None
+        self._startup_candidate: tuple[float, datetime] | None = None
         self._tunables: dict[str, float] = {}
         hub_cfg = (hass.data.get(DOMAIN, {}).get("hub") or {}).get("config") or {}
         for key, default in (
@@ -1353,13 +1359,29 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         deadline = self._startup_reconcile_after
         if deadline is None or now < deadline or zone.schedule_setpoint is None:
             return False
-        _, reported, status, _, _ = self._primary_setpoint_observation()
+        value, reported, status, _, _ = self._primary_setpoint_observation()
         # A recently restored HA state can contain a partial/cached RAMSES target.
         # Require a primary report after the settling interval, not just fresh age.
         if status != "readback_observed" or reported is None or reported < deadline:
             return False
+        if not self._startup_value_agrees(value, zone):
+            # A contradicting target may still be a replayed cache entry: hold off until
+            # the same value is reported again STARTUP_CONFIRM_SPAN later.
+            candidate = self._startup_candidate
+            if candidate is None or abs(candidate[0] - value) > THERMOSTAT_STEP / 2:
+                self._startup_candidate = (value, reported)
+                return False
+            if reported - candidate[1] < STARTUP_CONFIRM_SPAN:
+                return False
+        self._startup_candidate = None
         self._startup_reconciliation_pending = False
         return True
+
+    def _startup_value_agrees(self, value: float, zone: ZoneState) -> bool:
+        """True when the reported target matches persisted ownership or the schedule."""
+        memory = self._memory()
+        known = (memory.last_written_setpoint, memory.manual_setpoint, zone.schedule_setpoint)
+        return any(k is not None and abs(value - k) <= THERMOSTAT_STEP / 2 for k in known)
 
     async def _async_update_data(self) -> OTCoordinatorData:
         try:
