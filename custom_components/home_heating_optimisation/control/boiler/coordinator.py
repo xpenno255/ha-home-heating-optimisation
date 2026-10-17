@@ -124,7 +124,9 @@ from .core.warmup import (
     WarmupBoostState,
     boost_step,
     house_demand,
+    overshoot,
     return_scale,
+    trim_factor,
 )
 from .hub import BoilerFlowHub
 from .store import BFCStore
@@ -192,6 +194,9 @@ class BFCCoordinatorData:
     room_equivalents: float | None = None
     warmup_boost: float = 0.0
     boost_flow: float | None = None
+    boost_overshoot_k: float | None = None
+    boost_overshoot_room: str | None = None
+    boost_trim: float = 1.0
     # Diagnostics
     estimated_running_efficiency: int | None = None
     efficiency_status: str = STATUS_DISABLED
@@ -232,6 +237,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             "minutes": 0.0,
             "peak_house_demand": 0.0,
             "peak_uplift": 0.0,
+            "peak_overshoot": 0.0,
         }
         self._entry = entry
         self._store = store
@@ -474,9 +480,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             )
             return 0.0
         rooms = []
-        for entity, output, enabled in self._warmup_rooms():
+        hot = []
+        for entity, output, enabled, name, air, target in self._warmup_rooms():
             if not enabled:
                 continue
+            hot.append((name, air, target))
             value = self._float_state(entity, freshness=freshness, now=now, attribute="heat_demand")
             rooms.append((value if value is not None and 0 <= value <= 1 else None, output))
         house = house_demand(rooms)
@@ -491,23 +499,33 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             if mode == "active"
             else 1.0
         )
+        worst = overshoot(hot)
+        trim = trim_factor(worst[0] if worst else None, params)
         previous = self._warmup_state
-        state = boost_step(previous, house.fraction if house else None, base, now, params, scale)
+        state = boost_step(
+            previous, house.fraction if house else None, base, now, params, scale, trim
+        )
         self._warmup_state = state
         d.house_demand = None if house is None else round(house.fraction, 3)
         d.room_equivalents = None if house is None else round(house.room_equivalents, 2)
         d.warmup_boost = round(state.uplift, 2)
+        d.boost_overshoot_k = None if worst is None else round(worst[0], 2)
+        d.boost_overshoot_room = None if worst is None else worst[1]
+        d.boost_trim = round(trim, 2)
         d.boost_flow = round(min(curve_params.flow_max, base + state.uplift), 1)
         stats = self._warmup_stats
         today = dt_util.as_local(now).date()
         if stats["day"] != today:
-            stats.update(day=today, minutes=0.0, peak_house_demand=0.0, peak_uplift=0.0)
+            stats.update(
+                day=today, minutes=0.0, peak_house_demand=0.0, peak_uplift=0.0, peak_overshoot=0.0
+            )
         if state.uplift > 0 and previous.updated_at is not None:
             stats["minutes"] += min(
                 10.0, max(0.0, (now - previous.updated_at).total_seconds() / 60)
             )
         stats["peak_house_demand"] = max(stats["peak_house_demand"], d.house_demand or 0.0)
         stats["peak_uplift"] = max(stats["peak_uplift"], d.warmup_boost)
+        stats["peak_overshoot"] = max(stats["peak_overshoot"], d.boost_overshoot_k or 0.0)
         if d.warmup_boost > 0 and not self._warmup_on:
             self._warmup_on, self._warmup_journaled = True, d.warmup_boost
             self._warmup_journal("started", d)
@@ -530,6 +548,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 "room_equivalents": d.room_equivalents,
                 "uplift": d.warmup_boost,
                 "boost_flow": d.boost_flow,
+                "overshoot_k": d.boost_overshoot_k,
+                "overshoot_room": d.boost_overshoot_room,
+                "trim": d.boost_trim,
                 "return_used": self._return_filtered,
             },
             routine=routine,
@@ -545,6 +566,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             "minutes_in_boost_today": round(stats["minutes"], 1),
             "peak_house_demand": stats["peak_house_demand"],
             "peak_uplift": stats["peak_uplift"],
+            "overshoot_k": data.boost_overshoot_k if data else None,
+            "overshoot_room": data.boost_overshoot_room if data else None,
+            "trim": data.boost_trim if data else 1.0,
+            "peak_overshoot_today": stats["peak_overshoot"],
         }
 
     # ------------------------------------------------------------------

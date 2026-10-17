@@ -26,6 +26,9 @@ class WarmupBoostParams:
     boost_max: float = 65.0
     decay_k_per_min: float = 1.0
     return_margin_k: float = 5.0
+    # The uplift fades out as the most overheated room goes from the first to the second.
+    trim_start_k: float = 0.3
+    trim_full_k: float = 0.8
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,25 @@ def house_demand(rooms) -> HouseDemand | None:
     return HouseDemand(fraction, sum(d for d, _ in valid), len(valid), len(rooms))
 
 
+def overshoot(rooms):
+    """``(kelvin, room)`` of the room furthest above its commanded air target, else None.
+
+    ``rooms`` is ``[(name, air temperature | None, commanded air target | None)]`` for the
+    enabled rooms; rooms missing either value are ignored.
+    """
+    over = [(air - target, name) for name, air, target in rooms if None not in (air, target)]
+    return max(over, key=lambda item: item[0]) if over else None
+
+
+def trim_factor(overshoot_k, params: WarmupBoostParams) -> float:
+    """1 up to ``trim_start_k`` of overshoot, falling linearly to 0 at ``trim_full_k``."""
+    if overshoot_k is None or overshoot_k <= params.trim_start_k:
+        return 1.0
+    if overshoot_k >= params.trim_full_k:
+        return 0.0
+    return (params.trim_full_k - overshoot_k) / (params.trim_full_k - params.trim_start_k)
+
+
 def uplift_target(fraction, base, params: WarmupBoostParams) -> float:
     """Wanted uplift (K) above ``base`` for a house demand share."""
     if fraction is None or params.full <= params.start:
@@ -84,11 +106,15 @@ def boost_step(
     now: datetime,
     params: WarmupBoostParams,
     scale: float = 1.0,
+    trim: float = 1.0,
 ) -> WarmupBoostState:
-    """Next uplift: up at once, down no faster than the decay rate, zero without a reading."""
+    """Next uplift: up at once, down no faster than the decay rate, zero without a reading.
+
+    ``scale`` (return guard) and ``trim`` (room overshoot) shrink the target, so a trimmed
+    uplift still falls at the decay rate rather than at once."""
     if fraction is None:
         return WarmupBoostState(0.0, now)
-    target = uplift_target(fraction, base, params) * scale
+    target = uplift_target(fraction, base, params) * scale * trim
     if target >= state.uplift or state.updated_at is None:
         uplift = target
     else:
