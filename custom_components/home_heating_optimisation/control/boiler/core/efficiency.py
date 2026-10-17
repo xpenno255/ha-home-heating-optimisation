@@ -40,6 +40,8 @@ RETURN_MAX_C = 60.0
 PROFILE_DISABLED = "disabled"
 PROFILE_BG430I_NATURAL_GAS = "bg430i_natural_gas"
 PROFILES = (PROFILE_DISABLED, PROFILE_BG430I_NATURAL_GAS)
+# Nominal heat input at 100 % modulation, for turning modulation into energy burnt.
+NOMINAL_KW = {PROFILE_BG430I_NATURAL_GAS: 30.0}
 CONF_EFFICIENCY_PROFILE = "efficiency_profile"
 
 STARTUP_MINUTES = 5.0

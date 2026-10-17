@@ -112,6 +112,8 @@ keeps the history. They carry the same limits as the estimate: a manufacturer fu
 reference from return temperature, not metered efficiency. The control report's boiler block
 includes the same figures.
 
+The **Burner starts**, **Mean burn length** and **Cycling-adjusted boiler efficiency** diagnostics add what the firing estimate leaves out. Burns are recorded from the burner modulation entity's state changes (7 days kept). The adjusted figure is the rolling firing estimate multiplied by `fuel / (fuel + starts x 0.02 kWh)`, where fuel is the profile's nominal input (30 kW) x modulation x time and 0.02 kWh per start is an assumed loss for purge, ignition and reheating the boiler, not a measurement. A house that starts the burner dozens of times a day scores well below one with a few long burns. Burns with gaps, unavailable readings or an HA restart in them are not counted.
+
 ## Entities
 
 | Scope | Sensors |
