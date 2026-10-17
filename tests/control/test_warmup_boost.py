@@ -10,7 +10,9 @@ from custom_components.home_heating_optimisation.control.boiler.core.warmup impo
     WarmupBoostState,
     boost_step,
     house_demand,
+    overshoot,
     return_scale,
+    trim_factor,
     uplift_target,
 )
 from custom_components.home_heating_optimisation.control.boiler.warmup_policy import (
@@ -72,6 +74,40 @@ def test_return_guard_fades_the_uplift():
     assert return_scale(42.5, 50.0, PARAMS) == pytest.approx(0.5)
     assert return_scale(46.0, 50.0, PARAMS) == 0.0
     assert boost_step(WarmupBoostState(), 0.4, 50.0, T0, PARAMS, scale=0.5).uplift == 7.5
+
+
+def test_overshoot_picks_the_hottest_room_and_ignores_missing_values():
+    rooms = [
+        ("Kitchen", 19.0, 19.3),
+        ("Bedroom", 20.7, 19.0),
+        ("Study", None, 18.7),
+        ("Hall", 20.2, None),
+    ]
+    assert overshoot(rooms)[1] == "Bedroom"
+    assert overshoot(rooms)[0] == pytest.approx(1.7)
+    assert overshoot([("Study", None, 18.7)]) is None
+    assert overshoot([]) is None
+    # Every room under target: the least negative one, which trims nothing.
+    least = overshoot([("A", 18.0, 19.0), ("B", 18.8, 19.0)])
+    assert least[1] == "B" and least[0] == pytest.approx(-0.2)
+
+
+def test_trim_factor_is_one_linear_then_zero():
+    assert trim_factor(None, PARAMS) == 1.0
+    assert trim_factor(-1.0, PARAMS) == 1.0
+    assert trim_factor(0.3, PARAMS) == 1.0
+    assert trim_factor(0.55, PARAMS) == pytest.approx(0.5)
+    assert trim_factor(0.8, PARAMS) == 0.0
+    assert trim_factor(2.0, PARAMS) == 0.0
+
+
+def test_trimmed_uplift_still_falls_at_the_decay_rate():
+    up = boost_step(WarmupBoostState(), 0.40, 50.0, T0, PARAMS)
+    half = boost_step(up, 0.40, 50.0, T0 + timedelta(minutes=1), PARAMS, trim=0.5)
+    assert half.uplift == 14.0  # target 7.5, but only 1 K per minute of fall
+    assert boost_step(WarmupBoostState(), 0.40, 50.0, T0, PARAMS, trim=0.5).uplift == 7.5
+    gone = boost_step(up, 0.40, 50.0, T0 + timedelta(minutes=30), PARAMS, trim=0.0)
+    assert gone.uplift == 0.0
 
 
 def test_config_defaults_and_validation():
@@ -162,3 +198,48 @@ async def test_boost_is_not_applied_while_dhw_charges(hass, controlled, sources)
     await c.set_mode("boiler", "auto")
     await c.refresh()
     assert c.boiler.data.dhw_active and c.boiler.data.warmup_boost == 0.0
+
+
+async def test_active_overshoot_removes_the_uplift_after_the_decay(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    entry, c, calls = await start(hass, with_mode(controlled, "active"))
+
+    def demand():
+        hass.states.async_set(
+            "climate.study",
+            "auto",
+            {"current_temperature": 18, "temperature": 20, "heat_demand": 0.9},
+        )
+
+    def rooms(air):
+        c.boiler._warmup_rooms = lambda: [("climate.study", None, True, "Study", air, 19.0)]
+
+    demand()
+    rooms(19.0)
+    await handover(c)
+    await c.set_mode("boiler", "auto")
+    await c.refresh()
+    data = c.boiler.data
+    start_uplift = data.warmup_boost
+    assert start_uplift > 5 and data.boost_trim == 1.0
+    assert data.boost_overshoot_k == 0.0 and data.boost_overshoot_room == "Study"
+
+    # A room 1.0 K over target: the target uplift is zero but it falls at 1 K per minute.
+    rooms(20.0)
+    freezer.tick(timedelta(minutes=1))
+    demand()
+    await c.refresh()
+    data = c.boiler.data
+    assert data.house_demand == pytest.approx(0.9) and data.boost_trim == 0.0
+    assert data.boost_overshoot_k == 1.0
+    assert 0 < data.warmup_boost < start_uplift
+    freezer.tick(timedelta(minutes=int(start_uplift) + 2))
+    demand()
+    await c.refresh()
+    assert c.boiler.data.warmup_boost == 0.0
+    summary = c.report()["warmup_boost"]
+    assert summary["peak_overshoot_today"] == 1.0 and summary["overshoot_room"] == "Study"

@@ -495,12 +495,15 @@ class Controls:
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 
     def warmup_rooms(self):
-        """``[(climate entity, installed output W, enabled)]`` for the warm-up flow boost."""
+        """``[(climate, output W, enabled, name, air temp, air target)]`` for the warm-up boost."""
         return [
             (
                 c._config.get("primary_climate"),
                 c.data.installed_output_dt50_w if c.data else None,
                 c.enabled,
+                c.room_name,
+                c.data.air_temp if c.data else None,
+                c.data.air_setpoint if c.data else None,
             )
             for c in self.rooms.values()
         ]

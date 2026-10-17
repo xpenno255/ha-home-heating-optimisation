@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.3 - warm-up boost backs off when a room overshoots
+
+- The boost uplift is now trimmed by the most overheated room: no trim up to 0.3 K above that room's commanded air target, fading linearly to none at 0.8 K. The trim shrinks the target uplift, so the uplift still falls at the normal decay rate. It applies in `shadow` and `active`.
+- New `boost_overshoot_k`, `boost_overshoot_room` and `boost_trim` on the boiler control entities, in `warmup_boost` journal events and in the control report (with the peak overshoot today).
+- Why: on 17 Oct the boost held +15 K from 06:40 to about 07:15 because the big Kitchen and Living Room radiators kept house demand at 0.5, while Bedroom (+1.7 K), Study (+1.1), Hall (+0.7) and Spare (+0.7) overshot.
+
 ## 0.11.2 - a replayed thermostat value after a restart no longer looks like a hand change
 
 - After a restart, a room's first thermostat target that contradicts what HHO last wrote, any standing manual hold and the schedule is no longer acted on at once. The same value has to be reported again at least 5 minutes later before it counts as a hand change. Values that agree reconcile straight away, as before, and the room keeps waiting (no writes) in the meantime.
