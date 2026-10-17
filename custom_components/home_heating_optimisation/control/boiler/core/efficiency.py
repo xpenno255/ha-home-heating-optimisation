@@ -24,7 +24,8 @@ percentage points; no numerical confidence interval has been established.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from math import isfinite
 
 MODEL_VERSION = "bg430i-return-linear-v1"
@@ -59,6 +60,8 @@ STATUS_OK = "ok"
 class EfficiencyEstimate:
     percent: int | None
     status: str
+    # Unrounded value, for weighting; not part of equality.
+    exact: float | None = field(default=None, compare=False)
 
 
 def _bg430i_reference_percent(return_c: float) -> float | None:
@@ -116,4 +119,75 @@ def estimate(
     percent = _bg430i_reference_percent(return_c)
     if percent is None:
         return EfficiencyEstimate(None, STATUS_RETURN_OUT_OF_RANGE)
-    return EfficiencyEstimate(round(percent), STATUS_OK)
+    return EfficiencyEstimate(round(percent), STATUS_OK, percent)
+
+
+# ---------------------------------------------------------------------------
+# Rolling heat-weighted averages
+# ---------------------------------------------------------------------------
+#
+# Each valid cycle adds weight ``burner power % x elapsed seconds`` and weight x estimate to
+# a 5-minute bucket, split by heating and DHW. A bucket is
+# ``[heat_weight, heat_weighted_estimate, heat_seconds, dhw_weight, dhw_weighted_estimate,
+# dhw_seconds]``. The weighting is by modulation, a stand-in for gas burnt: it is not metered.
+
+BUCKET_SECONDS = 300
+RETENTION = timedelta(days=7)
+MAX_ELAPSED_SECONDS = 120.0
+MODES = ("heating", "dhw")
+
+
+def add_sample(buckets, now: datetime, elapsed: float, power: float, efficiency: float, mode: str):
+    """Add one cycle's firing to its bucket; gaps count at most ``MAX_ELAPSED_SECONDS``."""
+    if elapsed <= 0 or power <= 0 or mode not in MODES:
+        return
+    elapsed = min(elapsed, MAX_ELAPSED_SECONDS)
+    key = int(now.timestamp()) // BUCKET_SECONDS * BUCKET_SECONDS
+    bucket = buckets.setdefault(key, [0.0] * 6)
+    offset = 0 if mode == "heating" else 3
+    weight = power * elapsed
+    bucket[offset] += weight
+    bucket[offset + 1] += weight * efficiency
+    bucket[offset + 2] += elapsed
+
+
+def prune(buckets, now: datetime) -> None:
+    cutoff = int((now - RETENTION).timestamp()) // BUCKET_SECONDS * BUCKET_SECONDS
+    for key in [k for k in buckets if k < cutoff]:
+        del buckets[key]
+
+
+def aggregate(buckets, now: datetime, window: timedelta) -> dict:
+    """Heat-weighted mean estimate over the window (None without valid firing)."""
+    cutoff = int((now - window).timestamp()) // BUCKET_SECONDS * BUCKET_SECONDS
+    total = [0.0] * 6
+    for key, bucket in buckets.items():
+        if key >= cutoff:
+            total = [a + b for a, b in zip(total, bucket)]
+
+    def mean(weight, weighted):
+        return round(weighted / weight, 1) if weight > 0 else None
+
+    return {
+        "percent": mean(total[0] + total[3], total[1] + total[4]),
+        "heating_percent": mean(total[0], total[1]),
+        "dhw_percent": mean(total[3], total[4]),
+        "firing_minutes": round((total[2] + total[5]) / 60, 1),
+    }
+
+
+def dump_buckets(buckets) -> list:
+    return [[key, *values] for key, values in sorted(buckets.items())]
+
+
+def load_buckets(raw) -> dict:
+    """Valid ``[key, six numbers]`` rows only; anything else is ignored."""
+    buckets = {}
+    for row in raw if isinstance(raw, list) else []:
+        if (
+            isinstance(row, list)
+            and len(row) == 7
+            and all(isinstance(v, (int, float)) and isfinite(v) for v in row)
+        ):
+            buckets[int(row[0])] = [float(v) for v in row[1:]]
+    return buckets

@@ -99,6 +99,19 @@ is no invented cycling-loss penalty or confidence interval; actual efficiency
 can differ by several percentage points. Long-term-statistics averaging is not
 enabled because a mean of these estimates is not fuel-weighted efficiency.
 
+### Between burns and rolling averages
+
+The estimate above is unknown whenever the burner is off, so the sensor also carries
+`last_burn_efficiency` (the heat-weighted mean of the current or most recent burn) and
+`last_burn_ended_at`. Two further diagnostics, **Estimated boiler efficiency (24 hours)** and
+**(7 days)**, give a rolling mean of the same estimate, weighted by burner modulation x time
+(a stand-in for gas burnt, not a metered quantity). Their attributes split heating from hot
+water and show the firing minutes in the window; the state is unknown when the window has no
+valid firing. The 5-minute buckets (7 days) are kept in the boiler control store, so a restart
+keeps the history. They carry the same limits as the estimate: a manufacturer full-load
+reference from return temperature, not metered efficiency. The control report's boiler block
+includes the same figures.
+
 ## Entities
 
 | Scope | Sensors |

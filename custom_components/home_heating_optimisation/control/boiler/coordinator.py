@@ -93,7 +93,12 @@ from .core.efficiency import (
     STATUS_DISABLED,
     STATUS_OFF,
     STATUS_RETURN_UNAVAILABLE,
+    add_sample,
+    aggregate,
+    dump_buckets,
     estimate,
+    load_buckets,
+    prune,
 )
 from .core.efficiency import (
     MODEL_VERSION as EFFICIENCY_MODEL_VERSION,
@@ -202,6 +207,12 @@ class BFCCoordinatorData:
     efficiency_status: str = STATUS_DISABLED
     efficiency_profile: str = PROFILE_DISABLED
     efficiency_return_temperature: float | None = None
+    # Heat-weighted: the latest burn, and rolling windows (None without valid firing)
+    last_burn_efficiency: float | None = None
+    last_burn_ended_at: datetime | None = None
+    estimated_efficiency_24h: float | None = None
+    estimated_efficiency_7d: float | None = None
+    efficiency_rolling: dict = field(default_factory=dict)
     disabled_features: list[str] = field(default_factory=list)
     fallbacks: list[str] = field(default_factory=list)
 
@@ -278,6 +289,19 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._efficiency_interrupted_start: datetime | None = None
         self._efficiency_seen_start: datetime | None = None
         self._efficiency_observed_inputs = False
+        # Rolling heat-weighted efficiency: 5-minute buckets kept in the boiler store.
+        self._efficiency_buckets = load_buckets(store.get("efficiency_buckets"))
+        self._efficiency_sample: tuple[float, float] | None = None
+        self._efficiency_last_at: datetime | None = None
+        self._burn_start: datetime | None = None
+        self._burn_weight = self._burn_weighted = 0.0
+        self._burn_last_at: datetime | None = None
+        ended = store.get("last_burn_ended_at")
+        parsed = dt_util.parse_datetime(str(ended)) if ended else None
+        self._last_burn: tuple[float | None, datetime | None] = (
+            store.get("last_burn_efficiency"),
+            dt_util.as_utc(parsed) if parsed else None,
+        )
         super().__init__(
             hass,
             _LOGGER,
@@ -773,6 +797,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         data.efficiency_profile = profile
         data.estimated_running_efficiency = None
         data.efficiency_return_temperature = None
+        self._efficiency_sample = None
         if profile == PROFILE_DISABLED:
             data.efficiency_status = STATUS_DISABLED
             return
@@ -822,7 +847,49 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         )
         data.estimated_running_efficiency = result.percent
         data.efficiency_status = result.status
+        if result.exact is not None:
+            self._efficiency_sample = (power, result.exact)
         data.efficiency_return_temperature = ret
+
+    def _accumulate_efficiency(self, d: BFCCoordinatorData, now: datetime) -> None:
+        """Once per control cycle: bucket the valid estimate and publish the rolling figures."""
+        sample, last_at = self._efficiency_sample, self._efficiency_last_at
+        start = self._hub.burn_started_at
+        if start != self._burn_start:
+            if self._burn_start is not None and self._burn_weight > 0:
+                self._last_burn = (
+                    round(self._burn_weighted / self._burn_weight, 1),
+                    self._burn_last_at,
+                )
+                self._store.set("last_burn_efficiency", self._last_burn[0])
+                self._store.set("last_burn_ended_at", self._burn_last_at.isoformat())
+            self._burn_start = start
+            self._burn_weight = self._burn_weighted = 0.0
+        if sample is None:
+            self._efficiency_last_at = None
+        else:
+            power, efficiency = sample
+            self._efficiency_last_at = now
+            if last_at is not None:
+                elapsed = min((now - last_at).total_seconds(), 120.0)
+                mode = "dhw" if d.dhw_active else "heating"
+                add_sample(self._efficiency_buckets, now, elapsed, power, efficiency, mode)
+                self._burn_weight += power * elapsed
+                self._burn_weighted += power * elapsed * efficiency
+                self._burn_last_at = now
+                prune(self._efficiency_buckets, now)
+                self._store.set("efficiency_buckets", dump_buckets(self._efficiency_buckets))
+        if self._burn_weight > 0:
+            d.last_burn_efficiency = round(self._burn_weighted / self._burn_weight, 1)
+        else:
+            d.last_burn_efficiency, d.last_burn_ended_at = self._last_burn
+        windows = {"24h": timedelta(hours=24), "7d": timedelta(days=7)}
+        d.efficiency_rolling = {
+            name: aggregate(self._efficiency_buckets, now, window)
+            for name, window in windows.items()
+        }
+        d.estimated_efficiency_24h = d.efficiency_rolling["24h"]["percent"]
+        d.estimated_efficiency_7d = d.efficiency_rolling["7d"]["percent"]
 
     def async_subscribe_dhw(self):
         entity = self._config.get(CONF_HW_RELAY_DEMAND_ENTITY)
@@ -996,6 +1063,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         d.cycling_status = "frequent_starts_diagnostic_only" if d.cycles_10min >= 3 else "normal"
 
         self._update_efficiency(d, now)
+        self._accumulate_efficiency(d, now)
 
         if d.live_setpoint is None:
             d.mode, d.no_boiler, d.reason = (

@@ -110,6 +110,37 @@ class BoilerEfficiencySensor(ControlSensor):
             "minimum_return_temperature": RETURN_MIN_C,
             "maximum_return_temperature": RETURN_MAX_C,
             "startup_exclusion_minutes": STARTUP_MINUTES,
+            "last_burn_efficiency": data.last_burn_efficiency,
+            "last_burn_ended_at": data.last_burn_ended_at.isoformat()
+            if data.last_burn_ended_at
+            else None,
+        }
+
+
+class BoilerRollingEfficiencySensor(ControlSensor):
+    """Heat-weighted mean of the realtime estimate over a rolling window."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, controls, window, title):
+        super().__init__(controls, "boiler", f"estimated_efficiency_{window}", "%")
+        self.window = window
+        self._attr_name = f"Estimated boiler efficiency ({title})"
+
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        rolling = (data.efficiency_rolling or {}).get(self.window) if data else None
+        if not rolling:
+            return {}
+        return {
+            "heating_efficiency": rolling["heating_percent"],
+            "dhw_efficiency": rolling["dhw_percent"],
+            "firing_minutes": rolling["firing_minutes"],
+            "weighting": "burner modulation x time, a stand-in for gas burnt",
+            "coverage": "estimate from return temperature; manufacturer full-load reference, "
+            "not metered",
         }
 
 
@@ -147,7 +178,11 @@ def sensors(controls):
     if not controls.boiler:
         return []
     return (
-        [BoilerEfficiencySensor(controls)]
+        [
+            BoilerEfficiencySensor(controls),
+            BoilerRollingEfficiencySensor(controls, "24h", "24 hours"),
+            BoilerRollingEfficiencySensor(controls, "7d", "7 days"),
+        ]
         + [ControlSensor(controls, "boiler", key, unit) for key, unit in BOILER_SENSORS.items()]
         + [
             ControlSensor(controls, rid, key, unit)

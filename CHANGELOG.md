@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.4 - rolling boiler efficiency
+
+- The Estimated boiler efficiency sensor keeps its realtime behaviour (unknown when the burner is off) and gains `last_burn_efficiency` and `last_burn_ended_at`, so something useful shows between burns.
+- Two new diagnostics, Estimated boiler efficiency (24 hours) and (7 days): the mean of the estimate weighted by burner modulation x time, with heating-only and hot-water-only averages and the firing minutes as attributes. Unknown when the window has no valid firing.
+- Samples go into 5-minute buckets (7 days) in the boiler control store, so history survives a restart. Same limits as the estimate: a manufacturer full-load reference from return temperature, not metered. The control report's boiler block carries the new figures.
+
 ## 0.11.3 - warm-up boost backs off when a room overshoots
 
 - The boost uplift is now trimmed by the most overheated room: no trim up to 0.3 K above that room's commanded air target, fading linearly to none at 0.8 K. The trim shrinks the target uplift, so the uplift still falls at the normal decay rate. It applies in `shadow` and `active`.
