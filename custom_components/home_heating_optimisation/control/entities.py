@@ -144,6 +144,46 @@ class BoilerRollingEfficiencySensor(ControlSensor):
         }
 
 
+class BoilerCyclingSensor(ControlSensor):
+    """Burner cycling and the cycling-adjusted estimate; attributes are per window."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, controls, key, unit, title, window="24h"):
+        super().__init__(controls, "boiler", key, unit)
+        self.window = window
+        self._attr_name = title
+
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        cycling = (data.cycling or {}) if data else {}
+        figures = cycling.get(self.window)
+        if not figures:
+            return {}
+        if self.key.startswith("estimated_efficiency_adjusted"):
+            return {
+                "firing_efficiency": figures["firing_efficiency"],
+                "fuel_fire_kwh": figures["fuel_fire_kwh"],
+                "start_loss_kwh_assumed": figures["start_loss_kwh_assumed"],
+                "starts": figures["starts"],
+                "method": "firing estimate reduced by an assumed per-start loss; not metered",
+            }
+        if self.key != "burner_starts_24h":
+            return {}
+        week = cycling.get("7d") or {}
+        return {
+            **figures,
+            "starts_7d": week.get("starts"),
+            "starts_7d_per_day": week.get("starts_per_day"),
+            "mean_burn_minutes_7d": week.get("mean_burn_minutes"),
+            "median_burn_minutes_7d": week.get("median_burn_minutes"),
+            "short_burn_share_7d": week.get("short_burn_share"),
+            "short_burn": "share of firing time in burns under 5 minutes",
+        }
+
+
 class ControlDHW(ControlEntity, BinarySensorEntity):
     def __init__(self, controls):
         super().__init__(controls, "boiler", "dhw")
@@ -182,6 +222,23 @@ def sensors(controls):
             BoilerEfficiencySensor(controls),
             BoilerRollingEfficiencySensor(controls, "24h", "24 hours"),
             BoilerRollingEfficiencySensor(controls, "7d", "7 days"),
+            BoilerCyclingSensor(controls, "burner_starts_24h", None, "Burner starts (24 hours)"),
+            BoilerCyclingSensor(
+                controls, "mean_burn_minutes_24h", "min", "Mean burn length (24 hours)"
+            ),
+            BoilerCyclingSensor(
+                controls,
+                "estimated_efficiency_adjusted_24h",
+                "%",
+                "Cycling-adjusted boiler efficiency (24 hours)",
+            ),
+            BoilerCyclingSensor(
+                controls,
+                "estimated_efficiency_adjusted_7d",
+                "%",
+                "Cycling-adjusted boiler efficiency (7 days)",
+                "7d",
+            ),
         ]
         + [ControlSensor(controls, "boiler", key, unit) for key, unit in BOILER_SENSORS.items()]
         + [

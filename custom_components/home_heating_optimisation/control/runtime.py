@@ -365,6 +365,7 @@ class Controls:
             c.mark_restore_complete()
         for subscribe in (
             self.boiler.async_subscribe_heating_active,
+            self.boiler.async_subscribe_burns,
             self.boiler.async_subscribe_dhw,
         ):
             unsub = subscribe()

@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.5 - burner cycling metrics and a cycling-adjusted efficiency
+
+- Burns are now recorded from the burner modulation entity's state changes (not the 60 s cycle): start, length, time-weighted mean modulation and heating or hot water. A burn with a gap over 5 minutes, unavailable readings or one already running at an HA restart is dropped. Seven days are kept in the boiler control store.
+- New diagnostics: Burner starts (24 hours) with 24 h and 7 d attributes (heating/DHW starts, firing minutes, mean and median burn length, share of firing time in burns under 5 minutes, starts per firing hour, starts per day), Mean burn length (24 hours), and Cycling-adjusted boiler efficiency (24 hours / 7 days).
+- Adjusted efficiency = the rolling firing estimate x fuel burnt / (fuel burnt + starts x 0.02 kWh). Fuel is the profile's nominal input (30 kW) x modulation x time; 0.02 kWh per start is an assumption, stated in the attributes, not a measurement. Unknown without a firing estimate, a completed burn or an efficiency profile. The control report's boiler block carries a `cycling` summary.
+- Why: the firing estimate leaves out the first 5 minutes of every burn and any per-start losses (purge, ignition, reheating the boiler's own mass). On 17 Oct after the restart there were 53 burns and 81 firing minutes, nearly all 0.5-2.2 minutes, so the rolling efficiency counted only one hot-water burn. Fewer, longer burns are generally better; this shows cycling and an adjusted figure for judging changes such as the warm-up boost (a hotter flow costs a little firing efficiency but gives longer burns).
+
 ## 0.11.4 - rolling boiler efficiency
 
 - The Estimated boiler efficiency sensor keeps its realtime behaviour (unknown when the burner is off) and gains `last_burn_efficiency` and `last_burn_ended_at`, so something useful shows between burns.

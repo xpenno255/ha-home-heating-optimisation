@@ -17,7 +17,10 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_state_report_event,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -84,8 +87,19 @@ from .core.curve import (
     heating_curve,
     return_ceiling_step,
 )
+from .core.cycling import (
+    START_LOSS_KWH,
+    BurnTracker,
+    add_burn,
+    adjusted_efficiency,
+    covered_days,
+    fuel_fire_kwh,
+    load_burns,
+    summarise,
+)
 from .core.efficiency import (
     CONF_EFFICIENCY_PROFILE,
+    NOMINAL_KW,
     PROFILE_DISABLED,
     STARTUP_MINUTES,
     STATUS_AWAITING_IGNITION,
@@ -213,6 +227,12 @@ class BFCCoordinatorData:
     estimated_efficiency_24h: float | None = None
     estimated_efficiency_7d: float | None = None
     efficiency_rolling: dict = field(default_factory=dict)
+    # Burner cycling from the modulation readings, and the cycling-adjusted estimate
+    burner_starts_24h: int | None = None
+    mean_burn_minutes_24h: float | None = None
+    estimated_efficiency_adjusted_24h: float | None = None
+    estimated_efficiency_adjusted_7d: float | None = None
+    cycling: dict = field(default_factory=dict)
     disabled_features: list[str] = field(default_factory=list)
     fallbacks: list[str] = field(default_factory=list)
 
@@ -291,6 +311,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._efficiency_observed_inputs = False
         # Rolling heat-weighted efficiency: 5-minute buckets kept in the boiler store.
         self._efficiency_buckets = load_buckets(store.get("efficiency_buckets"))
+        self._burns = load_burns(store.get("burn_log"))
+        self._burn_tracker = BurnTracker()
         self._efficiency_sample: tuple[float, float] | None = None
         self._efficiency_last_at: datetime | None = None
         self._burn_start: datetime | None = None
@@ -890,6 +912,76 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         }
         d.estimated_efficiency_24h = d.efficiency_rolling["24h"]["percent"]
         d.estimated_efficiency_7d = d.efficiency_rolling["7d"]["percent"]
+        self._update_cycling(d, now)
+
+    def async_subscribe_burns(self):
+        """Record every burn from the burner modulation entity's state changes.
+
+        Event driven, not on the 60 s cycle: the burner can start and stop within a minute.
+        Reports of an unchanged value count too: a steady modulation sends no state change,
+        and must not look like a gap. Returns the unsubscribe callable, or None when no
+        burner entity is configured.
+        """
+        entity_id = self._config.get(CONF_BURNER_POWER_ENTITY)
+        if not entity_id:
+            return None
+        stops = (
+            async_track_state_change_event(self.hass, entity_id, self._handle_burn_event),
+            async_track_state_report_event(self.hass, entity_id, self._handle_burn_event),
+        )
+
+        @callback
+        def unsubscribe():
+            for stop in stops:
+                stop()
+
+        return unsubscribe
+
+    @callback
+    def _handle_burn_event(self, event) -> None:
+        new_state = event.data.get("new_state") or self._state(event.data.get("entity_id"))
+        power = None
+        if new_state is not None and new_state.state not in UNAVAILABLE:
+            try:
+                power = float(new_state.state)
+            except ValueError:
+                power = None
+        now = dt_util.utcnow()
+        dhw = bool(self.data.dhw_active) if self.data is not None else False
+        row = self._burn_tracker.update(now, power, dhw)
+        if row is not None:
+            add_burn(self._burns, row, now)
+            self._store.set("burn_log", [list(b) for b in self._burns])
+            if self.data is not None:
+                self._update_cycling(self.data, now)
+                self.async_update_listeners()
+
+    def _update_cycling(self, d: BFCCoordinatorData, now: datetime) -> None:
+        """Cycling aggregates and the cycling-adjusted efficiency for 24 h and 7 d."""
+        nominal = NOMINAL_KW.get(self._config.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED))
+        windows = {"24h": timedelta(hours=24), "7d": timedelta(days=7)}
+        cycling = {}
+        for name, window in windows.items():
+            figures = summarise(self._burns, now, window)
+            fuel = fuel_fire_kwh(self._burns, now, window, nominal) if nominal else None
+            firing = (d.efficiency_rolling.get(name) or {}).get("percent")
+            figures.update(
+                firing_efficiency=firing,
+                fuel_fire_kwh=None if fuel is None else round(fuel, 2),
+                start_loss_kwh_assumed=START_LOSS_KWH,
+                adjusted_efficiency=adjusted_efficiency(firing, fuel, figures["starts"]),
+            )
+            cycling[name] = figures
+        days = covered_days(self._burns, now, windows["7d"])
+        cycling["7d"].update(
+            starts_per_day=round(cycling["7d"]["starts"] / days, 1), days_covered=round(days, 1)
+        )
+        d.cycling = cycling
+        recorded = bool(self._burns)
+        d.burner_starts_24h = cycling["24h"]["starts"] if recorded else None
+        d.mean_burn_minutes_24h = cycling["24h"]["mean_burn_minutes"]
+        d.estimated_efficiency_adjusted_24h = cycling["24h"]["adjusted_efficiency"]
+        d.estimated_efficiency_adjusted_7d = cycling["7d"]["adjusted_efficiency"]
 
     def async_subscribe_dhw(self):
         entity = self._config.get(CONF_HW_RELAY_DEMAND_ENTITY)
