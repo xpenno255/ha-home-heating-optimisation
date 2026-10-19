@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.6 - cycling keeps steady burns, overshoot trim ignores shut valves
+
+- The burn tracker no longer drops long burns. The burner modulation entity only publishes on change, so a steady burn sends nothing for many minutes; a steady value is now a continuation, weighted by its duration. A burn ends only on zero, on unavailable (incomplete), on an HA restart (dropped), or after two hours with no update at all (incomplete).
+- Why: on 18-19 Oct the EMS counters showed 75 starts and 234 burner-minutes in 24 h, but the sensor showed 60 starts and 104 firing minutes with every burn short. The 32, 32 and 38 minute burns had been discarded by a five-minute silence rule.
+- The warm-up boost overshoot trim now only counts rooms still calling for heat (`heat_demand` above 0). A room above target with its valve shut is not taking the boosted water.
+- Why: on 19 Oct at 06:37 the boost was trimmed to 0.54 because Utility was 0.53 K over target, but it had no heat demand.
+
 ## 0.11.5 - burner cycling metrics and a cycling-adjusted efficiency
 
 - Burns are now recorded from the burner modulation entity's state changes (not the 60 s cycle): start, length, time-weighted mean modulation and heating or hot water. A burn with a gap over 5 minutes, unavailable readings or one already running at an HA restart is dropped. Seven days are kept in the boiler control store.

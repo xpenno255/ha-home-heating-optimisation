@@ -66,10 +66,16 @@ def house_demand(rooms) -> HouseDemand | None:
 def overshoot(rooms):
     """``(kelvin, room)`` of the room furthest above its commanded air target, else None.
 
-    ``rooms`` is ``[(name, air temperature | None, commanded air target | None)]`` for the
-    enabled rooms; rooms missing either value are ignored.
+    ``rooms`` is ``[(name, air temperature | None, commanded air target | None, heat demand
+    0-1 | None)]`` for the enabled rooms. Only rooms still calling for heat count: a room
+    with its valve shut is not taking the boosted water. Rooms missing a value, or with no
+    demand reading, are ignored.
     """
-    over = [(air - target, name) for name, air, target in rooms if None not in (air, target)]
+    over = [
+        (air - target, name)
+        for name, air, target, demand in rooms
+        if None not in (air, target, demand) and demand > 0.0
+    ]
     return max(over, key=lambda item: item[0]) if over else None
 
 

@@ -55,8 +55,8 @@ def test_burn_mode_is_dhw_when_dhw_for_most_of_it():
 def test_unavailable_gap_and_restart_make_incomplete_burns_that_do_not_count():
     # Unavailable mid-burn.
     assert feed(BurnTracker(), [(0, 0), (10, 50), (40, None), (70, 0)]) == []
-    # A gap of more than five minutes between readings.
-    assert feed(BurnTracker(), [(0, 0), (10, 50), (400, 50), (410, 0)]) == []
+    # Silent for over two hours: lost rather than guessed.
+    assert feed(BurnTracker(), [(0, 0), (10, 50), (10 + 7300, 50), (10 + 7310, 0)]) == []
     # Already firing when tracking began (an HA restart): the start is unknown.
     assert feed(BurnTracker(), [(0, 50), (60, 50), (120, 0)]) == []
     # But the next burn after an observed zero counts.
@@ -64,6 +64,28 @@ def test_unavailable_gap_and_restart_make_incomplete_burns_that_do_not_count():
     assert len(rows) == 1 and rows[0][1] == 60.0
     # Back from unavailable straight into firing is not a start either.
     assert feed(BurnTracker(), [(0, 0), (10, None), (20, 40), (80, 0)]) == []
+
+
+def test_steady_burn_with_no_updates_is_one_burn_with_the_right_mean():
+    # EMS-ESP publishes on change: 60 % held for 17.5 minutes sends nothing in between.
+    rows = feed(BurnTracker(), [(0, 0), (10, 60), (10 + 1050, 0)])
+    assert rows == [[at(10).timestamp(), 1050.0, 60.0, 0]]
+    # A steady stretch is weighted by its duration: 10 minutes at 30 %, 20 at 60 %.
+    rows = feed(BurnTracker(), [(0, 0), (0.0001, 30), (600, 60), (1800, 0)])
+    assert rows[0][2] == pytest.approx((30 * 600 + 60 * 1200) / 1800, abs=0.1)
+
+
+def test_short_and_long_burns_give_the_right_short_burn_share():
+    tracker = BurnTracker()
+    rows = []
+    clock = 0
+    for seconds in (60, 90, 2000, 100, 1900):
+        rows += feed(tracker, [(clock, 0), (clock + 5, 60), (clock + 5 + seconds, 0)])
+        clock += seconds + 100
+    summary = summarise(rows, at(clock), DAY)
+    assert summary["starts"] == 5
+    assert summary["short_burn_share"] == round((60 + 90 + 100) / (60 + 90 + 2000 + 100 + 1900), 3)
+    assert summary["median_burn_minutes"] == round(100 / 60, 1)
 
 
 def test_log_pruning_and_round_trip():

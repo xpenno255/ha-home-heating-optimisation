@@ -16,8 +16,10 @@ from math import isfinite
 # Assumed energy lost per start (purge, ignition, reheating the boiler's own mass), kWh.
 START_LOSS_KWH = 0.02
 SHORT_BURN_SECONDS = 300.0
-# A gap this long between readings means the burn cannot be measured.
-MAX_GAP_SECONDS = 300.0
+# The modulation entity only publishes on change, so a steady burn can be silent for many
+# minutes and the last value simply continues. A burn silent for longer than this is
+# treated as lost (incomplete) rather than guessed at.
+MAX_SILENCE_SECONDS = 2 * 3600.0
 RETENTION = timedelta(days=7)
 
 
@@ -25,7 +27,8 @@ class BurnTracker:
     """Turns burner modulation readings into completed burns.
 
     A burn starts when a reading above zero follows an observed zero, and ends at the next
-    zero. A burn whose readings stop (unavailable, or a gap over five minutes) is dropped,
+    zero. A steady value is a continuation. A burn whose readings go unavailable, or that is
+    silent for over two hours, is dropped,
     as is one already running when tracking began (an HA restart), because its start is
     unknown.
     """
@@ -54,7 +57,7 @@ class BurnTracker:
         if self.active:
             held = self.last_power or 0.0
             elapsed = (now - self.last_at).total_seconds()
-            if not valid or elapsed > MAX_GAP_SECONDS or elapsed < 0:
+            if not valid or elapsed > MAX_SILENCE_SECONDS or elapsed < 0:
                 self.reset()
                 return None
             self.weight += held * elapsed

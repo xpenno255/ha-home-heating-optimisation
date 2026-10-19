@@ -530,9 +530,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         for entity, output, enabled, name, air, target in self._warmup_rooms():
             if not enabled:
                 continue
-            hot.append((name, air, target))
             value = self._float_state(entity, freshness=freshness, now=now, attribute="heat_demand")
-            rooms.append((value if value is not None and 0 <= value <= 1 else None, output))
+            value = value if value is not None and 0 <= value <= 1 else None
+            hot.append((name, air, target, value))
+            rooms.append((value, output))
         house = house_demand(rooms)
         params = WarmupBoostParams(
             start=cfg["start"],
