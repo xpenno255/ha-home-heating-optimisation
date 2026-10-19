@@ -78,18 +78,34 @@ def test_return_guard_fades_the_uplift():
 
 def test_overshoot_picks_the_hottest_room_and_ignores_missing_values():
     rooms = [
-        ("Kitchen", 19.0, 19.3),
-        ("Bedroom", 20.7, 19.0),
-        ("Study", None, 18.7),
-        ("Hall", 20.2, None),
+        ("Kitchen", 19.0, 19.3, 0.5),
+        ("Bedroom", 20.7, 19.0, 0.4),
+        ("Study", None, 18.7, 0.3),
+        ("Hall", 20.2, None, 0.3),
+        ("Utility", 21.0, 18.0, None),
     ]
     assert overshoot(rooms)[1] == "Bedroom"
     assert overshoot(rooms)[0] == pytest.approx(1.7)
-    assert overshoot([("Study", None, 18.7)]) is None
+    assert overshoot([("Study", None, 18.7, 0.3)]) is None
     assert overshoot([]) is None
     # Every room under target: the least negative one, which trims nothing.
-    least = overshoot([("A", 18.0, 19.0), ("B", 18.8, 19.0)])
+    least = overshoot([("A", 18.0, 19.0, 0.5), ("B", 18.8, 19.0, 0.5)])
     assert least[1] == "B" and least[0] == pytest.approx(-0.2)
+
+
+def test_overshoot_only_counts_rooms_still_calling_for_heat():
+    # A room 1.0 K over with its valve shut is not taking the boosted water.
+    assert overshoot([("Utility", 20.0, 19.0, 0.0)]) is None
+    assert overshoot([("Utility", 20.0, 19.0, None)]) is None
+    assert overshoot([("Utility", 20.0, 19.0, 0.2)]) == pytest.approx((1.0, "Utility"))
+    assert trim_factor(1.0, PARAMS) == 0.0
+    mixed = [
+        ("Utility", 19.53, 19.0, 0.0),
+        ("Kitchen", 19.2, 19.0, 0.7),
+        ("Hall", 19.4, 19.0, 0.1),
+    ]
+    assert overshoot(mixed)[1] == "Hall"
+    assert overshoot(mixed)[0] == pytest.approx(0.4)
 
 
 def test_trim_factor_is_one_linear_then_zero():
