@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.11.7 - overshoot trim counts only warming since the boost began
+
+- The warm-up boost trim now uses each room's overshoot added since the boost began (air minus commanded target, less its overshoot when the boost started). A room already over target beforehand no longer holds the boost back; a room that was below target is trimmed exactly as before. Rooms still need heat demand above 0 to count, the factor is still 1 up to 0.3 K and 0 at 0.8 K, and a room first seen mid-boost is baselined then. Outside a boost every room is re-baselined at its current overshoot, so existing overshoot cannot block a start.
+- When the trim brings the boost to zero, the baselines are kept for as long as the house is still calling for heat, so the boost cannot restart against a room it has already overheated. They are reset once house demand drops below the start share.
+- `boost_overshoot_k` is now the added overshoot, with the driving room's `boost_overshoot_baseline_k` published too and in the `warmup_boost` journal data. Baselines are in memory only: a restart mid-boost re-baselines.
+- Why: on 20 Oct the Hall sensor was already 0.7 K above HHO's target (its valve reads about 0.4 K low) before the 06:30 warm-up, so the trim held the boost to +2-6 K until 06:54 instead of +15 K and the Kitchen and Living Room lost about 20 minutes of full boost. The Bedroom, which the boost does overheat, went from -0.2 to +1.3 K.
+
 ## 0.11.6 - cycling keeps steady burns, overshoot trim ignores shut valves
 
 - The burn tracker no longer drops long burns. The burner modulation entity only publishes on change, so a steady burn sends nothing for many minutes; a steady value is now a continuation, weighted by its duration. A burn ends only on zero, on unavailable (incomplete), on an HA restart (dropped), or after two hours with no update at all (incomplete).

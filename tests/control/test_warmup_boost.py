@@ -13,6 +13,7 @@ from custom_components.home_heating_optimisation.control.boiler.core.warmup impo
     overshoot,
     return_scale,
     trim_factor,
+    update_baselines,
     uplift_target,
 )
 from custom_components.home_heating_optimisation.control.boiler.warmup_policy import (
@@ -97,7 +98,7 @@ def test_overshoot_only_counts_rooms_still_calling_for_heat():
     # A room 1.0 K over with its valve shut is not taking the boosted water.
     assert overshoot([("Utility", 20.0, 19.0, 0.0)]) is None
     assert overshoot([("Utility", 20.0, 19.0, None)]) is None
-    assert overshoot([("Utility", 20.0, 19.0, 0.2)]) == pytest.approx((1.0, "Utility"))
+    assert overshoot([("Utility", 20.0, 19.0, 0.2)]) == pytest.approx((1.0, "Utility", 0.0))
     assert trim_factor(1.0, PARAMS) == 0.0
     mixed = [
         ("Utility", 19.53, 19.0, 0.0),
@@ -106,6 +107,43 @@ def test_overshoot_only_counts_rooms_still_calling_for_heat():
     ]
     assert overshoot(mixed)[1] == "Hall"
     assert overshoot(mixed)[0] == pytest.approx(0.4)
+
+
+def test_overshoot_counts_only_warming_since_the_boost_began():
+    # Hall was already 0.7 K over at the start: that is its baseline, not a reason to trim.
+    start = [("Hall", 19.7, 19.0, 0.4), ("Kitchen", 18.5, 19.0, 0.9)]
+    baselines = update_baselines(start, {}, episode_on=False)
+    assert baselines == {"Hall": pytest.approx(0.7), "Kitchen": 0.0}
+    added, room, baseline = overshoot(start, baselines)
+    assert added == pytest.approx(0.0) and trim_factor(added, PARAMS) == 1.0
+    # It rises to 1.1 K over: 0.4 K added, trim 0.8.
+    later = [("Hall", 20.1, 19.0, 0.4), ("Kitchen", 18.9, 19.0, 0.9)]
+    held = update_baselines(later, baselines, episode_on=True)
+    assert held == baselines  # kept for the episode
+    added, room, baseline = overshoot(later, held)
+    assert (room, baseline) == ("Hall", pytest.approx(0.7))
+    assert added == pytest.approx(0.4) and trim_factor(added, PARAMS) == pytest.approx(0.8)
+    # A room below target at the start (Bedroom -0.2) overheating to +1.3 is fully trimmed.
+    bedroom = update_baselines([("Bedroom", 18.8, 19.0, 0.5)], {}, episode_on=False)
+    assert bedroom == {"Bedroom": 0.0}
+    added, _, _ = overshoot([("Bedroom", 20.3, 19.0, 0.5)], bedroom)
+    assert added == pytest.approx(1.3) and trim_factor(added, PARAMS) == 0.0
+
+
+def test_baselines_join_mid_episode_and_reset_outside_one():
+    held = update_baselines([("Hall", 19.5, 19.0, 0.4)], {}, episode_on=False)
+    rooms = [("Hall", 19.6, 19.0, 0.4), ("Study", 19.9, 19.0, 0.3)]
+    joined = update_baselines(rooms, held, episode_on=True)
+    assert joined["Hall"] == held["Hall"] and joined["Study"] == pytest.approx(0.9)
+    # A joiner counts from where it was first seen, not from zero.
+    assert overshoot(rooms, joined)[0] == pytest.approx(0.1)
+    # Outside an episode everything is re-baselined at the current overshoot.
+    assert update_baselines(rooms, joined, episode_on=False) == {
+        "Hall": pytest.approx(0.6),
+        "Study": pytest.approx(0.9),
+    }
+    # A below-target room never gets a negative baseline.
+    assert update_baselines([("A", 18.0, 19.0, 0.5)], {}, episode_on=False) == {"A": 0.0}
 
 
 def test_trim_factor_is_one_linear_then_zero():
@@ -259,3 +297,69 @@ async def test_active_overshoot_removes_the_uplift_after_the_decay(
     assert c.boiler.data.warmup_boost == 0.0
     summary = c.report()["warmup_boost"]
     assert summary["peak_overshoot_today"] == 1.0 and summary["overshoot_room"] == "Study"
+
+
+async def test_pre_warm_overshoot_does_not_block_the_boost_but_added_warming_trims_it(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    entry, c, calls = await start(hass, with_mode(controlled, "active"))
+
+    def demand():
+        hass.states.async_set(
+            "climate.study",
+            "auto",
+            {"current_temperature": 18, "temperature": 20, "heat_demand": 0.9},
+        )
+
+    def rooms(air):
+        c.boiler._warmup_rooms = lambda: [("climate.study", None, True, "Hall", air, 19.0)]
+
+    # The Hall is already 0.7 K over its target when the boost starts, with its valve calling.
+    demand()
+    rooms(19.7)
+    await handover(c)
+    await c.set_mode("boiler", "auto")
+    await c.refresh()
+    data = c.boiler.data
+    full = data.warmup_boost
+    assert full > 5 and data.boost_trim == 1.0
+    assert data.boost_overshoot_k == pytest.approx(0.0, abs=0.01)
+    assert data.boost_overshoot_baseline_k == pytest.approx(0.7)
+    assert c.boiler._warmup_baselines == {"Hall": pytest.approx(0.7)}
+    # Rising to 1.1 K over adds 0.4 K: trim 0.8 (the target uplift is still above the current).
+    rooms(20.1)
+    freezer.tick(timedelta(minutes=1))
+    demand()
+    await c.refresh()
+    data = c.boiler.data
+    assert data.boost_overshoot_k == pytest.approx(0.4, abs=0.01) and data.boost_trim == 0.8
+    assert data.boost_overshoot_baseline_k == pytest.approx(0.7)
+    # 1.4 K over adds 0.7 K more than baseline: nearly out, and the uplift decays.
+    rooms(20.4)
+    freezer.tick(timedelta(minutes=1))
+    demand()
+    await c.refresh()
+    assert c.boiler.data.boost_trim < 0.3 and c.boiler.data.warmup_boost < full
+    # The trim ends the boost. While the house still calls, the baselines are kept, so the
+    # boost does not restart against the room it has overheated.
+    rooms(21.0)
+    freezer.tick(timedelta(minutes=int(full) + 2))
+    demand()
+    await c.refresh()
+    assert c.boiler.data.warmup_boost == 0.0
+    assert c.boiler._warmup_baselines == {"Hall": pytest.approx(0.7)}
+    freezer.tick(timedelta(minutes=5))
+    demand()
+    await c.refresh()
+    assert c.boiler.data.warmup_boost == 0.0 and c.boiler.data.boost_trim == 0.0
+    # Once the house stops calling, the baselines go; the next warm-up starts fresh.
+    hass.states.async_set(
+        "climate.study", "auto", {"current_temperature": 20, "temperature": 20, "heat_demand": 0.0}
+    )
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert c.boiler._warmup_baselines == {"Hall": pytest.approx(2.0)}
+    assert c.boiler.data.boost_trim == 1.0
