@@ -146,6 +146,7 @@ from .core.warmup import (
     overshoot,
     return_scale,
     trim_factor,
+    update_baselines,
 )
 from .hub import BoilerFlowHub
 from .store import BFCStore
@@ -215,6 +216,7 @@ class BFCCoordinatorData:
     boost_flow: float | None = None
     boost_overshoot_k: float | None = None
     boost_overshoot_room: str | None = None
+    boost_overshoot_baseline_k: float | None = None
     boost_trim: float = 1.0
     # Diagnostics
     estimated_running_efficiency: int | None = None
@@ -263,6 +265,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._warmup_state = WarmupBoostState()
         self._warmup_on = False
         self._warmup_journaled = 0.0
+        # Overshoot of each room when the current boost began (memory only).
+        self._warmup_baselines: dict[str, float] = {}
+        # Keeps baselines after a trim ends the boost while the house still calls, so the
+        # boost cannot restart against a room it has already overheated.
+        self._warmup_hold = False
         self._warmup_stats = {
             "day": None,
             "minutes": 0.0,
@@ -524,6 +531,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 False,
                 0.0,
             )
+            self._warmup_baselines = {}
+            self._warmup_hold = False
             return 0.0
         rooms = []
         hot = []
@@ -546,7 +555,12 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             if mode == "active"
             else 1.0
         )
-        worst = overshoot(hot)
+        calling = house is not None and house.fraction >= params.start
+        if not calling:
+            self._warmup_hold = False
+        episode = self._warmup_on or self._warmup_hold
+        self._warmup_baselines = update_baselines(hot, self._warmup_baselines, episode)
+        worst = overshoot(hot, self._warmup_baselines)
         trim = trim_factor(worst[0] if worst else None, params)
         previous = self._warmup_state
         state = boost_step(
@@ -558,6 +572,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         d.warmup_boost = round(state.uplift, 2)
         d.boost_overshoot_k = None if worst is None else round(worst[0], 2)
         d.boost_overshoot_room = None if worst is None else worst[1]
+        d.boost_overshoot_baseline_k = None if worst is None else round(worst[2], 2)
         d.boost_trim = round(trim, 2)
         d.boost_flow = round(min(curve_params.flow_max, base + state.uplift), 1)
         stats = self._warmup_stats
@@ -578,6 +593,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._warmup_journal("started", d)
         elif d.warmup_boost <= 0 and self._warmup_on:
             self._warmup_on, self._warmup_journaled = False, 0.0
+            # Baselines stay while the house still calls (see _warmup_hold).
+            self._warmup_hold = calling
+            if not calling:
+                self._warmup_baselines = {}
             self._warmup_journal("ended", d)
         elif self._warmup_on and abs(d.warmup_boost - self._warmup_journaled) >= 2.0:
             self._warmup_journaled = d.warmup_boost
@@ -597,6 +616,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 "boost_flow": d.boost_flow,
                 "overshoot_k": d.boost_overshoot_k,
                 "overshoot_room": d.boost_overshoot_room,
+                "overshoot_baseline_k": d.boost_overshoot_baseline_k,
                 "trim": d.boost_trim,
                 "return_used": self._return_filtered,
             },

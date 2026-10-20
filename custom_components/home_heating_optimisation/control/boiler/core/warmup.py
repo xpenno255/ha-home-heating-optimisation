@@ -63,16 +63,34 @@ def house_demand(rooms) -> HouseDemand | None:
     return HouseDemand(fraction, sum(d for d, _ in valid), len(valid), len(rooms))
 
 
-def overshoot(rooms):
-    """``(kelvin, room)`` of the room furthest above its commanded air target, else None.
+def update_baselines(rooms, baselines, episode_on):
+    """Each room's overshoot when the boost began: ``max(0, air - target)``.
+
+    Outside an episode every room is re-baselined at its current overshoot, so an
+    existing overshoot never blocks a boost from starting. During an episode the baselines
+    stay, and a room seen for the first time joins with its overshoot at that moment.
+    """
+    out = dict(baselines) if episode_on else {}
+    for name, air, target, _demand in rooms:
+        if None not in (air, target) and name not in out:
+            out[name] = max(0.0, air - target)
+    return out
+
+
+def overshoot(rooms, baselines=None):
+    """``(kelvin, room, baseline)`` of the room that has risen furthest above target since
+    the boost began, else None.
 
     ``rooms`` is ``[(name, air temperature | None, commanded air target | None, heat demand
-    0-1 | None)]`` for the enabled rooms. Only rooms still calling for heat count: a room
-    with its valve shut is not taking the boosted water. Rooms missing a value, or with no
-    demand reading, are ignored.
+    0-1 | None)]`` for the enabled rooms. Only the overshoot added since the boost began
+    counts (``baselines`` maps room to its overshoot then; a room without one counts from 0),
+    so a room already warm at the start does not hold the boost back. Only rooms still
+    calling for heat count: a room with its valve shut is not taking the boosted water.
+    Rooms missing a value, or with no demand reading, are ignored.
     """
+    baselines = baselines or {}
     over = [
-        (air - target, name)
+        (air - target - baselines.get(name, 0.0), name, baselines.get(name, 0.0))
         for name, air, target, demand in rooms
         if None not in (air, target, demand) and demand > 0.0
     ]
