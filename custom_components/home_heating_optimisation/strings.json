@@ -87,7 +87,8 @@
           "dhw_schedule": "DHW target schedule",
           "dhw_cutoff": "DHW measured-temperature cutoff",
           "optimum": "Optimum start predictor (shadow)",
-          "warmup_boost": "Warm-up flow boost"
+          "warmup_boost": "Warm-up flow boost",
+          "preheat": "Planned morning pre-heat"
         }
       },
       "room": {
@@ -364,6 +365,21 @@
           "forecast_entity": "An hourly outdoor forecast improves predictions on mornings that are warming or cooling. Without it the current outdoor temperature is used."
         }
       },
+      "preheat": {
+        "title": "Planned morning pre-heat",
+        "description": "Plans each room's warm-up so a schedule time means the room is warm by then, using the optimum start predictor (which must be enabled). Each room starts at its own time, planned at a gentle flow, and hot water charges are kept clear. Shadow plans and records without changing anything; active raises the room to its next target at the planned start with a normal temporary override. If HHO stops, the override ends within an hour and Evohome switches at the schedule time, so a room is late, never cold. Does not reset any controller.",
+        "data": {
+          "mode": "Mode",
+          "plan_flow": "Flow temperature to plan warm-ups at (\u00b0C)",
+          "max_lead_minutes": "Longest pre-heat before the schedule time (minutes)",
+          "fullness_low": "Radiator fullness where the flow cap starts (0-1)",
+          "fullness_high": "Radiator fullness where the flow cap reaches zero (0-1)"
+        },
+        "data_description": {
+          "plan_flow": "A lower value means an earlier, gentler start.",
+          "fullness_high": "Must be above the starting fullness. The two fullness values are used by the boiler flow cap in a later release."
+        }
+      },
       "warmup_boost": {
         "title": "Warm-up flow boost",
         "description": "While several rooms call for heat at once, raises the boiler flow target above the weather curve, up to the maximum flow, so each burn delivers more heat. The size of the boost follows how much of the house's radiator capacity is calling. Evohome still decides when the boiler fires. Shadow calculates and records the boost without changing the flow target; active applies it, and backs off as the return temperature nears its ceiling. Not applied while hot water is charging.",
@@ -411,6 +427,8 @@
       "dhw_params_unavailable": "The water heater does not report its setpoint, overrun and differential. Check RAMSES before enabling.",
       "dhw_cutoff_invalid_margin": "Enter a margin between 0.5 and 10 \u00b0C.",
       "optimum_invalid_value": "A setting is outside its allowed range.",
+      "preheat_invalid": "Check the values: each must be in range and the upper fullness must be above the lower one.",
+      "preheat_needs_optimum": "Enable the optimum start predictor before using active pre-heat.",
       "warmup_boost_invalid": "Check the values: the full share must be above the start share, and each must be in range."
     },
     "abort": {
@@ -560,6 +578,14 @@
           "holding": "Holding DHW off",
           "unconfirmed": "Stop not confirmed",
           "standby": "Standby (boost or override)"
+        }
+      },
+      "preheat": {
+        "name": "Pre-heat",
+        "state": {
+          "off": "Off",
+          "shadow": "Shadow",
+          "active": "Active"
         }
       },
       "optimum_start": {
@@ -1039,6 +1065,13 @@
         "fri": "Friday",
         "sat": "Saturday",
         "sun": "Sunday"
+      }
+    },
+    "preheat_mode": {
+      "options": {
+        "off": "Off",
+        "shadow": "Shadow (plan and record only)",
+        "active": "Active (start rooms at the planned time)"
       }
     },
     "warmup_boost_mode": {

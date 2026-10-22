@@ -98,6 +98,9 @@ class PolicyInputs:
     # command reconciliation rather than evidence that somebody moved the dial.
     command_reverted: bool = False
     retry_reverted_command: bool = False
+    # HHO's own pre-heat: raise the zone to this target ahead of the upward switchpoint.
+    # Set by the coordinator only when the planner says this room should be warming now.
+    preheat_setpoint: float | None = None
     params: PolicyParams = field(default_factory=PolicyParams)
 
 
@@ -415,6 +418,32 @@ def decide(inp: PolicyInputs) -> Decision:
                 would_write=_bound(target, p),
             )
         return _write(state, target, reason, inp, m)
+
+    # 4b. HHO pre-heat: the planner says this room should be warming for the switchpoint
+    # ahead. Manual hold and open windows (above) still win. The override is written like
+    # any other, so the ownership check recognises it and the switchpoint hand-over, where
+    # the model setpoint is about the same value, needs no new write.
+    if (
+        inp.preheat_setpoint is not None
+        and z.next_switchpoint_at is not None
+        and z.next_switchpoint_at > inp.now
+    ):
+        if inp.shadow_mode:
+            return Decision(
+                State.SHADOW,
+                Action.NONE,
+                None,
+                "pre-heat (shadow)",
+                m,
+                would_write=_bound(inp.preheat_setpoint, p),
+            )
+        return _write(
+            State.PREHEAT,
+            inp.preheat_setpoint,
+            f"HHO pre-heat to {inp.preheat_setpoint:.1f} before the switchpoint",
+            inp,
+            m,
+        )
 
     # 5. Nothing to correct with.
     if inp.computed_setpoint is None:

@@ -139,11 +139,17 @@ from .core.policy import (
     zone_max_demand,
 )
 from .core.warmup import (
+    FullnessState,
     WarmupBoostParams,
     WarmupBoostState,
     boost_step,
+    fullness,
+    fullness_cap,
+    fullness_step,
     house_demand,
+    need_uplift,
     overshoot,
+    preheat_step,
     return_scale,
     trim_factor,
     update_baselines,
@@ -218,6 +224,15 @@ class BFCCoordinatorData:
     boost_overshoot_room: str | None = None
     boost_overshoot_baseline_k: float | None = None
     boost_trim: float = 1.0
+    # Planned pre-heat flow (see core.warmup). `radiator_fullness` is always published while
+    # heating; the rest only when pre-heat is on. In shadow they are what active would do.
+    preheat_mode: str = "off"
+    radiator_fullness: float | None = None
+    fullness_cap: float | None = None
+    preheat_need: float | None = None
+    preheat_uplift: float = 0.0
+    preheat_flow: float | None = None
+    preheat_rooms: int = 0
     # Diagnostics
     estimated_running_efficiency: int | None = None
     efficiency_status: str = STATUS_DISABLED
@@ -256,6 +271,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         target_pending=None,
         warmup_config=None,
         warmup_rooms=None,
+        preheat_config=None,
+        preheat_rooms=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._target_pending = target_pending or (lambda: False)
@@ -263,6 +280,12 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._warmup_config = warmup_config or (lambda: {"mode": "off"})
         self._warmup_rooms = warmup_rooms or (lambda: [])
         self._warmup_state = WarmupBoostState()
+        # Planned pre-heat: options, the rooms warming under a plan, and the filtered
+        # radiator fullness (held while the burner is off) with the shadow uplift ramp.
+        self._preheat_config = preheat_config or (lambda: {"mode": "off"})
+        self._preheat_rooms = preheat_rooms or (lambda _now: [])
+        self._fullness = FullnessState()
+        self._preheat_state = WarmupBoostState()
         self._warmup_on = False
         self._warmup_journaled = 0.0
         # Overshoot of each room when the current boost began (memory only).
@@ -520,10 +543,34 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
     # ------------------------------------------------------------------
 
     def _warmup_boost(self, d, now, physical_mode, base, curve_params, freshness) -> float:
-        """Publish the boost; returns the uplift to add to the target (active mode only)."""
+        """Publish the boost; returns the uplift to add to the target.
+
+        Two drivers. The house-demand boost (``warmup_boost`` mode) is the fallback. While
+        any room is pre-heating under a plan and pre-heat is on, the uplift instead follows
+        the rooms' lag behind their plans, capped by how full the radiators already are; in
+        pre-heat ``shadow`` that is only published (``preheat_*``) and the house-demand
+        boost carries on as before.
+        """
         cfg = self._warmup_config()
         mode = d.warmup_mode = cfg["mode"]
-        if mode == "off" or base is None or physical_mode is not Mode.HEATING:
+        pre_mode = d.preheat_mode = self._preheat_config()["mode"]
+        heating = base is not None and physical_mode is Mode.HEATING
+        rooms = []
+        hot = []
+        if heating:
+            for entity, output, enabled, name, air, target in self._warmup_rooms():
+                if not enabled:
+                    continue
+                value = self._float_state(
+                    entity, freshness=freshness, now=now, attribute="heat_demand"
+                )
+                value = value if value is not None and 0 <= value <= 1 else None
+                hot.append((name, air, target, value))
+                rooms.append((value, output))
+        else:
+            # Radiators cool while the boiler does something else: start the filter afresh.
+            self._fullness = FullnessState()
+        if not heating or (mode == "off" and pre_mode == "off"):
             if self._warmup_on:
                 self._warmup_journal("ended", d)
             self._warmup_state, self._warmup_on, self._warmup_journaled = (
@@ -531,25 +578,23 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 False,
                 0.0,
             )
+            self._preheat_state = WarmupBoostState()
             self._warmup_baselines = {}
             self._warmup_hold = False
+            if heating:
+                self._publish_fullness(d, now, hot)
             return 0.0
-        rooms = []
-        hot = []
-        for entity, output, enabled, name, air, target in self._warmup_rooms():
-            if not enabled:
-                continue
-            value = self._float_state(entity, freshness=freshness, now=now, attribute="heat_demand")
-            value = value if value is not None and 0 <= value <= 1 else None
-            hot.append((name, air, target, value))
-            rooms.append((value, output))
         house = house_demand(rooms)
+        pre = self._preheat_config()
         params = WarmupBoostParams(
             start=cfg["start"],
             full=cfg["full"],
             boost_max=curve_params.flow_max,
             decay_k_per_min=cfg["decay_k_per_min"],
+            fullness_low=pre.get("fullness_low", 0.45),
+            fullness_high=pre.get("fullness_high", 0.65),
         )
+        filtered = self._publish_fullness(d, now, hot)
         scale = (
             return_scale(self._return_filtered, self._return_params().return_ceiling, params)
             if mode == "active"
@@ -563,9 +608,49 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         worst = overshoot(hot, self._warmup_baselines)
         trim = trim_factor(worst[0] if worst else None, params)
         previous = self._warmup_state
-        state = boost_step(
-            previous, house.fraction if house else None, base, now, params, scale, trim
-        )
+        planned = []
+        if pre_mode != "off" and not d.dhw_active:
+            try:
+                planned = list(self._preheat_rooms(now))
+            except Exception:  # noqa: BLE001 - the plan must never break the boiler cycle
+                _LOGGER.debug("BFC: pre-heat rooms unavailable", exc_info=True)
+        d.preheat_rooms = len(planned)
+        pre_driving = bool(planned)
+        applied = mode == "active"
+        if pre_mode != "off":
+            guard = return_scale(
+                self._return_filtered, self._return_params().return_ceiling, params
+            )
+            need = need_uplift(planned, base, params.boost_max, params)
+            cap = fullness_cap(
+                filtered, base, params.boost_max, params.fullness_low, params.fullness_high
+            )
+            wanted = min(need, cap) * trim * guard if pre_driving else 0.0
+            before = self._preheat_state
+            if pre_mode == "active" and pre_driving:
+                # The plan, not the house demand, sets the flow while rooms are pre-heating.
+                state = preheat_step(previous, wanted, base, now, params)
+                before, applied = state, True
+            else:
+                before = preheat_step(before, wanted, base, now, params)
+                state = None
+            self._preheat_state = before
+            d.preheat_need = round(need, 2) if pre_driving else None
+            d.fullness_cap = round(cap, 2)
+            d.preheat_uplift = round(before.uplift, 2)
+            d.preheat_flow = round(min(curve_params.flow_max, base + before.uplift), 1)
+        else:
+            state = None
+            self._preheat_state = WarmupBoostState()
+        if state is None:
+            if mode != "off":
+                state = boost_step(
+                    previous, house.fraction if house else None, base, now, params, scale, trim
+                )
+            else:
+                # Only pre-heat is on and no room is warming: fall away at the decay rate.
+                state = preheat_step(previous, 0.0, base, now, params)
+                applied = pre_mode == "active"
         self._warmup_state = state
         d.house_demand = None if house is None else round(house.fraction, 3)
         d.room_equivalents = None if house is None else round(house.room_equivalents, 2)
@@ -601,7 +686,27 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         elif self._warmup_on and abs(d.warmup_boost - self._warmup_journaled) >= 2.0:
             self._warmup_journaled = d.warmup_boost
             self._warmup_journal("updated", d, routine=True)
-        return state.uplift if mode == "active" else 0.0
+        return state.uplift if applied else 0.0
+
+    def _publish_fullness(self, d, now, hot):
+        """Update and publish the filtered radiator fullness; returns it (None if unknown).
+
+        Flow is the current flow reading, return the fresh return reading, room the mean air
+        temperature of rooms calling for heat (else of all heated rooms). Only a firing burner
+        moves the filter: the return jumps towards the flow once it stops.
+        """
+        cfg = self._config
+        calling = [air for _n, air, _t, demand in hot if air is not None and (demand or 0) > 0]
+        airs = calling or [air for _n, air, _t, _d in hot if air is not None]
+        room = sum(airs) / len(airs) if airs else None
+        ret = d.return_temperature_used if d.return_fresh else None
+        raw = fullness(d.current_flow, ret, room)
+        active = self._state(cfg.get(CONF_HEATING_ACTIVE_ENTITY))
+        firing = (d.burner_power or 0) > 0 or (active is not None and active.state == "on")
+        self._fullness = fullness_step(self._fullness, raw, firing, now)
+        value = self._fullness.value
+        d.radiator_fullness = None if value is None else round(value, 3)
+        return value
 
     def _warmup_journal(self, event, d, routine=False):
         self._journal(
@@ -619,6 +724,12 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 "overshoot_baseline_k": d.boost_overshoot_baseline_k,
                 "trim": d.boost_trim,
                 "return_used": self._return_filtered,
+                "preheat_mode": d.preheat_mode,
+                "preheat_rooms": d.preheat_rooms,
+                "preheat_need": d.preheat_need,
+                "fullness_cap": d.fullness_cap,
+                "radiator_fullness": d.radiator_fullness,
+                "preheat_uplift": d.preheat_uplift,
             },
             routine=routine,
         )
@@ -636,6 +747,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             "overshoot_k": data.boost_overshoot_k if data else None,
             "overshoot_room": data.boost_overshoot_room if data else None,
             "trim": data.boost_trim if data else 1.0,
+            "preheat_mode": self._preheat_config()["mode"],
+            "preheat_uplift": data.preheat_uplift if data else 0.0,
+            "radiator_fullness": data.radiator_fullness if data else None,
             "peak_overshoot_today": stats["peak_overshoot"],
         }
 

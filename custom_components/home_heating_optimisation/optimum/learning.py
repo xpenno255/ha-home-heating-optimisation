@@ -36,6 +36,11 @@ MIN_REPORTS = 3
 EVENING_HOURS = range(17, 24)
 MAX_COAST_RATE = -0.02
 HIGH_EVENTS, MEDIUM_EVENTS, HIGH_LOO_MIN = 8, 4, 15.0
+# Coast-up: how much a room still rises after its demand ends, following a warm-up.
+COAST_UP_AFTER_ARRIVAL_SECONDS = 90 * 60
+COAST_UP_WINDOW_SECONDS = 40 * 60
+MIN_COAST_UPS = 3
+DEFAULT_COAST_UP_K = 0.3
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,9 @@ class RoomFit:
     coast_rate: float | None
     coast_reason: str | None
     last_events: list = field(default_factory=list)
+    # Median extra rise after demand ends at a warm-up, and how many samples it rests on.
+    coast_up_k: float = DEFAULT_COAST_UP_K
+    coast_up_samples: int = 0
 
 
 def _valid(z, t):
@@ -220,6 +228,62 @@ def cooldowns(observations, zone):
     return out
 
 
+def coast_ups(observations, zone, events=None):
+    """Extra rise (K) of one zone after its demand ended at a warm-up, one per warm-up.
+
+    For each warm-up event (``events``, else those found in ``observations``), the first
+    time the zone's ``active`` goes True -> False at or after arrival (and within 90
+    minutes of it) gives ``max(temperature over the next 40 minutes) - temperature then``.
+    Dropped: a data gap over 30 minutes or an unusable reading in that window, or the
+    target falling 0.3 K below its value at the transition (a new period, not coasting).
+    """
+    if events is None:
+        events = warmup_events(observations, zone)
+    out = []
+    for event in events:
+        arrival = event["start"] + event["minutes"] * 60
+        end = arrival + COAST_UP_AFTER_ARRIVAL_SECONDS
+        for i in range(1, len(observations)):
+            before, now = observations[i - 1], observations[i]
+            if now["time"] < arrival:
+                continue
+            if now["time"] > end:
+                break
+            zb, zn = before["zones"].get(zone, {}), now["zones"].get(zone, {})
+            if zb.get("active") is True and zn.get("active") is False and _valid(zn, now["time"]):
+                if (rise := _rise_after(observations, i, zone)) is not None:
+                    out.append(rise)
+                break
+    return out
+
+
+def _rise_after(observations, index, zone):
+    start = observations[index]
+    z0 = start["zones"][zone]
+    t0, temp0, target0 = start["time"], z0["temperature"], z0["target"]
+    best, last = temp0, t0
+    for obs in observations[index + 1 :]:
+        t = obs["time"]
+        if t - t0 > COAST_UP_WINDOW_SECONDS:
+            break
+        z = obs["zones"].get(zone, {})
+        if t - last > MAX_GAP_SECONDS or not _valid(z, t):
+            return None
+        if z["target"] < target0 - ABANDON_DROP_K:
+            return None
+        best, last = max(best, z["temperature"]), t
+    if last - t0 <= 0:
+        return None
+    return round(best - temp0, 2)
+
+
+def coast_up(rises):
+    """``(median K, samples)``: the default (0.3 K) until there are at least 3 samples."""
+    if len(rises) < MIN_COAST_UPS:
+        return DEFAULT_COAST_UP_K, len(rises)
+    return round(statistics.median(rises), 2), len(rises)
+
+
 def coast_rate(downs, tz, minimum):
     """(median evening slope K/h, None) or (None, reason) when it cannot be trusted."""
     zone_tz = ZoneInfo(tz)
@@ -236,10 +300,11 @@ def coast_rate(downs, tz, minimum):
     return rate, None, len(evening)
 
 
-def build_fit(events, downs, params, now_ts):
+def build_fit(events, downs, params, now_ts, rises=()):
     """A room's fit from its stored events and cool-down segments."""
     model = fit_model(events, now_ts, params["tolerance"])
     rate, reason, count = coast_rate(downs, params["timezone"], params["min_cooldowns"])
+    up, up_samples = coast_up(rises)
     enough = model is not None and len(events) >= params["min_warmups"]
     if not enough:
         confidence = "none"
@@ -266,6 +331,8 @@ def build_fit(events, downs, params, now_ts):
             }
             for e in events[-3:]
         ],
+        coast_up_k=up,
+        coast_up_samples=up_samples,
     )
 
 
@@ -280,7 +347,9 @@ def fit_room(observations, zone, params, stored_events=(), now_ts=None):
     )
     if now_ts is None:
         now_ts = observations[-1]["time"] if observations else 0
-    fit = build_fit(events, cooldowns(observations, zone), params, now_ts)
+    # Only the warm-ups still inside the observations can show a coast-up.
+    rises = coast_ups(observations, zone, events[-KEEP_EVENTS:])
+    fit = build_fit(events, cooldowns(observations, zone), params, now_ts, rises)
     return fit, events
 
 

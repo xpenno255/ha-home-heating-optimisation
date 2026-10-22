@@ -24,17 +24,22 @@ def _temp_at(samples, ts):
     return next((s[1] for s in samples if s[1] is not None), None)
 
 
-def evohome_start(samples, schedule_target, switch):
+def evohome_start(samples, schedule_target, switch, hho_commanded=None):
     """``(time, early, censored)`` of Evohome's start for a switchpoint.
 
     Early when the zone setpoint reached the scheduled target before the switchpoint;
-    otherwise Evohome did nothing early and its start is the switchpoint itself.
+    otherwise Evohome did nothing early and its start is the switchpoint itself. When HHO
+    itself raised the zone (``hho_commanded``, the time of its write) a setpoint at or after
+    that is HHO's doing, not Evohome's: the start is then HHO's write time.
     """
+    end = switch if hho_commanded is None else min(switch, hho_commanded)
     for i, (t, _temp, setpoint, _out) in enumerate(samples):
-        if t >= switch:
+        if t >= end:
             break
         if setpoint is not None and setpoint >= schedule_target - SETPOINT_EPS:
             return t, True, i == 0
+    if hho_commanded is not None and hho_commanded < switch:
+        return hho_commanded, False, False
     return switch, False, False
 
 
@@ -56,6 +61,7 @@ def score_start(record, tolerance=0.3):
     The record carries the commanded ``target`` (the goal: schedule plus HHO's offset), the
     ``schedule_target`` Evohome aims at, the pace and dead time used (``mpk``,
     ``delay_minutes``), the room's median event supply and the boost flow for the what-if.
+    ``hho_commanded`` (a timestamp) marks a morning HHO's own pre-heat raised the zone.
     """
     samples = [s for s in record["samples"] if s[1] is not None]
     switch, goal = record["switch_ts"], record["target"]
@@ -65,6 +71,7 @@ def score_start(record, tolerance=0.3):
     outdoors = [s[3] for s in samples if s[3] is not None]
     mean_out = statistics.fmean(outdoors) if outdoors else None
     frozen = record.get("frozen")
+    hho_commanded = record.get("hho_commanded") or None
     base = {
         "switch": _at(switch).isoformat(),
         "target": goal,
@@ -72,6 +79,7 @@ def score_start(record, tolerance=0.3):
         "outdoor_source": record.get("outdoor_source"),
         "predicted_start": None if not frozen else _at(frozen["start_ts"]).isoformat(),
         "predicted_lead_min": None if not frozen else frozen["lead_minutes"],
+        "hho_commanded": hho_commanded is not None,
     }
     at_switch = _temp_at(samples, switch)
     empty = {
@@ -95,7 +103,7 @@ def score_start(record, tolerance=0.3):
         need = climb(goal, temp, tolerance)
         return delay + mpk * need * factor if need > 0 else 0.0
 
-    es, early, censored = evohome_start(samples, schedule_target, switch)
+    es, early, censored = evohome_start(samples, schedule_target, switch, hho_commanded)
     reached = reached_at([s for s in samples if s[0] >= es], arrival)
     actual = None if reached is None else max(0, _minutes(reached, es))
     predicted = heating(es)
@@ -104,7 +112,7 @@ def score_start(record, tolerance=0.3):
         # A prediction made after its own start time (lead 0) is judged from when it was made.
         late_made = frozen["lead_minutes"] == 0 and frozen.get("frozen_at")
         ref = frozen["frozen_at"] if late_made else frozen["start_ts"]
-        if (own := heating(ref)) is not None:
+        if (own := heating(ref, record.get("plan_factor") or 1.0)) is not None:
             hho = _minutes(ref + own * 60, switch)
     boost = None
     factor = boost_factor(

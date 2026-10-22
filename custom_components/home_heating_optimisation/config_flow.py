@@ -71,6 +71,12 @@ from .optimum.policy import LIMITS as OPTIMUM_LIMITS
 from .optimum.policy import SECTION as OPTIMUM_SECTION
 from .optimum.policy import optimum_config
 from .optimum.policy import validation_error as optimum_validation_error
+from .optimum.preheat_policy import DEFAULTS as PREHEAT_DEFAULTS
+from .optimum.preheat_policy import INTEGERS as PREHEAT_INTEGERS
+from .optimum.preheat_policy import LIMITS as PREHEAT_LIMITS
+from .optimum.preheat_policy import SECTION as PREHEAT_SECTION
+from .optimum.preheat_policy import preheat_config
+from .optimum.preheat_policy import validation_error as preheat_validation_error
 from .survey import async_load_survey, suggest_mappings
 
 ANALYTICS_DEFAULTS = {
@@ -152,6 +158,7 @@ KEPT_SECTIONS = (
     CUTOFF_SECTION,
     OPTIMUM_SECTION,
     WARMUP_SECTION,
+    PREHEAT_SECTION,
 )
 
 
@@ -381,6 +388,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 "dhw_cutoff",
                 "optimum",
                 "warmup_boost",
+                "preheat",
             ],
         )
 
@@ -991,6 +999,42 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             )
         return self.async_show_form(
             step_id="warmup_boost", errors=errors, data_schema=vol.Schema(schema)
+        )
+
+    async def async_step_preheat(self, user_input=None):
+        """Planned morning pre-heat from the optimum predictor; saved apart from control."""
+        self.current = effective_config(self.config_entry)
+        old = preheat_config(self.current)
+        errors = {}
+        if user_input is not None:
+            values = {**PREHEAT_DEFAULTS, **user_input}
+            error = preheat_validation_error(values, optimum_config(self.current)["enabled"])
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_create_entry(
+                    title=NAME,
+                    data={
+                        **self.current,
+                        PREHEAT_SECTION: preheat_config({PREHEAT_SECTION: values}),
+                    },
+                )
+        schema = {
+            vol.Required("mode", default=old["mode"]): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["off", "shadow", "active"],
+                    translation_key="preheat_mode",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        }
+        for key, (low, high) in PREHEAT_LIMITS.items():
+            coerce = int if key in PREHEAT_INTEGERS else float
+            schema[vol.Required(key, default=old[key])] = vol.All(
+                vol.Coerce(coerce), vol.Range(min=low, max=high)
+            )
+        return self.async_show_form(
+            step_id="preheat", errors=errors, data_schema=vol.Schema(schema)
         )
 
     async def async_step_optimum(self, user_input=None):

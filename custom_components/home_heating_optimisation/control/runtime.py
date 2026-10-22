@@ -12,6 +12,8 @@ from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN
 from ..dhw.policy import dhw_config, usable
+from ..optimum.preheat import PreheatRoom
+from ..optimum.preheat_policy import preheat_config
 from .boiler.coordinator import BFCCoordinator
 from .boiler.hub import BoilerFlowHub
 from .boiler.warmup_policy import warmup_config
@@ -145,6 +147,8 @@ class Controls:
             target_pending=lambda: bool(getattr(self.heating.dhw, "uncertain", False)),
             warmup_config=lambda: warmup_config(self.heating.config),
             warmup_rooms=self.warmup_rooms,
+            preheat_config=lambda: preheat_config(self.heating.config),
+            preheat_rooms=self.preheat_rooms,
         )
         # Do not act while configuration and all entities are still restoring.
         self.boiler.override = "shadow"
@@ -159,6 +163,7 @@ class Controls:
                 state_reader=self.heating.telemetry.get,
                 write_guard=lambda rid=room_id: self.can_write(rid),
                 journal=getattr(self.heating, "journal", None),
+                preheat_hint=lambda now, rid=room_id: self.preheat_hint(rid, now),
             )
             c.mode = "shadow"
             c.journal_room_id = room_id
@@ -495,6 +500,54 @@ class Controls:
         except Exception as err:  # noqa: BLE001 - reporting must not break the report
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 
+    def preheat_hint(self, room_id, now=None):
+        """``(mode, plan)`` for a room: the optimum planner's pre-heat, resolved lazily.
+
+        The planner is created after the controls, so it is looked up on every call. Plan is
+        None, and mode ``off``, when pre-heat is off or the predictor is not running.
+        """
+        optimum = getattr(self.heating, "optimum", None)
+        mode = getattr(optimum, "preheat_mode", "off")
+        if optimum is None or mode == "off":
+            return "off", None
+        return mode, optimum.preheat(room_id, now)
+
+    def preheat_rooms(self, now=None):
+        """``PreheatRoom`` for every room warming under a plan right now (empty when none).
+
+        For the boiler side: ``goal`` is the planned target, ``expected_temp`` where the room
+        should be by now and ``behind_k`` how far under that it is (positive: behind plan).
+        """
+        now = now or dt_util.utcnow()
+        optimum = getattr(self.heating, "optimum", None)
+        found = []
+        for room_id, c in self.rooms.items():
+            mode, plan = self.preheat_hint(room_id, now)
+            if plan is None or not plan.started:
+                continue
+            air = c.data.air_temp if c.data else None
+            expected = plan.expected_at(now)
+            fit = getattr(optimum, "fits", {}).get(room_id)
+            coast = fit.coast_up_k if fit else 0.3
+            tolerance = optimum._tolerance()
+            found.append(
+                PreheatRoom(
+                    room_id=room_id,
+                    name=c.room_name,
+                    goal=plan.goal,
+                    commanded=c.data.preheat_setpoint if c.data and c.data.preheating else None,
+                    air_temp=air,
+                    expected_temp=expected,
+                    behind_k=None if air is None else round(expected - air, 2),
+                    started_at=plan.begin,
+                    switch_at=plan.switch_at,
+                    planned_minutes=plan.planned_minutes,
+                    done=air is not None and air >= plan.goal - tolerance - coast,
+                    coast_up_k=coast,
+                )
+            )
+        return found
+
     def warmup_rooms(self):
         """``[(climate, output W, enabled, name, air temp, air target)]`` for the warm-up boost."""
         return [
@@ -504,7 +557,11 @@ class Controls:
                 c.enabled,
                 c.room_name,
                 c.data.air_temp if c.data else None,
-                c.data.air_setpoint if c.data else None,
+                (
+                    c.data.preheat_setpoint
+                    if c.data and c.data.preheating
+                    else (c.data.air_setpoint if c.data else None)
+                ),
             )
             for c in self.rooms.values()
         ]
