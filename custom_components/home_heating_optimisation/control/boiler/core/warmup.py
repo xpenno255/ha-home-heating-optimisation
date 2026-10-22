@@ -17,6 +17,14 @@ from datetime import datetime
 MODES = ("off", "shadow", "active")
 # The return guard fades the uplift out over this many kelvin below its limit.
 RETURN_FADE_K = 5.0
+# Radiator fullness needs a real flow-to-room span to mean anything.
+FULLNESS_MIN_SPAN_K = 3.0
+# Time constant of the fullness filter, and the longest step it integrates over (so a
+# burner that has been off does not make the first firing reading jump the filter).
+FULLNESS_TAU_S = 180.0
+FULLNESS_MAX_STEP_S = 60.0
+# Kelvin behind the planned trajectory that asks for the full uplift.
+NEED_FULL_K = 0.5
 
 
 @dataclass(frozen=True)
@@ -29,11 +37,25 @@ class WarmupBoostParams:
     # The uplift fades out as the most overheated room goes from the first to the second.
     trim_start_k: float = 0.3
     trim_full_k: float = 0.8
+    # During a planned pre-heat the uplift may also rise only this fast, and the fullness
+    # cap runs from fullness_low (no cap) to fullness_high (no uplift).
+    rise_k_per_min: float = 1.0
+    need_full_k: float = NEED_FULL_K
+    fullness_low: float = 0.45
+    fullness_high: float = 0.65
 
 
 @dataclass(frozen=True)
 class WarmupBoostState:
     uplift: float = 0.0
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class FullnessState:
+    """Filtered radiator fullness, held while the burner is off."""
+
+    value: float | None = None
     updated_at: datetime | None = None
 
 
@@ -143,5 +165,77 @@ def boost_step(
         uplift = target
     else:
         minutes = max(0.0, (now - state.updated_at).total_seconds() / 60)
+        uplift = max(target, state.uplift - params.decay_k_per_min * minutes)
+    return WarmupBoostState(min(uplift, max(0.0, params.boost_max - base)), now)
+
+
+# -- planned pre-heat: radiator fullness and need -----------------------------------
+
+
+def fullness(flow, ret, room):
+    """Radiator fullness ``(return - room) / (flow - room)``; None when unknown or no span.
+
+    Near 0.25 as a burn starts on cool radiators, 0.55-0.62 once they have loaded. It is
+    only meaningful while the burner fires: it jumps towards 1 when the flow stops.
+    """
+    if None in (flow, ret, room) or flow - room < FULLNESS_MIN_SPAN_K:
+        return None
+    return (ret - room) / (flow - room)
+
+
+def fullness_step(state: FullnessState, raw, firing: bool, now: datetime) -> FullnessState:
+    """Exponential filter (about 3 minutes), updated only while firing; held otherwise."""
+    if not firing or raw is None:
+        return state
+    if state.value is None or state.updated_at is None:
+        return FullnessState(raw, now)
+    elapsed = min(FULLNESS_MAX_STEP_S, max(0.0, (now - state.updated_at).total_seconds()))
+    value = state.value + elapsed / (FULLNESS_TAU_S + elapsed) * (raw - state.value)
+    return FullnessState(value, now)
+
+
+def fullness_cap(filtered, base, boost_max, low, high) -> float:
+    """Most uplift (K) the radiators can take: full below ``low``, none at ``high``.
+
+    Unknown fullness gives the full cap: no information is no reason to restrict the boost
+    beyond the other limits.
+    """
+    room = max(0.0, boost_max - base)
+    if filtered is None or high <= low:
+        return room
+    return room * min(1.0, max(0.0, (high - filtered) / (high - low)))
+
+
+def need_uplift(rooms, base, boost_max, params: WarmupBoostParams) -> float:
+    """Uplift (K) the rooms in pre-heat ask for: how far the worst is behind its plan.
+
+    ``rooms`` carry ``behind_k`` (positive: behind plan) and ``done``. A room already
+    done (at its goal less tolerance and coast-up) or on or ahead of plan asks for none;
+    ``need_full_k`` behind asks for everything up to ``boost_max``.
+    """
+    behind = [
+        r.behind_k
+        for r in rooms
+        if not getattr(r, "done", False) and r.behind_k is not None and r.behind_k > 0
+    ]
+    if not behind:
+        return 0.0
+    room = max(0.0, boost_max - base)
+    return room * min(1.0, max(0.0, max(behind) / params.need_full_k))
+
+
+def preheat_step(
+    state: WarmupBoostState, target, base, now: datetime, params: WarmupBoostParams
+) -> WarmupBoostState:
+    """Next uplift towards ``target``: up no faster than ``rise_k_per_min``, down no faster
+    than ``decay_k_per_min``. The first step has no elapsed time to go on and counts a minute.
+    """
+    if state.updated_at is None:
+        minutes = 1.0
+    else:
+        minutes = min(10.0, max(0.0, (now - state.updated_at).total_seconds() / 60))
+    if target >= state.uplift:
+        uplift = min(target, state.uplift + params.rise_k_per_min * minutes)
+    else:
         uplift = max(target, state.uplift - params.decay_k_per_min * minutes)
     return WarmupBoostState(min(uplift, max(0.0, params.boost_max - base)), now)

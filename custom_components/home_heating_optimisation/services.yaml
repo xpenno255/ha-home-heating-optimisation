@@ -47,6 +47,7 @@ get_journal:
             - dhw_cutoff
             - optimum
             - warmup_boost
+            - preheat
     room_id:
       selector:
         text:

@@ -55,6 +55,29 @@ class OptimumStartSensor(OptimumSensor):
         return report
 
 
+class PreheatSensor(OptimumSensor):
+    """Pre-heat mode, with each room's plan and last result as attributes."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["off", "shadow", "active"]
+    _attr_translation_key = "preheat"
+
+    def __init__(self, optimum):
+        super().__init__(optimum)
+        entry_id = optimum.entry.entry_id
+        self.entity_id = f"sensor.{DOMAIN}_preheat"
+        self._attr_unique_id = f"{entry_id}:system:preheat"
+        self._attr_device_info = _device(entry_id)
+
+    @property
+    def native_value(self):
+        return self.optimum.preheat_mode
+
+    @property
+    def extra_state_attributes(self):
+        return self.optimum.preheat_report()
+
+
 class OptimumRoomSensor(OptimumSensor):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 

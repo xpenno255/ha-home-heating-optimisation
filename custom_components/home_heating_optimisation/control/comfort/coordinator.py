@@ -227,6 +227,13 @@ class OTCoordinatorData:
     offset_asymmetry: float | None = None
     offset_final: float | None = None
     air_setpoint: float | None = None
+    # Air target for the next upward switchpoint's setpoint (None unless one is ahead); what a
+    # pre-heat commands. `air_setpoint` stays the target for the period now in force.
+    preheat_setpoint: float | None = None
+    # True while HHO's own pre-heat is the room's decision, so the boiler side judges the
+    # room against `preheat_setpoint` rather than `air_setpoint`.
+    preheating: bool = False
+    preheat_status: str = ""
     would_write: float | None = None
     capped: bool = False
     solar_k: float = 0.0
@@ -264,6 +271,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         state_reader=None,
         write_guard=None,
         journal=None,
+        preheat_hint=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._entry = entry
@@ -277,6 +285,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         )
         self._state_reader = state_reader or hass.states.get
         self._write_guard = write_guard or (lambda: False)
+        # ``(now) -> (mode, plan)``: the planner's pre-heat for this room (see Optimum.preheat).
+        self._preheat_hint = preheat_hint or (lambda _now: ("off", None))
         self.write_status = "not_attempted"
         # Command/readback state is intentionally not persisted.  Policy memory
         # remains persistent exactly as before, but it is not an acknowledgement
@@ -949,6 +959,43 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
     # Action
     # ------------------------------------------------------------------
 
+    def _preheat_target(self, d, zone, geometry, env, fallbacks):
+        """Air target for the upward switchpoint ahead, same model as the target in force."""
+        if (
+            geometry is None
+            or env is None
+            or not geometry.surfaces
+            or zone.schedule_setpoint is None
+            or zone.next_switchpoint_setpoint is None
+            or zone.next_switchpoint_at is None
+            or zone.next_switchpoint_setpoint <= zone.schedule_setpoint
+        ):
+            return None
+        try:
+            target = zone.next_switchpoint_setpoint + d.occupancy_offset
+            air = required_air_temperature(
+                geometry.surfaces, env, target, self._model_params(geometry)
+            ).air_setpoint
+        except ValueError as exc:
+            fallbacks.append(f"pre-heat model: {exc}")
+            return None
+        return air if air is not None and math.isfinite(air) else None
+
+    def _preheat_now(self, now, zone, goal):
+        """``(mode, True)`` when the planner says this room should be warming right now."""
+        if goal is None or zone.next_switchpoint_at is None or zone.next_switchpoint_at <= now:
+            return "off", False
+        try:
+            mode, plan = self._preheat_hint(now)
+        except Exception:  # noqa: BLE001 - the planner must never break the room cycle
+            _LOGGER.debug("OT %s: pre-heat hint failed", self.room_name, exc_info=True)
+            return "off", False
+        if mode not in ("shadow", "active") or plan is None or not plan.started:
+            return "off", False
+        if abs((plan.switch_at - zone.next_switchpoint_at).total_seconds()) > 600:
+            return "off", False  # a plan for some other switchpoint
+        return mode, True
+
     def _command_target(self, decision: Decision, zone: ZoneState) -> float | None:
         """The thermostat setpoint expected after a command.
 
@@ -1528,6 +1575,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                 except ValueError:
                     pass
 
+        preheat_goal = self._preheat_target(d, zone, geometry, env, fallbacks)
+        d.preheat_setpoint = preheat_goal
         d.flow_temp_used = self._flow_temperature()
         if geometry is not None and d.flow_temp_used is not None and d.air_temp is not None:
             d.radiator_output_w = round(
@@ -1536,6 +1585,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
         # --- policy -----------------------------------------------------------
         window_ids = geometry.window_contacts if geometry else []
+        preheat_mode, preheat_now = self._preheat_now(now, zone, preheat_goal)
         inputs = PolicyInputs(
             now=now,
             room_enabled=self._enabled,
@@ -1549,6 +1599,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             any_window_open=self._any_on(window_ids),
             command_reverted=self._command_reverted,
             retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
+            preheat_setpoint=preheat_goal if preheat_now and preheat_mode == "active" else None,
             params=self._policy_params(),
         )
         restored = self._restore_complete and hub_data is not None and hub_data.restore_complete
@@ -1575,6 +1626,12 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.would_write = (
             decision.would_write if decision.state is State.SHADOW else decision.setpoint
         )
+        if preheat_now and preheat_mode == "active":
+            d.preheating = decision.state is State.PREHEAT
+            d.preheat_status = "pre-heating" if d.preheating else "blocked"
+        elif preheat_now and preheat_mode == "shadow":
+            d.preheat_status = "shadow"
+            d.reason += f"; pre-heat (shadow) would command {preheat_goal:.1f}"
         if self._journal_changed("decision", (d.state, d.action, d.reason, d.would_write)):
             self._journal(
                 "decision",

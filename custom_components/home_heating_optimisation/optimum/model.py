@@ -30,6 +30,10 @@ MEAN_WATER_DROP = 5.0
 # Event supply is a mean over a pulsing burner, so the pure radiator law overstates a boost;
 # never claim more than twice the pace.
 BOOST_FACTOR_BOUNDS = (0.5, 1.0)
+# A planned warm-up at a gentler flow than the events were learned at can take longer than
+# the learned pace (factor above 1) or, at a hotter flow, less; the same pulsing-burner
+# caution bounds it either way.
+PLAN_FACTOR_BOUNDS = (0.5, 2.0)
 MIN_SUPPLY_MARGIN = 5.0
 
 
@@ -74,6 +78,10 @@ class StartPrediction:
     boost_late_minutes: int | None
     boost_gain_minutes: int | None
     outdoor_used: bool
+    # Pace as learned (outdoor-adjusted, before any plan-flow scaling), and the plan-flow
+    # factor that was applied to it (1 when the plan flow is not used or the supply unknown).
+    base_minutes_per_k: float | None = None
+    plan_factor: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -218,29 +226,54 @@ def pace_at(model, target, outdoor):
     return max(MIN_PACE, model.outdoor_a + model.outdoor_b * (target - outdoor))
 
 
-def boost_factor(supply, boost_flow, t_now, target):
-    """Heating-time factor for a hotter flow: ratio of radiator drives, power law 1.3."""
+def _drive_ratio(supply, flow, t_now, target):
+    """Radiator drive at ``supply`` over drive at ``flow`` (power law 1.3), None if unusable."""
     if supply is None:
         return None
     ta = (t_now + target) / 2
-    if supply <= ta + MIN_SUPPLY_MARGIN or boost_flow - MEAN_WATER_DROP - ta <= 0:
+    if supply <= ta + MIN_SUPPLY_MARGIN or flow - MEAN_WATER_DROP - ta <= 0:
         return None
-    ratio = (supply - MEAN_WATER_DROP - ta) / (boost_flow - MEAN_WATER_DROP - ta)
+    return ((supply - MEAN_WATER_DROP - ta) / (flow - MEAN_WATER_DROP - ta)) ** RADIATOR_EXPONENT
+
+
+def boost_factor(supply, boost_flow, t_now, target):
+    """Heating-time factor for a hotter flow: ratio of radiator drives, power law 1.3."""
+    ratio = _drive_ratio(supply, boost_flow, t_now, target)
+    if ratio is None:
+        return None
     low, high = BOOST_FACTOR_BOUNDS
-    return min(high, max(low, ratio**RADIATOR_EXPONENT))
+    return min(high, max(low, ratio))
+
+
+def plan_factor(supply, plan_flow, t_now, target):
+    """Pace factor for planning at ``plan_flow`` instead of the flow the pace was learned at.
+
+    Above 1 when the plan flow is gentler than the room's median supply. 1 when either
+    figure is missing: an unknown supply must not change the plan.
+    """
+    ratio = _drive_ratio(supply, plan_flow, t_now, target)
+    if ratio is None:
+        return 1.0
+    low, high = PLAN_FACTOR_BOUNDS
+    return min(high, max(low, ratio))
 
 
 # -- start and stop -------------------------------------------------------
 
 
-def predict_start(now, switch_at, target, t_now, model, outdoor_at, boost_flow, params):
+def predict_start(
+    now, switch_at, target, t_now, model, outdoor_at, boost_flow, params, plan_flow=None
+):
     """Latest start that arrives by the switchpoint, at the room's own observed pace.
 
     ``outdoor_at(datetime) -> °C`` (or None) feeds the outdoor term when the model has one;
-    its mean over the predicted warm-up window is found by two fixed-point passes.
+    its mean over the predicted warm-up window is found by two fixed-point passes. With
+    ``plan_flow`` the pace (not the dead time) is scaled to that flow by the radiator law,
+    so the start allows for a gentle warm-up rather than the flow the events happened at.
     """
     need = climb(target, t_now, params.tolerance)
-    pace_now = model.minutes_per_k
+    scale = plan_factor(model.median_supply, plan_flow, t_now, target) if plan_flow else 1.0
+    pace_now = model.minutes_per_k * scale
     used = False
     if model.outdoor_model and outdoor_at is not None and need > 0:
         for _ in range(2):
@@ -249,12 +282,14 @@ def predict_start(now, switch_at, target, t_now, model, outdoor_at, boost_flow, 
             samples = [s for s in samples if s is not None]
             if not samples:
                 break
-            pace_now = pace_at(model, target, sum(samples) / len(samples))
+            pace_now = pace_at(model, target, sum(samples) / len(samples)) * scale
             used = True
     heating = model.delay_minutes + pace_now * need if need > 0 else 0.0
     lead = math.ceil(heating + params.margin_minutes) if heating > 0 else 0
     total = min(params.max_lead_minutes, lead)
-    factor = boost_factor(model.median_supply, boost_flow, t_now, target) if heating > 0 else None
+    # The boost what-if is measured from the flow the pace now stands for.
+    reference = plan_flow if plan_flow and scale != 1.0 else model.median_supply
+    factor = boost_factor(reference, boost_flow, t_now, target) if heating > 0 else None
     boost_lead = boost_late = boost_gain = None
     if factor is not None:
         boost_total = math.ceil(
@@ -274,6 +309,8 @@ def predict_start(now, switch_at, target, t_now, model, outdoor_at, boost_flow, 
         boost_late_minutes=boost_late,
         boost_gain_minutes=boost_gain,
         outdoor_used=used,
+        base_minutes_per_k=round(pace_now / scale, 2),
+        plan_factor=round(scale, 3),
     )
 
 
