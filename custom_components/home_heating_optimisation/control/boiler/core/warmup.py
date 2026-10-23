@@ -22,6 +22,8 @@ FULLNESS_MIN_SPAN_K = 3.0
 # Time constant of the fullness filter, and the longest step it integrates over (so a
 # burner that has been off does not make the first firing reading jump the filter).
 FULLNESS_TAU_S = 180.0
+# A held reading older than this (no firing) is dropped.
+FULLNESS_HOLD_S = 15 * 60
 FULLNESS_MAX_STEP_S = 60.0
 # Kelvin behind the planned trajectory that asks for the full uplift.
 NEED_FULL_K = 0.5
@@ -184,7 +186,15 @@ def fullness(flow, ret, room):
 
 
 def fullness_step(state: FullnessState, raw, firing: bool, now: datetime) -> FullnessState:
-    """Exponential filter (about 3 minutes), updated only while firing; held otherwise."""
+    """Exponential filter (about 3 minutes), updated only while firing; held otherwise.
+
+    A held value goes stale after FULLNESS_HOLD_S without a firing update and is dropped:
+    the radiators cool while the burner is off. Live 23 Oct: a 20-second burn just after the
+    hot-water charge read 0.61 from the hot system and was held for an hour, capping the
+    planned uplift at +2.7 K through the warm-up.
+    """
+    if state.updated_at is not None and (now - state.updated_at).total_seconds() > FULLNESS_HOLD_S:
+        state = FullnessState()
     if not firing or raw is None:
         return state
     if state.value is None or state.updated_at is None:
