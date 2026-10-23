@@ -2,6 +2,10 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.12.1 - radiator fullness reading expires when the burner stays off
+
+- A held radiator-fullness reading is dropped after 15 minutes without firing. On 23 Oct a 20-second burn just after the hot-water charge read 0.61 from the hot system and was held for an hour, which would have capped the planned pre-heat uplift at +2.7 K through the warm-up.
+
 ## 0.12.0 - planned morning pre-heat (plan, start the rooms, flow during the warm-up)
 
 - New option **Planned morning pre-heat** (`preheat` section, mode `off` / `shadow` / `active`, default off; saved on its own and kept when the mapping is saved; never resets a controller). Needs the optimum start predictor; `active` is refused without it.

@@ -50,9 +50,15 @@ def test_filter_moves_only_while_firing_and_holds_otherwise():
     assert 0.3 < later.value < 0.9
     # three-minute time constant: a minute moves it about a quarter of the way
     assert later.value == pytest.approx(0.3 + 0.6 * 60 / 240)
-    # a long pause does not make the first firing reading jump the filter
-    after_pause = fullness_step(later, 0.9, True, T0 + timedelta(hours=1))
+    # a short pause does not make the first firing reading jump the filter
+    after_pause = fullness_step(later, 0.9, True, T0 + timedelta(minutes=10))
     assert after_pause.value < 0.9
+    # a reading held more than 15 minutes without firing is dropped (23 Oct: a 20 s burn after
+    # the hot-water charge held 0.61 for an hour)
+    stale = fullness_step(later, None, False, T0 + timedelta(minutes=17))
+    assert stale == FullnessState()
+    fresh = fullness_step(later, 0.25, True, T0 + timedelta(hours=1))
+    assert fresh.value == 0.25
 
 
 def test_cap_is_linear_between_low_and_high_and_full_when_unknown():
