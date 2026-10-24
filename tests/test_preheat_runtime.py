@@ -1,5 +1,6 @@
 """Planned pre-heat in the runtime: shadow records, active writes, hot water holds it back."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -189,4 +190,73 @@ async def test_pre_heat_off_changes_nothing(hass, controlled, freezer):  # noqa:
     assert heating.optimum.plans == {} and heating.optimum.preheat("study") is None
     assert hass.states.get(SENSOR).state == "off"
     assert controls.preheat_rooms() == [] and writes(calls) == []
+    heating.analytics = None
+
+
+async def hold_for_hot_water(hass, controls, optimum, plan, freezer):
+    """A charge running when the planned start arrives; returns the minute it was first seen."""
+    freezer.move_to(plan.start_at + timedelta(minutes=1))
+    hass.states.async_set("sensor.hw", 100)
+    await refresh(hass, controls)
+    await optimum.step()
+    assert controls.boiler.data.dhw_active and not optimum.preheat("study").started
+    return plan.start_at + timedelta(minutes=1)
+
+
+async def test_charge_running_past_its_expected_end_only_delays_by_the_grace(
+    hass,
+    controlled,
+    freezer,  # noqa: F811
+):
+    heating, controls, calls = await ready(hass, controlled, freezer, "shadow")
+    optimum = heating.optimum
+    seen = await hold_for_hot_water(hass, controls, optimum, optimum.plans["study"], freezer)
+    plan = replace(optimum.plans["study"], latest_start=SWITCH)  # plenty of slack
+    optimum.plans["study"] = plan
+    # default expected charge 40 minutes, plus a 10 minute grace
+    freezer.move_to(seen + timedelta(minutes=49))
+    assert not optimum.preheat("study").started
+    freezer.move_to(seen + timedelta(minutes=51))
+    started = optimum.preheat("study")
+    assert started.started and controls.boiler.data.dhw_active  # DHW still on
+    assert started.start_reason == "dhw_grace"
+    assert started.dhw_wait_minutes == 52.0
+    assert started.late_risk_minutes >= 0
+    events = [
+        e for e in heating.journal.events(kinds=["preheat"]) if e["data"]["event"] == "started"
+    ]
+    assert events[-1]["data"]["start_reason"] == "dhw_grace"
+    heating.analytics = None
+
+
+async def test_a_room_that_would_be_late_starts_at_its_latest_start(hass, controlled, freezer):  # noqa: F811
+    heating, controls, calls = await ready(hass, controlled, freezer, "shadow")
+    optimum = heating.optimum
+    await hold_for_hot_water(hass, controls, optimum, optimum.plans["study"], freezer)
+    plan = replace(
+        optimum.plans["study"], latest_start=optimum.plans["study"].start_at + timedelta(minutes=8)
+    )
+    optimum.plans["study"] = plan
+    freezer.move_to(plan.start_at + timedelta(minutes=7))
+    assert not optimum.preheat("study").started
+    freezer.move_to(plan.start_at + timedelta(minutes=9))
+    started = optimum.preheat("study")
+    assert started.started and started.start_reason == "latest_start"
+    assert started.dhw_wait_minutes == 9.0
+    heating.analytics = None
+
+
+async def test_short_charge_is_waited_out_then_the_pre_heat_starts(hass, controlled, freezer):  # noqa: F811
+    heating, controls, calls = await ready(hass, controlled, freezer, "shadow")
+    optimum = heating.optimum
+    seen = await hold_for_hot_water(hass, controls, optimum, optimum.plans["study"], freezer)
+    plan = replace(optimum.plans["study"], latest_start=SWITCH)
+    optimum.plans["study"] = plan
+    freezer.move_to(seen + timedelta(minutes=15))
+    hass.states.async_set("sensor.hw", 0)
+    await refresh(hass, controls)
+    assert not controls.boiler.data.dhw_active
+    started = optimum.preheat("study")
+    assert started.started and started.start_reason == "planned"
+    assert started.dhw_wait_minutes == 16.0
     heating.analytics = None

@@ -48,6 +48,7 @@ get_journal:
             - optimum
             - warmup_boost
             - preheat
+            - dhw_anticycle
     room_id:
       selector:
         text:

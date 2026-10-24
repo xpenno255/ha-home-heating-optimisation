@@ -39,6 +39,7 @@ from .preheat import (
     PreheatPlan,
     avoid_charge,
     charge_length,
+    dhw_wait_deadline,
     next_dhw_on,
 )
 from .preheat_policy import preheat_config
@@ -606,6 +607,8 @@ class Optimum:
             planned_minutes=max(0, round((switch_at - start_at).total_seconds() / 60)),
             late_risk_minutes=late,
             plan_factor=pred.plan_factor,
+            latest_start=switch_at
+            - timedelta(minutes=pred.boost_lead_minutes or pred.lead_minutes),
             planned_journaled=same.planned_journaled if same else False,
         )
         if not plan.planned_journaled:
@@ -674,8 +677,17 @@ class Optimum:
         plan = self.plans.get(room_id)
         if plan is None or now >= plan.switch_at:
             return None
-        if not plan.started and now >= plan.start_at and not self._dhw_blocking():
-            plan = plan.start(now, self._read(room_id)[0])
+        if not plan.started and now >= plan.start_at:
+            reason = "planned"
+            if self._dhw_blocking():
+                # A charge is running: wait for it, but not past the grace after its expected
+                # end, nor past the latest start that still reaches the goal at boost flow.
+                since = self._dhw_since or now
+                end = since + timedelta(minutes=charge_length(self.dhw_charges))
+                deadline, reason = dhw_wait_deadline(plan, end)
+                if now < deadline:
+                    return plan
+            plan = plan.start(now, self._read(room_id)[0], reason, self.cfg["margin_minutes"])
             self.plans[room_id] = plan
             self._dirty = True
             self._preheat_event("started", room_id, self._plan_data(plan))
@@ -687,6 +699,8 @@ class Optimum:
             "switchpoint": _iso(plan.switch_at),
             "start_at": _iso(plan.start_at),
             "started_at": _iso(plan.started_at),
+            "start_reason": plan.start_reason,
+            "dhw_wait_minutes": plan.dhw_wait_minutes,
             "schedule_target": plan.schedule_target,
             "goal": plan.goal,
             "start_temperature": plan.start_temp,
@@ -734,6 +748,7 @@ class Optimum:
                 "warm_by": _iso(plan.switch_at) if plan else None,
                 "goal": plan.goal if plan else None,
                 "started": plan.started if plan else False,
+                "dhw_wait_minutes": plan.dhw_wait_minutes if plan else None,
                 "on_plan_k": view.get("on_plan_k") if plan else None,
                 "late_risk_minutes": plan.late_risk_minutes if plan else None,
                 "expected_temperature": round(plan.expected_at(now), 2)
@@ -849,6 +864,7 @@ class Optimum:
                 planned_minutes=plan.planned_minutes,
                 late_risk_minutes=plan.late_risk_minutes,
                 preheat_started=plan.started,
+                dhw_wait_minutes=plan.dhw_wait_minutes,
                 on_plan_k=view.get("on_plan_k"),
             )
         if stop:

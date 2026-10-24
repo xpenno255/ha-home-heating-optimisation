@@ -19,6 +19,12 @@ from .control.boiler.core.efficiency import (
     PROFILE_BG430I_NATURAL_GAS,
     PROFILE_DISABLED,
 )
+from .control.boiler.dhw_policy import DEFAULTS as DHW_BOILER_DEFAULTS
+from .control.boiler.dhw_policy import LIMITS as DHW_BOILER_LIMITS
+from .control.boiler.dhw_policy import SECTION as DHW_BOILER_SECTION
+from .control.boiler.dhw_policy import SUGGESTED_ENTITY as DHW_BOILER_SUGGESTED
+from .control.boiler.dhw_policy import dhw_boiler_config
+from .control.boiler.dhw_policy import validation_error as dhw_boiler_validation_error
 from .control.boiler.warmup_policy import DEFAULTS as WARMUP_DEFAULTS
 from .control.boiler.warmup_policy import LIMITS as WARMUP_LIMITS
 from .control.boiler.warmup_policy import SECTION as WARMUP_SECTION
@@ -159,6 +165,7 @@ KEPT_SECTIONS = (
     OPTIMUM_SECTION,
     WARMUP_SECTION,
     PREHEAT_SECTION,
+    DHW_BOILER_SECTION,
 )
 
 
@@ -389,6 +396,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 "optimum",
                 "warmup_boost",
                 "preheat",
+                "dhw_boiler",
             ],
         )
 
@@ -999,6 +1007,51 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             )
         return self.async_show_form(
             step_id="warmup_boost", errors=errors, data_schema=vol.Schema(schema)
+        )
+
+    async def async_step_dhw_boiler(self, user_input=None):
+        """Boiler aids during a hot water charge; saved apart from the control config."""
+        self.current = effective_config(self.config_entry)
+        old = dhw_boiler_config(self.current)
+        errors = {}
+        if user_input is not None:
+            values = {**DHW_BOILER_DEFAULTS, **user_input}
+            error = dhw_boiler_validation_error(values)
+            if error is None and self.invalid_sources([values.get("anticycle_entity")]):
+                error = "invalid_source"
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_create_entry(
+                    title=NAME,
+                    data={
+                        **self.current,
+                        DHW_BOILER_SECTION: dhw_boiler_config({DHW_BOILER_SECTION: values}),
+                    },
+                )
+        suggested = {
+            "anticycle_entity": old["anticycle_entity"]
+            or (DHW_BOILER_SUGGESTED if self.hass.states.get(DHW_BOILER_SUGGESTED) else None),
+            "hot_flow": old["hot_flow"],
+        }
+        low, high = DHW_BOILER_LIMITS["anticycle_minutes"]
+        flow_low, flow_high = DHW_BOILER_LIMITS["hot_flow"]
+        threshold_low, threshold_high = DHW_BOILER_LIMITS["hot_threshold"]
+        schema = {
+            vol.Optional("anticycle_enabled", default=old["anticycle_enabled"]): bool,
+            optional("anticycle_entity", suggested): entity_selector(("number",)),
+            vol.Required("anticycle_minutes", default=old["anticycle_minutes"]): vol.All(
+                vol.Coerce(int), vol.Range(min=low, max=high)
+            ),
+            optional("hot_flow", suggested): vol.All(
+                vol.Coerce(float), vol.Range(min=flow_low, max=flow_high)
+            ),
+            vol.Required("hot_threshold", default=old["hot_threshold"]): vol.All(
+                vol.Coerce(float), vol.Range(min=threshold_low, max=threshold_high)
+            ),
+        }
+        return self.async_show_form(
+            step_id="dhw_boiler", errors=errors, data_schema=vol.Schema(schema)
         )
 
     async def async_step_preheat(self, user_input=None):

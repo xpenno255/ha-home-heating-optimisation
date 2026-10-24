@@ -41,6 +41,7 @@ KINDS = (
     "optimum",
     "warmup_boost",
     "preheat",
+    "dhw_anticycle",
 )
 ORIGINS = ("controller", "user", "service", "source", "advisor", "unknown")
 UNKNOWN = "unknown"
