@@ -53,6 +53,11 @@ class PreheatPlan:
     planned_journaled: bool = False
     arrived_at: datetime | None = None
     peak_temp: float | None = None
+    # The latest start that still arrives by the switchpoint at the boost flow (the most a
+    # hot water charge may delay it), and what the start actually waited and why.
+    latest_start: datetime | None = None
+    dhw_wait_minutes: float = 0.0
+    start_reason: str = ""
 
     @property
     def begin(self):
@@ -93,6 +98,9 @@ class PreheatPlan:
             "planned_journaled": self.planned_journaled,
             "arrived_ts": self.arrived_at.timestamp() if self.arrived_at else None,
             "peak_temp": self.peak_temp,
+            "latest_ts": self.latest_start.timestamp() if self.latest_start else None,
+            "dhw_wait_minutes": self.dhw_wait_minutes,
+            "start_reason": self.start_reason,
         }
 
     @classmethod
@@ -115,15 +123,29 @@ class PreheatPlan:
             planned_journaled=bool(raw.get("planned_journaled")),
             arrived_at=_at(raw.get("arrived_ts")),
             peak_temp=raw.get("peak_temp"),
+            latest_start=_at(raw.get("latest_ts")),
+            dhw_wait_minutes=float(raw.get("dhw_wait_minutes") or 0.0),
+            start_reason=str(raw.get("start_reason") or ""),
         )
 
-    def start(self, now, temp):
-        """The latched copy: the plan from the moment the pre-heat began."""
+    def start(self, now, temp, reason="planned", margin_minutes=0):
+        """The latched copy: the plan from the moment the pre-heat began.
+
+        Starting after the planned start (held back by hot water) records the wait, and the
+        late risk is raised to what arrival from now would be.
+        """
+        began = max(now, self.start_at)
+        wait = round((began - self.start_at).total_seconds() / 60, 1)
+        heating = self.delay_minutes + self.climb_minutes + margin_minutes
+        late = math.ceil((began + timedelta(minutes=heating) - self.switch_at).total_seconds() / 60)
         return replace(
             self,
             started=True,
-            started_at=max(now, self.start_at),
+            started_at=began,
             start_temp=self.start_temp if temp is None else temp,
+            dhw_wait_minutes=wait,
+            start_reason=reason,
+            late_risk_minutes=max(self.late_risk_minutes, late),
         )
 
 
@@ -146,6 +168,20 @@ class PreheatRoom:
     # radiators will carry it the rest of the way, so it asks for no more.
     done: bool = False
     coast_up_k: float = 0.3
+
+
+def dhw_wait_deadline(plan, charge_end, grace_minutes=10):
+    """When a pre-heat held back by a hot water charge must start anyway.
+
+    The earlier of the expected end of the charge plus a grace, and the latest start that
+    still arrives by the switchpoint at the boost flow. Also why: ``dhw_grace`` or
+    ``latest_start``. Past it the system heats the cylinder and the radiators together.
+    """
+    grace = charge_end + timedelta(minutes=grace_minutes)
+    latest = plan.latest_start or plan.start_at
+    if latest <= grace:
+        return max(latest, plan.start_at), "latest_start"
+    return grace, "dhw_grace"
 
 
 # -- hot water --------------------------------------------------------------

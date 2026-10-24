@@ -15,6 +15,7 @@ from ..dhw.policy import dhw_config, usable
 from ..optimum.preheat import PreheatRoom
 from ..optimum.preheat_policy import preheat_config
 from .boiler.coordinator import BFCCoordinator
+from .boiler.dhw_policy import dhw_boiler_config
 from .boiler.hub import BoilerFlowHub
 from .boiler.warmup_policy import warmup_config
 from .comfort.coordinator import OTCoordinator
@@ -147,6 +148,10 @@ class Controls:
             target_pending=lambda: bool(getattr(self.heating.dhw, "uncertain", False)),
             warmup_config=lambda: warmup_config(self.heating.config),
             warmup_rooms=self.warmup_rooms,
+            dhw_boiler_config=lambda: dhw_boiler_config(self.heating.config),
+            dhw_elevated=lambda: (
+                getattr(getattr(self.heating, "dhw", None), "status", None) == "elevated"
+            ),
             preheat_config=lambda: preheat_config(self.heating.config),
             preheat_rooms=self.preheat_rooms,
         )

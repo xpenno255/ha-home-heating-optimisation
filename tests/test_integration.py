@@ -126,6 +126,7 @@ async def test_saving_the_mapping_keeps_the_other_sections(hass, config, sources
     config["optimum"] = {"enabled": True, "forecast_entity": "weather.home"}
     config["warmup_boost"] = {"mode": "active"}
     config["preheat"] = {"mode": "shadow", "plan_flow": 50.0}
+    config["dhw_boiler"] = {"anticycle_enabled": True, "anticycle_entity": "number.burn"}
     entry = await setup(hass, config)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
@@ -139,7 +140,14 @@ async def test_saving_the_mapping_keeps_the_other_sections(hass, config, sources
     assert result["type"] == "create_entry"
     await hass.async_block_till_done()
     saved = effective_config(entry)
-    for section in ("dhw_schedule", "dhw_cutoff", "optimum", "warmup_boost", "preheat"):
+    for section in (
+        "dhw_schedule",
+        "dhw_cutoff",
+        "optimum",
+        "warmup_boost",
+        "preheat",
+        "dhw_boiler",
+    ):
         assert saved[section] == config[section], section
 
 

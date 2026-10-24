@@ -88,7 +88,8 @@
           "dhw_cutoff": "DHW measured-temperature cutoff",
           "optimum": "Optimum start predictor (shadow)",
           "warmup_boost": "Warm-up flow boost",
-          "preheat": "Planned morning pre-heat"
+          "preheat": "Planned morning pre-heat",
+          "dhw_boiler": "Boiler during hot water charges"
         }
       },
       "room": {
@@ -365,6 +366,20 @@
           "forecast_entity": "An hourly outdoor forecast improves predictions on mornings that are warming or cooling. Without it the current outdoor temperature is used."
         }
       },
+      "dhw_boiler": {
+        "title": "Boiler during hot water charges",
+        "description": "Two optional aids, both off until set. The anti-cycle override lowers the boiler's own minimum burn period while a hot water charge runs and puts the normal value back afterwards, so a long 60 \u00b0C session is not broken up by 15-minute waits. The hot-cylinder flow raises the DHW flow target once the cylinder is warm or a raised DHW session is running; it is still limited by the DHW maximum and the boiler's own limit. Check your coil rating before using a high flow. Does not reset any controller.",
+        "data": {
+          "anticycle_enabled": "Lower the minimum burn period during hot water charges",
+          "anticycle_entity": "Minimum burn period entity",
+          "anticycle_minutes": "Minimum burn period during a charge (minutes, 0-15)",
+          "hot_flow": "Hot-cylinder DHW flow (\u00b0C, 70-85, leave empty to turn off)",
+          "hot_threshold": "Cylinder temperature that counts as hot (\u00b0C)"
+        },
+        "data_description": {
+          "anticycle_entity": "A number entity in minutes, for example number.boiler_burnminperiod from EMS-ESP. Its normal value is remembered and restored, even after a restart."
+        }
+      },
       "preheat": {
         "title": "Planned morning pre-heat",
         "description": "Plans each room's warm-up so a schedule time means the room is warm by then, using the optimum start predictor (which must be enabled). Each room starts at its own time, planned at a gentle flow, and hot water charges are kept clear. Shadow plans and records without changing anything; active raises the room to its next target at the planned start with a normal temporary override. If HHO stops, the override ends within an hour and Evohome switches at the schedule time, so a room is late, never cold. Does not reset any controller.",
@@ -427,6 +442,8 @@
       "dhw_params_unavailable": "The water heater does not report its setpoint, overrun and differential. Check RAMSES before enabling.",
       "dhw_cutoff_invalid_margin": "Enter a margin between 0.5 and 10 \u00b0C.",
       "optimum_invalid_value": "A setting is outside its allowed range.",
+      "dhw_boiler_invalid": "A setting is outside its allowed range.",
+      "dhw_boiler_needs_entity": "Choose the minimum burn period entity to turn on the override.",
       "preheat_invalid": "Check the values: each must be in range and the upper fullness must be above the lower one.",
       "preheat_needs_optimum": "Enable the optimum start predictor before using active pre-heat.",
       "warmup_boost_invalid": "Check the values: the full share must be above the start share, and each must be in range."
