@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.12.3 - planned pre-heat starts before a room's operating window opens
+
+- A due pre-heat now runs even when the room is outside its operating window. Without a due pre-heat the window still keeps HHO's hands off, as before.
+- Why: on 25 Oct, the first live pre-heat morning, the rooms' windows opened at 06:30 (Kitchen 06:00). The Living Room's 05:45 and the Hall's 06:22 planned starts waited until 06:30 and both arrived late; the Kitchen, which started on plan at 06:05, was about 20 minutes late.
+
 ## 0.12.2 - hot water anti-cycle override, pre-heat no longer waits for hot water indefinitely
 
 - New option **Boiler during hot water charges** (`dhw_boiler` section, saved on its own, kept when the mapping is saved, never resets a controller). Off until set.

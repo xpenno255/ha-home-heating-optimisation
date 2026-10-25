@@ -305,7 +305,14 @@ def decide(inp: PolicyInputs) -> Decision:
             else ("hub disabled" if not inp.hub_enabled else "holiday mode")
         )
         return _release_or_none(State.OFF, why, inp)
-    if not inp.within_time_window:
+    # A due pre-heat runs before the operating window opens: that is its whole point
+    # (live 25 Oct: windows open at 06:30, so 05:45 and 06:22 starts waited until 06:30).
+    preheat_due = (
+        inp.preheat_setpoint is not None
+        and inp.zone.next_switchpoint_at is not None
+        and inp.zone.next_switchpoint_at > inp.now
+    )
+    if not inp.within_time_window and not preheat_due:
         return _release_or_none(State.OUTSIDE_WINDOW, "outside operating window", inp)
 
     # 2. Zone deliberately off (parked at the evohome floor): hands off, and never "manual".

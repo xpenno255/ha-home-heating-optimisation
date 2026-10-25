@@ -223,6 +223,19 @@ def test_preheat_needs_the_switchpoint_ahead():
     assert decide(inputs(zone=zone)).state is not State.PREHEAT
 
 
+def test_preheat_runs_before_the_operating_window_opens():
+    # Live 25 Oct: windows open at 06:30, so the 05:45 and 06:22 starts waited until 06:30.
+    d = decide(inputs(within_time_window=False))
+    assert d.state is State.PREHEAT and d.action is Action.WRITE and d.setpoint == 21.3
+    # Without a due pre-heat the window still keeps HHO's hands off.
+    assert decide(inputs(within_time_window=False, preheat_setpoint=None)).state is (
+        State.OUTSIDE_WINDOW
+    )
+    passed = ZoneState(16.0, 21.0, next_switchpoint_at=T0 - timedelta(minutes=1))
+    late = decide(inputs(within_time_window=False, zone=passed))
+    assert late.state is State.OUTSIDE_WINDOW
+
+
 def test_manual_hold_and_open_window_beat_preheat():
     hold = OverrideMemory(
         manual_detected_at=T0 - timedelta(minutes=5),
