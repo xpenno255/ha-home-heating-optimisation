@@ -14,12 +14,14 @@ from custom_components.home_heating_optimisation.control.comfort.core.model impo
     clear_sky_ghi,
     effective_u,
     irradiance_on_surface,
+    lagged_outdoor,
     operative_temperature,
     other_side_temperature,
     radiator_output_w,
     required_air_temperature,
     round_to_step,
     running_mean_outdoor,
+    sky_depression_k,
     solar_components,
     steady_state_mrt,
 )
@@ -40,7 +42,8 @@ def living_room_surfaces() -> list[Surface]:
 
 
 FULL_TRUST = ModelParams(trust_k=1.0, cap_up=5.0, cap_down=5.0, step=0.01)
-NIGHT = dict(sun_elevation_deg=-10.0, cloud_fraction=1.0)
+# No cloud data, so no night-sky term: these tests check the enclosure physics alone.
+NIGHT = dict(sun_elevation_deg=-10.0, cloud_fraction=None)
 
 
 @pytest.mark.parametrize("t_out", [-5.0, 0.0, 10.0])
@@ -315,4 +318,70 @@ def test_splitting_a_surface_does_not_change_energy_or_comfort():
     env = Environment(t_out=0, ghi_wm2=100, sun_elevation_deg=30)
     assert required_air_temperature(split, env, 20).t_air_required == pytest.approx(
         required_air_temperature(surfaces + [wall], env, 20).t_air_required
+    )
+
+
+def test_opaque_walls_use_lagged_outdoor_and_glass_does_not():
+    wall = Surface("wall", 10.0, 1.7, Boundary.OUTSIDE, bearing_deg=270)
+    glass = Surface("glass", 5.0, 1.4, Boundary.OUTSIDE, bearing_deg=0, glazed=True)
+    roof = Surface("roof", 8.0, 0.6, Boundary.ROOF, tilt_deg=0.0)
+    garage = Surface("garage", 6.0, 1.5, Boundary.UNHEATED_SPACE)
+    p = ModelParams()
+    env = Environment(t_out=15.0, t_out_opaque=8.0, **NIGHT)
+    assert other_side_temperature(wall, env, 20.0, p) == 8.0
+    assert other_side_temperature(glass, env, 20.0, p) == 15.0
+    assert other_side_temperature(roof, env, 20.0, p) == 15.0
+    assert other_side_temperature(garage, env, 20.0, p) == pytest.approx(0.5 * 20.0 + 0.5 * 8.0)
+    # Without a lagged value everything follows the live outdoor temperature.
+    assert other_side_temperature(wall, replace(env, t_out_opaque=None), 20.0, p) == 15.0
+
+
+def test_mild_front_with_cold_walls_needs_warmer_air():
+    surfaces = living_room_surfaces()
+    instant = required_air_temperature(surfaces, Environment(t_out=15.0, **NIGHT), 19.0, FULL_TRUST)
+    lagged = required_air_temperature(
+        surfaces, Environment(t_out=15.0, t_out_opaque=8.0, **NIGHT), 19.0, FULL_TRUST
+    )
+    settled = required_air_temperature(surfaces, Environment(t_out=8.0, **NIGHT), 19.0, FULL_TRUST)
+    assert instant.offset_physical < lagged.offset_physical < settled.offset_physical
+
+
+def test_lagged_outdoor():
+    assert lagged_outdoor(None, 12.0, 1.0, 8.0) == 12.0
+    assert lagged_outdoor(8.0, 16.0, 0.0, 8.0) == 8.0
+    assert lagged_outdoor(8.0, 16.0, 8.0, 8.0) == pytest.approx(8.0 + 8.0 * (1 - math.exp(-1)))
+    assert lagged_outdoor(8.0, 16.0, 1000.0, 8.0) == pytest.approx(16.0)
+    # Two half steps equal one full step, so many rooms sampling it changes nothing.
+    half = lagged_outdoor(lagged_outdoor(8.0, 16.0, 2.0, 8.0), 16.0, 2.0, 8.0)
+    assert half == pytest.approx(lagged_outdoor(8.0, 16.0, 4.0, 8.0))
+
+
+def test_night_sky_depression():
+    clear = Environment(t_out=7.0, wind_ms=1.0, sun_elevation_deg=-10.0, cloud_fraction=0.0)
+    overcast = replace(clear, cloud_fraction=1.0)
+    # Clear sky ~21 K below air at 7 C; half the view of a wall; calm film ~14 W/m²K.
+    assert sky_depression_k(clear) == pytest.approx(3.4, abs=0.2)
+    assert sky_depression_k(clear, tilt_deg=0.0) == pytest.approx(2 * sky_depression_k(clear))
+    assert 0 < sky_depression_k(overcast) < 0.5
+    assert sky_depression_k(replace(clear, wind_ms=8.0)) < sky_depression_k(clear) / 2
+    assert sky_depression_k(replace(clear, sun_elevation_deg=5.0)) == 0.0
+    assert sky_depression_k(replace(clear, cloud_fraction=None)) == 0.0
+
+
+def test_clear_night_needs_warmer_air():
+    surfaces = living_room_surfaces()
+    night = dict(t_out=5.0, wind_ms=1.0, sun_elevation_deg=-10.0)
+    unknown = required_air_temperature(surfaces, Environment(**night), 19.0, FULL_TRUST)
+    clear = required_air_temperature(
+        surfaces, Environment(**night, cloud_fraction=0.0), 19.0, FULL_TRUST
+    )
+    assert clear.offset_physical > unknown.offset_physical
+    # Lagged walls already carry their sky term; only glass takes it live.
+    lagged = Environment(**night, cloud_fraction=0.0, t_out_opaque=5.0)
+    glass = next(s for s in surfaces if s.glazed)
+    wall = next(s for s in surfaces if not s.glazed and s.boundary is Boundary.OUTSIDE)
+    p = ModelParams()
+    assert other_side_temperature(wall, lagged, 20.0, p) == 5.0
+    assert other_side_temperature(glass, lagged, 20.0, p) == pytest.approx(
+        5.0 - sky_depression_k(lagged)
     )
