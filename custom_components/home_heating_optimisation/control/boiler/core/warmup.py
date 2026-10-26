@@ -234,6 +234,18 @@ def need_uplift(rooms, base, boost_max, params: WarmupBoostParams) -> float:
     return room * min(1.0, max(0.0, max(behind) / params.need_full_k))
 
 
+def plan_floor(rooms, base, plan_flow, boost_max) -> float:
+    """Uplift (K) that holds the flow at the plan flow while a room is still warming.
+
+    Starts are timed for ``plan_flow``, so a room on plan still gets it rather than the
+    weather curve's lower flow. None once every room is done, or when the curve is already
+    at or above the plan flow. Not subject to the fullness cap or the overshoot trim.
+    """
+    if plan_flow is None or not any(not getattr(r, "done", False) for r in rooms):
+        return 0.0
+    return min(max(0.0, plan_flow - base), max(0.0, boost_max - base))
+
+
 def preheat_step(
     state: WarmupBoostState, target, base, now: datetime, params: WarmupBoostParams
 ) -> WarmupBoostState:

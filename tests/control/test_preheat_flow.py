@@ -14,6 +14,7 @@ from custom_components.home_heating_optimisation.control.boiler.core.warmup impo
     fullness_cap,
     fullness_step,
     need_uplift,
+    plan_floor,
     preheat_step,
 )
 from custom_components.home_heating_optimisation.control.migration import handover
@@ -81,6 +82,16 @@ def test_need_follows_the_worst_room_behind_plan_and_ignores_done_rooms():
     assert need([room(2.0)]) == 20.0
     assert need([room(0.5, done=True), room(0.1)]) == pytest.approx(4.0)
     assert need([room(None)]) == 0.0
+
+
+def test_plan_floor_holds_the_plan_flow_until_every_room_is_done():
+    assert plan_floor([room(-0.2)], 50.0, 55.0, 65.0) == 5.0  # on plan still gets 55
+    assert plan_floor([room(0.5, done=True), room(None)], 50.0, 55.0, 65.0) == 5.0
+    assert plan_floor([room(0.5, done=True)], 50.0, 55.0, 65.0) == 0.0
+    assert plan_floor([], 50.0, 55.0, 65.0) == 0.0
+    assert plan_floor([room(0.0)], 57.0, 55.0, 65.0) == 0.0  # curve already above
+    assert plan_floor([room(0.0)], 50.0, 70.0, 65.0) == 15.0  # never past the maximum
+    assert plan_floor([room(0.0)], 50.0, None, 65.0) == 0.0
 
 
 def test_ramp_rises_at_most_1k_a_minute_and_falls_at_most_the_decay():
@@ -249,3 +260,43 @@ async def test_no_uplift_while_hot_water_charges(hass, controlled, sources, free
     hass.states.async_set("sensor.hw", 100)
     assert c.boiler.data.dhw_active
     assert data.warmup_boost == 0.0 and data.preheat_rooms == 0
+
+
+async def test_on_plan_rooms_get_the_plan_flow_in_active(hass, controlled, sources, freezer):  # noqa: F811
+    r, c, _ = await rig(hass, controlled, freezer, "active")
+    base = c.boiler.data.requested_target
+    c.boiler._preheat_config = lambda: {"mode": "active", "plan_flow": base + 4.0}
+    r.behind = -0.2
+    for _ in range(6):
+        data = await r.tick()
+    assert data.preheat_need == 0.0 and data.preheat_floor == pytest.approx(4.0)
+    assert data.warmup_boost == pytest.approx(4.0) and data.requested_target == base + 4.0
+    # Every room done: the floor goes and the uplift decays.
+    r.done = True
+    data = await r.tick()
+    assert data.preheat_floor == 0.0 and data.warmup_boost < 4.0
+
+
+async def test_a_room_behind_plan_is_not_trimmed_by_one_running_warm(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    r, c, _ = await rig(hass, controlled, freezer, "active")
+    base = c.boiler.data.requested_target
+    c.boiler._preheat_config = lambda: {"mode": "active", "plan_flow": base + 2.0}
+    for _ in range(6):
+        data = await r.tick()
+    boosted = data.warmup_boost
+    assert boosted > 4.0
+    # The room's own sensor reads 1.5 K over its target while the plan says it is behind.
+    r.air = 20.5
+    for _ in range(3):
+        data = await r.tick()
+    assert data.boost_trim == 0.0 and data.warmup_boost > boosted  # still climbing
+    # Back on plan: the trim applies again, but never below the plan flow.
+    r.behind = -0.1
+    for _ in range(12):
+        data = await r.tick()
+    assert data.warmup_boost == pytest.approx(2.0)
