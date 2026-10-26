@@ -16,6 +16,8 @@ from typing import Mapping
 
 H_I_DEFAULT = 7.7  # reference inside film included in survey U-values, W/m²K
 GROUND_TEMP_DEFAULT = 10.0
+H_R_OUT = 4.7  # linearised exterior radiation, W/m²K (as in effective_u)
+SKY_CLOUD_EMISSIVITY = 0.9  # cloud base emits as a near-black body slightly below air temperature
 
 
 class Boundary(str, Enum):
@@ -60,6 +62,10 @@ class Environment:
     """Weather, sun and neighbouring-room state for one evaluation."""
 
     t_out: float
+    # Outdoor temperature the masonry has caught up with (lagged, night sky already
+    # included). Opaque outside walls and unheated spaces use it; glazing and light roofs
+    # use `t_out` less their own night-sky term. None = `t_out` everywhere.
+    t_out_opaque: float | None = None
     wind_ms: float = 0.0
     ghi_wm2: float | None = None  # global horizontal irradiance if measured
     cloud_fraction: float | None = None  # 0..1, used only when ghi is None
@@ -189,19 +195,43 @@ def irradiance_on_surface(surface: Surface, env: Environment) -> float:
     )
 
 
+def sky_depression_k(env: Environment, tilt_deg: float = 90.0) -> float:
+    """How far a surface's effective outside temperature sits below outdoor air at night, K.
+
+    The outer face radiates to the sky over its sky view factor instead of to
+    surroundings at air temperature. Swinbank clear-sky emissivity, raised
+    towards a cloud base by cloud cover; linearised against the McAdams film used
+    in `effective_u`. Night only: by day absorbed sunlight on the outer face,
+    which the model does not credit either, offsets it. No cloud data, no term.
+    """
+    if env.sun_elevation_deg > 0 or env.cloud_fraction is None:
+        return 0.0
+    t_k = env.t_out + 273.15
+    clear = min(1.0, 9.365e-6 * t_k**2)
+    cloud = min(1.0, max(0.0, env.cloud_fraction))
+    emissivity = clear + (1 - clear) * SKY_CLOUD_EMISSIVITY * cloud
+    sky_gap = t_k * (1 - emissivity**0.25)
+    view = (1 + math.cos(math.radians(tilt_deg))) / 2
+    h_c = 5.7 + 3.8 * max(0.0, env.wind_ms)
+    return view * H_R_OUT * sky_gap / (h_c + H_R_OUT)
+
+
 def _other_side_affine(
     surface: Surface, env: Environment, params: ModelParams
 ) -> tuple[float, float]:
     """Other-side air = a*T_air + b; retain unknown neighbours in the inverse."""
     b = surface.boundary
+    t_opaque = env.t_out if env.t_out_opaque is None else env.t_out_opaque
+    if b is Boundary.OUTSIDE and not surface.glazed and env.t_out_opaque is not None:
+        return 0.0, t_opaque
     if b in (Boundary.OUTSIDE, Boundary.ROOF):
-        return 0.0, env.t_out
+        return 0.0, env.t_out - sky_depression_k(env, surface.tilt_deg)
     if b is Boundary.LOFT:
         return 0.0, env.t_out + params.loft_delta
     if b is Boundary.GROUND:
         return 0.0, env.t_ground
     if b is Boundary.UNHEATED_SPACE:
-        fallback = params.unheated_fraction, (1 - params.unheated_fraction) * env.t_out
+        fallback = params.unheated_fraction, (1 - params.unheated_fraction) * t_opaque
     else:
         fallback = 1.0, 0.0  # unknown heated neighbour follows this room's air
     neighbours = surface.adjacent_fractions or ({surface.adjacent: 1.0} if surface.adjacent else {})
@@ -237,7 +267,7 @@ def effective_u(surface: Surface, env: Environment, params: ModelParams) -> floa
     r_other = 1 / surface.u_value - params.outside_resistance
     if r_other <= 0:
         raise ValueError("U-value does not leave a positive construction resistance")
-    r_out = 1 / (5.7 + 3.8 * max(0.0, env.wind_ms) + 4.7)
+    r_out = 1 / (5.7 + 3.8 * max(0.0, env.wind_ms) + H_R_OUT)
     return 1 / (r_other + r_out)
 
 
@@ -272,6 +302,7 @@ def _validate(surfaces: list[Surface], env: Environment, p: ModelParams) -> None
         raise ValueError("invalid model parameter range")
     values = [
         env.t_out,
+        env.t_out if env.t_out_opaque is None else env.t_out_opaque,
         env.t_ground,
         env.wind_ms,
         env.sun_elevation_deg,
@@ -473,6 +504,17 @@ def radiator_output_w(
     if dt <= 0:
         return 0.0
     return sum(e.output_dt50_w * (dt / 50.0) ** e.exponent for e in emitters)
+
+
+def lagged_outdoor(previous: float | None, t_out: float, elapsed_h: float, tau_h: float) -> float:
+    """First-order lag of the outdoor temperature, standing in for wall thermal mass.
+
+    A steady-state wall would follow a mild front at once; brick takes hours.
+    """
+    if previous is None or tau_h <= 0:
+        return t_out
+    weight = 1.0 - math.exp(-max(0.0, elapsed_h) / tau_h)
+    return previous + weight * (t_out - previous)
 
 
 def running_mean_outdoor(previous: float | None, today_mean: float, alpha: float = 0.8) -> float:

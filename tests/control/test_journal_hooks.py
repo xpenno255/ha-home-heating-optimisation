@@ -33,7 +33,7 @@ async def test_shadow_cycle_records_decisions_without_commands(hass, controlled,
     decision = next(e for e in room if e["kind"] == "decision")
     assert decision["scope"] == "study" and decision["origin"] == "controller"
     assert decision["data"]["outcome"] in ("shadow", "no_action")
-    assert decision["provenance"]["model_version"] == "steady_state_ot_v2"
+    assert decision["provenance"]["model_version"] == "steady_state_ot_v3"
     assert decision["provenance"]["control_schema"] == 1
     assert "schedule_source" in decision["provenance"]
     boiler = [e for e in journal.events() if e["scope"] == "boiler"]

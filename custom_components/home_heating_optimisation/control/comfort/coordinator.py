@@ -109,6 +109,7 @@ from .core.model import (
     operative_temperature,
     radiator_output_w,
     required_air_temperature,
+    sky_depression_k,
     steady_state_mrt,
 )
 from .core.policy import (
@@ -167,7 +168,7 @@ READBACK_HINTS = {
         "keeps its normal bounded retry and does not clear manual holds."
     ),
 }
-COMFORT_MODEL_VERSION = "steady_state_ot_v2"
+COMFORT_MODEL_VERSION = "steady_state_ot_v3"
 
 
 @dataclass
@@ -245,6 +246,10 @@ class OTCoordinatorData:
     ghi_wm2: float | None = None
     cloud_fraction: float | None = None
     running_mean_outdoor: float | None = None
+    # Outdoor temperature the opaque walls are modelled at (lagged for thermal mass).
+    outdoor_opaque: float | None = None
+    # Night-sky cooling of a vertical outer face, K below outdoor air (0 by day).
+    sky_depression_k: float | None = None
     flow_temp_used: float | None = None
     radiator_output_w: float | None = None
     installed_output_dt50_w: float | None = None
@@ -1524,6 +1529,13 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             )
             if hub_data is not None:
                 d.running_mean_outdoor = hub_data.sample_outdoor(env.t_out, now_local)
+                # Walls see the night sky too, but through their mass: lag the sky-adjusted value.
+                sky_k = sky_depression_k(env)
+                d.sky_depression_k = round(sky_k, 2)
+                lagged = hub_data.sample_outdoor_lagged(env.t_out - sky_k, now)
+                env = replace(env, t_out_opaque=lagged)
+            if env.t_out_opaque is not None:
+                d.outdoor_opaque = round(env.t_out_opaque, 2)
         d.air_temp, d.air_temp_source = self._air_temperature(geometry, fallbacks)
 
         hub_cfg = self._hub_config()

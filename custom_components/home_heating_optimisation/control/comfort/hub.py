@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-from .core.model import running_mean_outdoor
+from .core.model import lagged_outdoor, running_mean_outdoor
 from .store import OTStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,7 +34,11 @@ class OTHubData:
     running_mean: float | None = None
     outdoor_used: float | None = None
     days_completed: int = 0  # full days folded into the running mean
+    # Outdoor temperature lagged for wall thermal mass (first order, OUTDOOR_LAG_HOURS).
+    outdoor_lagged: float | None = None
+    _outdoor_lagged_at: datetime | None = field(default=None, repr=False)
     MIN_DAYS_FOR_ADAPTIVE: int = 3
+    OUTDOOR_LAG_HOURS: float = 8.0  # 1920s brick cavity: daily swing at ~half amplitude, ~4 h late
     _listeners: list = field(default_factory=list, repr=False)
     _day: date | None = field(default=None, repr=False)
     _day_sum: float = field(default=0.0, repr=False)
@@ -62,6 +66,13 @@ class OTHubData:
         rm = self.store.get("running_mean")
         self.running_mean = float(rm) if rm is not None else None
         self.days_completed = int(self.store.get("days_completed", 0) or 0)
+        lagged = self.store.get("outdoor_lagged")
+        lagged_at = self.store.get("outdoor_lagged_at")
+        try:
+            self.outdoor_lagged = float(lagged) if lagged is not None else None
+            self._outdoor_lagged_at = datetime.fromisoformat(lagged_at) if lagged_at else None
+        except ValueError, TypeError:
+            self.outdoor_lagged, self._outdoor_lagged_at = None, None
         ft = self.store.get("flow_temp_used")
         self.flow_temp_used = float(ft) if ft is not None else None
         d = self.store.get("day")
@@ -78,6 +89,11 @@ class OTHubData:
             return
         self.store.set("running_mean", self.running_mean)
         self.store.set("days_completed", self.days_completed)
+        self.store.set("outdoor_lagged", self.outdoor_lagged)
+        self.store.set(
+            "outdoor_lagged_at",
+            self._outdoor_lagged_at.isoformat() if self._outdoor_lagged_at else None,
+        )
         self.store.set("flow_temp_used", self.flow_temp_used)
         self.store.set("day", self._day.isoformat() if self._day else None)
         self.store.set("day_sum", self._day_sum)
@@ -119,6 +135,21 @@ class OTHubData:
         self._persist()
         self._notify()
         return self.running_mean
+
+    def sample_outdoor_lagged(self, t_out: float, now: datetime) -> float:
+        """Advance the wall-lagged outdoor temperature to `now`. Rooms share one answer."""
+        if self.outdoor_lagged is None or self._outdoor_lagged_at is None:
+            # Seed from the running mean, which is closer to what the walls saw than now.
+            previous = self.running_mean if self.running_mean is not None else t_out
+            self.outdoor_lagged, self._outdoor_lagged_at = previous, now
+        elapsed_h = (now - self._outdoor_lagged_at).total_seconds() / 3600.0
+        if elapsed_h > 0:
+            self.outdoor_lagged = lagged_outdoor(
+                self.outdoor_lagged, t_out, elapsed_h, self.OUTDOOR_LAG_HOURS
+            )
+            self._outdoor_lagged_at = now
+            self._persist()
+        return self.outdoor_lagged
 
     @property
     def running_mean_ready(self) -> bool:

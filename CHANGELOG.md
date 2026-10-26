@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.12.5 - walls follow the outdoor temperature slowly; night-sky cooling
+
+- The comfort model now gives opaque outside walls (and unheated spaces such as the garage) a lagged outdoor temperature: a first-order lag with an 8-hour time constant, shared by all rooms through the hub and kept across restarts. It starts from the running mean. Glazing and roofs still use the live outdoor temperature. Room data has a new `outdoor_opaque` field, and `model_version` is now `steady_state_ot_v3`.
+- Why: the model assumed walls reach a new outdoor temperature at once. On 26 Oct a mild spell took the outside from 7 to 15 C. The Living Room correction above its comfort target fell from +0.85 K at 06:00 to +0.25 K at 15:00 (part of that was sun), so the air was held cooler while the 1920s brick was still cold, and the room felt cold from about 16:00. With the walls at the lagged value, the physical correction that evening is about +0.2 K higher in the Living Room and about +0.35 K higher in the Bedroom.
+- Night-sky cooling: after sunset an outer face radiates to a sky colder than the air. Each outside surface's effective outdoor temperature is lowered by `F_sky x 4.7 x (T_out - T_sky) / (h_c + 4.7)` (Swinbank clear-sky emissivity, raised towards a cloud base by the weather entity's cloud cover; sky view 0.5 for walls, 1 for flat roofs; same wind film as before). Glazing and roofs take it live; walls take it through the lag above. Off by day (absorbed sunlight on the outer face, also not credited, offsets it) and when cloud cover is unknown. Room data has a new `sky_depression_k` (vertical face).
+- Size, from the live survey: about +0.2-0.3 K of physical correction in the Living Room, Study and Bedroom on a clear, calm night; under 0.05 K when overcast or windy.
+
 ## 0.12.4 - pre-heat flow holds the plan flow; a warm room no longer cuts a lagging room's boost
 
 - While any room is pre-heating and not yet done, the flow is held at least at the plan flow (`plan_flow`, default 55 C), even when every room is on plan. The extra uplift above it, for rooms behind plan, keeps the fullness cap and the overshoot trim; the return guard applies to both. New boiler data `preheat_floor` (K above the weather curve), also in `warmup_boost` journal events.
