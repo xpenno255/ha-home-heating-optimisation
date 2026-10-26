@@ -149,6 +149,7 @@ from .core.warmup import (
     house_demand,
     need_uplift,
     overshoot,
+    plan_floor,
     preheat_step,
     return_scale,
     trim_factor,
@@ -232,6 +233,7 @@ class BFCCoordinatorData:
     radiator_fullness: float | None = None
     fullness_cap: float | None = None
     preheat_need: float | None = None
+    preheat_floor: float | None = None
     preheat_uplift: float = 0.0
     preheat_flow: float | None = None
     preheat_rooms: int = 0
@@ -773,7 +775,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             cap = fullness_cap(
                 filtered, base, params.boost_max, params.fullness_low, params.fullness_high
             )
-            wanted = min(need, cap) * trim * guard if pre_driving else 0.0
+            floor = plan_floor(planned, base, pre.get("plan_flow"), params.boost_max)
+            # A room behind its plan outranks one running warm: the trim waits until none is.
+            wanted = max(floor, min(need, cap) * (1.0 if need > 0 else trim)) * guard
+            wanted = wanted if pre_driving else 0.0
             before = self._preheat_state
             if pre_mode == "active" and pre_driving:
                 # The plan, not the house demand, sets the flow while rooms are pre-heating.
@@ -784,6 +789,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 state = None
             self._preheat_state = before
             d.preheat_need = round(need, 2) if pre_driving else None
+            d.preheat_floor = round(floor, 2) if pre_driving else None
             d.fullness_cap = round(cap, 2)
             d.preheat_uplift = round(before.uplift, 2)
             d.preheat_flow = round(min(curve_params.flow_max, base + before.uplift), 1)
@@ -875,6 +881,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 "preheat_mode": d.preheat_mode,
                 "preheat_rooms": d.preheat_rooms,
                 "preheat_need": d.preheat_need,
+                "preheat_floor": d.preheat_floor,
                 "fullness_cap": d.fullness_cap,
                 "radiator_fullness": d.radiator_fullness,
                 "preheat_uplift": d.preheat_uplift,

@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.12.4 - pre-heat flow holds the plan flow; a warm room no longer cuts a lagging room's boost
+
+- While any room is pre-heating and not yet done, the flow is held at least at the plan flow (`plan_flow`, default 55 C), even when every room is on plan. The extra uplift above it, for rooms behind plan, keeps the fullness cap and the overshoot trim; the return guard applies to both. New boiler data `preheat_floor` (K above the weather curve), also in `warmup_boost` journal events.
+- The overshoot trim no longer applies while a pre-heating room is behind its plan. Once none is, it applies again, but never below the plan flow.
+- Why: on 26 Oct starts were on plan, but the flow sat at 50-52 C from 05:43 to 06:29 (need is zero while rooms are on plan) and then jumped to 65 C at 06:40 once rooms fell behind. The Hall, whose own sensor reads about 1.2 K warmer than its Evohome sensor, counted as 1 K overshooting and trimmed the boost to zero from 06:12 to 06:32 and again from 07:42; the Kitchen arrived 31 minutes late.
+
 ## 0.12.3 - planned pre-heat starts before a room's operating window opens
 
 - A due pre-heat now runs even when the room is outside its operating window. Without a due pre-heat the window still keeps HHO's hands off, as before.
