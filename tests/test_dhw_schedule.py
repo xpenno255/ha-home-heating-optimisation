@@ -477,3 +477,171 @@ def test_rename_updates_dhw_section():
 @pytest.fixture(autouse=True)
 def _no_real_ramses():
     yield
+
+
+# -- visitor mode ------------------------------------------------------------
+
+VISITOR_SWITCH = f"switch.{DOMAIN}_visitor_mode"
+VISITOR_UNTIL = f"datetime.{DOMAIN}_visitor_mode_until"
+RAISED = {"entity_id": WH, "setpoint": 60.0, "overrun": 2, "differential": 7.5}
+NORMAL = {**RAISED, "setpoint": 50.0}
+
+
+async def visitor(hass, schedule, on=True):
+    await hass.services.async_call(
+        "switch", "turn_on" if on else "turn_off", {"entity_id": VISITOR_SWITCH}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+
+async def test_visitor_on_raises_once_and_off_restores(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes == []
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes == [RAISED]
+    assert schedule.status == "visitor" and hass.states.get(SENSOR).state == "visitor"
+    assert hass.states.get(VISITOR_SWITCH).state == "on"
+    await at(hass, freezer, schedule, minutes=10)
+    assert writes == [RAISED]
+    await visitor(hass, schedule, on=False)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes[-1] == NORMAL
+    await at(hass, freezer, schedule, seconds=90)
+    assert schedule.store.data["transaction"] is None
+    assert schedule.store.data["last"]["kind"] == "visitor"
+    assert schedule.status == "armed" and len(writes) == 2
+
+
+async def test_visitor_adopts_existing_high_target(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    heater(hass, 60.0)
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes == [] and schedule.status == "visitor"
+    await visitor(hass, schedule, on=False)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes == [NORMAL]
+
+
+async def test_visitor_until_restores_and_clears(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    until = dt_util.utcnow() + timedelta(minutes=30)
+    await hass.services.async_call(
+        "datetime", "set_value", {"entity_id": VISITOR_UNTIL, "datetime": until}, blocking=True
+    )
+    assert schedule.store.data["visitor"]["on"] is False
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes == [RAISED]
+    await at(hass, freezer, schedule, minutes=30)
+    assert writes[-1] == NORMAL
+    assert schedule.store.data["visitor"] == {"on": False, "until": None}
+    await at(hass, freezer, schedule, seconds=90)
+    assert schedule.store.data["transaction"] is None
+    assert hass.states.get(VISITOR_UNTIL).state == "unknown"
+
+
+async def test_visitor_on_drops_an_end_time_already_past(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    until = dt_util.utcnow() + timedelta(minutes=5)
+    await hass.services.async_call(
+        "datetime", "set_value", {"entity_id": VISITOR_UNTIL, "datetime": until}, blocking=True
+    )
+    await at(hass, freezer, schedule, minutes=10)
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, seconds=1)
+    assert schedule.store.data["visitor"] == {"on": True, "until": None}
+    assert writes == [RAISED] and schedule.status == "visitor"
+
+
+async def test_visitor_during_window_blocks_weekly_session(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, monday(4, 30))
+    await at(hass, freezer, schedule, monday(5))
+    assert writes == [RAISED]
+    assert schedule.store.data["consumed"] is None
+
+
+async def test_visitor_converts_raised_weekly_session(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    await at(hass, freezer, schedule, monday(4))
+    assert schedule.status == "elevated"
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, minutes=1)
+    assert schedule.status == "visitor"
+    assert schedule.store.data["transaction"]["kind"] == "visitor"
+    await at(hass, freezer, schedule, monday(6, 30))
+    assert writes == [RAISED]
+
+
+async def test_visitor_survives_restart_and_unload(hass, controlled, sources, freezer):  # noqa: F811
+    entry, schedule, writes = await begin(hass, controlled, freezer)
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes == [RAISED]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert writes == [RAISED]
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    schedule = entry.runtime_data.dhw
+    schedule._mono = lambda: dt_util.utcnow().timestamp()
+    await at(hass, freezer, schedule, minutes=3)
+    assert schedule.status == "visitor" and writes == [RAISED]
+
+
+async def test_visitor_external_change_ends_without_pausing(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, seconds=1)
+    heater(hass, 55.0)
+    await at(hass, freezer, schedule, minutes=3)
+    assert writes == [RAISED]
+    assert schedule.store.data["visitor"]["on"] is False
+    assert schedule.store.data["transaction"] is None
+    assert schedule.store.data["paused"] is None
+
+
+async def test_boost_does_not_block_visitor_raise(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    heater(hass, mode="temporary_override")
+    await visitor(hass, schedule)
+    await at(hass, freezer, schedule, seconds=1)
+    assert writes == [RAISED]
+
+
+async def test_visitor_switch_needs_usable_schedule(hass, controlled, sources, freezer):  # noqa: F811
+    from homeassistant.exceptions import HomeAssistantError
+
+    from custom_components.home_heating_optimisation.dhw.visitor import (
+        VisitorModeSwitch,
+        VisitorUntilDateTime,
+    )
+
+    _, schedule, writes = await begin(hass, controlled, freezer, enabled=False)
+    switch = VisitorModeSwitch(schedule)
+    assert switch.available is False
+    with pytest.raises(HomeAssistantError):
+        await switch.async_turn_on()
+    with pytest.raises(HomeAssistantError):
+        await VisitorUntilDateTime(schedule).async_set_value(dt_util.utcnow() - timedelta(hours=1))
+    assert schedule.store.data["visitor"] == {"on": False, "until": None}
+
+
+async def test_store_without_visitor_key_loads(hass, controlled, sources, freezer):  # noqa: F811
+    from custom_components.home_heating_optimisation.dhw.store import DhwStore
+
+    store = DhwStore(hass, "x")
+    state = {"consumed": None, "transaction": None}
+    for bad in (None, "x", {"on": "yes", "until": None}, {"on": True, "until": "junk"}):
+        stored = {"schema": 1, "state": {**state, "visitor": bad} if bad else state}
+
+        async def load(stored=stored):
+            return stored
+
+        store.backend.async_load = load
+        await store.load()
+        assert store.ready and store.data["visitor"] == {"on": False, "until": None}

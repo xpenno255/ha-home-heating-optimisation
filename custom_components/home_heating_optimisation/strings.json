@@ -455,6 +455,16 @@
     }
   },
   "entity": {
+    "switch": {
+      "visitor_mode": {
+        "name": "Visitor mode"
+      }
+    },
+    "datetime": {
+      "visitor_mode_until": {
+        "name": "Visitor mode until"
+      }
+    },
     "sensor": {
       "air": {
         "name": "{room} air temperature"
@@ -580,6 +590,7 @@
           "armed": "Armed",
           "paused": "Paused (external change)",
           "elevated": "Higher target requested",
+          "visitor": "Visitor mode (higher target)",
           "restoring": "Restoring normal target",
           "recovery_pending": "Restore not confirmed",
           "storage_read_only": "Storage unavailable",

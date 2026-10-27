@@ -2,6 +2,15 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.13.0 - visitor mode for hot water
+
+- New `switch.home_heating_optimisation_visitor_mode` and `datetime.home_heating_optimisation_visitor_mode_until` (present with the DHW target schedule; the switch is unavailable unless the schedule is enabled and configured). While on, the stored hot water target is held at the schedule's higher target (60 C); when switched off, or once the optional end time passes, it goes back to the normal target (50 C) and the end time is cleared. Setting an end time does not switch it on; an end time already past is dropped when it is switched on.
+- Uses the DHW schedule's own write and restore path (`ramses_cc.set_dhw_params`, overrun and differential kept, replies observed before anything counts). A target already at 60 C is adopted without a write. A manual DHW boost does not hold the raise back. It runs even while the weekly schedule is paused.
+- Weekly session: no session opens while visitor mode is on, and a session already raised when visitor mode starts is kept instead of being restored at the window end. If visitor mode ends inside the window, the weekly session may open for the rest of it.
+- Restarts and reloads keep a visitor target raised while visitor mode is on (weekly sessions are still restored on restart). If someone changes the target by hand, visitor mode switches off without pausing the weekly schedule. If the DHW schedule stops being usable, visitor mode switches off and the target is restored.
+- DHW schedule sensor: new state `visitor`; attributes gain `visitor` (`on`, `until`, `active`). Journal kind `dhw_schedule`, event `visitor` (`on`, `off`, `until`, `expired`, `external_change`, `rejected`, `unusable`).
+- Why: visitors on 27 Oct; the target had been set to 60 C by hand, which keeps every daily charge at 60 C until remembered and pauses the Saturday session.
+
 ## 0.12.5 - walls follow the outdoor temperature slowly; night-sky cooling
 
 - The comfort model now gives opaque outside walls (and unheated spaces such as the garage) a lagged outdoor temperature: a first-order lag with an 8-hour time constant, shared by all rooms through the hub and kept across restarts. It starts from the running mean. Glazing and roofs still use the live outdoor temperature. Room data has a new `outdoor_opaque` field, and `model_version` is now `steady_state_ot_v3`.

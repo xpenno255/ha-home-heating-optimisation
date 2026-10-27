@@ -33,6 +33,7 @@ PLATFORMS = [
     Platform.SELECT,
     Platform.NUMBER,
     Platform.SWITCH,
+    Platform.DATETIME,
     Platform.BUTTON,
 ]
 type HeatingEntry = ConfigEntry[HeatingCoordinator]
