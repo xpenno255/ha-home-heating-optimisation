@@ -8,6 +8,10 @@ PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
+    if entry.runtime_data.dhw is not None:
+        from .dhw.visitor import VisitorModeSwitch
+
+        async_add_entities([VisitorModeSwitch(entry.runtime_data.dhw)])
     c = entry.runtime_data.controls
     if c.boiler:
         async_add_entities([GlobalComfortSwitch(c, "boiler", "comfort_enabled")])

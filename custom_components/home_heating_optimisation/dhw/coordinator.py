@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from homeassistant.core import callback
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
@@ -51,11 +51,14 @@ MAX_ATTEMPTS = 6
 # Unknown actuator state this long past the deadline raises a repair.
 UNKNOWN_GRACE = timedelta(minutes=15)
 ISSUE_RESTORE = "dhw_schedule_restore"
+# Visitor mode without an end time holds the higher target for up to this long per check.
+VISITOR_OPEN_END = timedelta(days=365)
 STATES = (
     "disabled",
     "armed",
     "paused",
     "elevated",
+    "visitor",
     "restoring",
     "recovery_pending",
     "storage_read_only",
@@ -88,8 +91,10 @@ class DhwSchedule:
         await self.store.load()
         txn = self.store.data["transaction"]
         if txn is not None:
-            # A restart never resumes an elevated session; it is restored instead.
-            if txn["phase"] != "restoring":
+            # A restart never resumes a weekly elevated session; it is restored instead.
+            # Only a raised visitor target survives, while visitor mode is still on.
+            keep = txn["kind"] == "visitor" and txn["phase"] == "raised"
+            if txn["phase"] != "restoring" and not (keep and self._visitor_live(dt_util.utcnow())):
                 txn["phase"] = "restoring"
                 txn["outcome"] = "interrupted"
             # Judge nothing until a reply to any earlier request could have arrived.
@@ -124,7 +129,13 @@ class DhwSchedule:
             self._unsub.pop()()
         async with self._step_lock:
             txn = self.store.data["transaction"]
-            if txn is not None and txn["phase"] != "restoring":
+            # A raised visitor target stays: its intent is persisted and outlives reloads.
+            keep = txn is not None and txn["kind"] == "visitor" and txn["phase"] == "raised"
+            if (
+                txn is not None
+                and txn["phase"] != "restoring"
+                and not (keep and self._visitor_live(dt_util.utcnow()))
+            ):
                 txn["phase"] = "restoring"
                 txn["outcome"] = "interrupted"
                 self.evidence = None
@@ -170,7 +181,17 @@ class DhwSchedule:
             await self._progress(txn, now)
             return
         cfg, data = self.cfg, self.store.data
-        if not self.store.ready or not usable(cfg) or data["paused"] == cfg["revision"]:
+        if not self.store.ready:
+            return
+        if not usable(cfg):
+            if data["visitor"]["on"]:
+                await self._visitor_end("unusable")
+            return
+        # An explicit user command: runs even while the weekly schedule is paused.
+        if await self.visitor_active(now):
+            await self._open_visitor(now)
+            return
+        if data["paused"] == cfg["revision"]:
             return
         if data["applied_revision"] != cfg["revision"]:
             await self._baseline(now)
@@ -290,6 +311,106 @@ class DhwSchedule:
         txn["ambiguous"] = result == "ambiguous"
         await self.store.save()
 
+    # -- visitor mode ------------------------------------------------------
+
+    def visitor_until(self):
+        until = self.store.data["visitor"]["until"]
+        return datetime.fromisoformat(until) if until else None
+
+    def _visitor_live(self, now):
+        visitor = self.store.data["visitor"]
+        until = self.visitor_until()
+        return visitor["on"] and (until is None or now < until)
+
+    async def visitor_active(self, now):
+        """True while visitor mode is on and not past its end time; expiry switches it off."""
+        if self._visitor_live(now):
+            return True
+        if self.store.data["visitor"]["on"]:
+            await self._visitor_end("expired")
+        return False
+
+    async def _visitor_end(self, action):
+        self.store.data["visitor"] = {"on": False, "until": None}
+        await self.store.save()
+        self._journal("visitor", {"action": action})
+        self._notify()
+
+    async def _visitor_save(self, visitor, action):
+        previous = self.store.data["visitor"]
+        self.store.data["visitor"] = visitor
+        if not await self.store.save():
+            self.store.data["visitor"] = previous
+            raise HomeAssistantError("DHW schedule state could not be saved")
+        self._journal("visitor", {"action": action, "until": visitor["until"]})
+        self._kick()
+        self._notify()
+
+    async def set_visitor(self, on):
+        until = self.visitor_until() if on else None
+        # An end time already past would switch it straight back off: drop it instead.
+        until = until.isoformat() if until and until > dt_util.utcnow() else None
+        await self._visitor_save({"on": on, "until": until}, "on" if on else "off")
+
+    async def set_visitor_until(self, until):
+        visitor = {**self.store.data["visitor"], "until": until.isoformat() if until else None}
+        await self._visitor_save(visitor, "until")
+
+    async def _open_visitor(self, now):
+        cfg = self.cfg
+        entity = cfg["water_heater_entity"]
+        if reason := self._guard(entity):
+            self._block(reason)
+            return
+        params = read_params(self._state(entity))
+        if params is None:
+            self._block("water heater parameters unavailable")
+            return
+        raised = {**params, "setpoint": cfg["high_target"]}
+        restore = {**params, "setpoint": cfg["normal_target"]}
+        deadline = self.visitor_until() or now + VISITOR_OPEN_END
+        txn = self._transaction("visitor", entity, now, None, deadline, params, restore, raised)
+        # Durable intent before any command.
+        self.store.data["transaction"] = txn
+        if not await self.store.save():
+            self.store.data["transaction"] = None
+            self._block("DHW schedule state could not be saved")
+            return
+        self.evidence = None
+        if params_equal(params, raised):
+            # Already at the visitor target (set by hand): adopt it, no write.
+            txn["phase"] = "raised"
+            txn["ambiguous"] = False
+            await self.store.save()
+            return
+        result = await self._write(txn, raised, [params], restore=False, temporary_ok=True)
+        if result == "conflict":
+            await self._end(txn, "external_change")
+            await self._visitor_end("external_change")
+            return
+        if result in ("rejected", "blocked"):
+            await self._end(txn, f"raise_{result}")
+            if result == "rejected":
+                # Retrying every tick would only repeat a refused request.
+                await self._visitor_end("rejected")
+            return
+        txn["phase"] = "raised"
+        txn["ambiguous"] = result == "ambiguous"
+        await self.store.save()
+
+    async def _progress_visitor(self, txn, now):
+        if not usable(self.cfg):
+            await self._visitor_end("unusable")
+        if not await self.visitor_active(now):
+            txn["deadline"] = now.isoformat()
+            await self._begin_restore(txn, "visitor_ended")
+            return
+        params = read_params(self._state(self._entity(txn)))
+        if self._settled() and params is not None and not self._candidate(txn, params):
+            # Someone else changed it; visitor mode gives way and the weekly schedule is untouched.
+            await self._end(txn, "external_change")
+            await self._visitor_end("external_change")
+
     @callback
     def _observe(self):
         txn = self.store.data["transaction"]
@@ -312,6 +433,16 @@ class DhwSchedule:
         )
 
     async def _progress(self, txn, now):
+        if txn["kind"] == "elevation" and txn["phase"] == "raised":
+            if await self.visitor_active(now):
+                # Keep the raised weekly target instead of restoring it at the window end.
+                txn["kind"] = "visitor"
+                txn["deadline"] = (self.visitor_until() or now + VISITOR_OPEN_END).isoformat()
+                self.evidence = None
+                await self.store.save()
+        if txn["kind"] == "visitor" and txn["phase"] == "raised":
+            await self._progress_visitor(txn, now)
+            return
         if txn["phase"] == "raised":
             if self.evidence is None:
                 await self._begin_restore(txn, "interrupted")
@@ -382,7 +513,7 @@ class DhwSchedule:
             txn["restore_sent_at"] = _now()
             await self.store.save()
 
-    async def _write(self, txn, target, expected, restore):
+    async def _write(self, txn, target, expected, restore, temporary_ok=False):
         """Revalidate under the shared controls lock, then send one bounded request."""
         controls = self.heating.controls
         entity = self._entity(txn)
@@ -397,7 +528,11 @@ class DhwSchedule:
                 return "blocked"
             if not any(params_equal(params, p) for p in expected):
                 return "conflict"
-            if not restore and read_mode(self._state(entity)) in TEMPORARY_MODES:
+            if (
+                not restore
+                and not temporary_ok
+                and read_mode(self._state(entity)) in TEMPORARY_MODES
+            ):
                 return "blocked"
             request = {
                 "entity_id": entity,
@@ -505,6 +640,8 @@ class DhwSchedule:
         if txn is not None:
             if self.issue:
                 return "recovery_pending"
+            if txn["kind"] == "visitor" and txn["phase"] == "raised":
+                return "visitor"
             return "elevated" if txn["phase"] == "raised" else "restoring"
         if not self.store.ready:
             return "storage_read_only"
@@ -533,6 +670,11 @@ class DhwSchedule:
             "transaction": None
             if txn is None
             else {k: txn.get(k) for k in ("kind", "day", "phase", "deadline", "attempts")},
+            "visitor": {
+                "on": self.store.data["visitor"]["on"],
+                "until": self.store.data["visitor"]["until"],
+                "active": self._visitor_live(dt_util.utcnow()),
+            },
             "last": self.store.data["last"],
             "blocked": self.last_block,
             "storage": self.store.status,

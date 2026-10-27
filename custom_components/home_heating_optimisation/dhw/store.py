@@ -2,6 +2,7 @@
 
 import logging
 from copy import deepcopy
+from datetime import datetime
 
 from homeassistant.helpers.storage import Store
 
@@ -18,6 +19,8 @@ EMPTY = {
     # The one owned setpoint change still to be restored, if any.
     "transaction": None,
     "last": None,
+    # Visitor mode: keep the higher target until switched off or `until` (ISO) passes.
+    "visitor": {"on": False, "until": None},
 }
 PARAM_KEYS = ("setpoint", "overrun", "differential")
 
@@ -38,6 +41,18 @@ def valid_transaction(txn):
         and isinstance(txn.get("candidates"), list)
         and all(_params(c) for c in txn["candidates"])
     )
+
+
+def valid_visitor(value):
+    if not isinstance(value, dict) or not isinstance(value.get("on"), bool):
+        return False
+    until = value.get("until")
+    if until is None:
+        return True
+    try:
+        return isinstance(until, str) and datetime.fromisoformat(until).tzinfo is not None
+    except ValueError:
+        return False
 
 
 class DhwStore:
@@ -61,6 +76,8 @@ class DhwStore:
             state = {**deepcopy(EMPTY), **{k: data["state"].get(k) for k in EMPTY}}
             if state["transaction"] is not None and not valid_transaction(state["transaction"]):
                 raise ValueError("invalid_transaction")
+            if not valid_visitor(state["visitor"]):
+                state["visitor"] = deepcopy(EMPTY["visitor"])
             self.data = state
         except Exception:
             # Keep the file for inspection; the schedule makes no writes until reload.
