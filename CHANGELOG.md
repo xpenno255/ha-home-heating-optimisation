@@ -2,6 +2,14 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.14.0 - catch-up: a room stuck below target raises the flow
+
+- New option **Catch-up for a room stuck below target** (`warmup_boost.catchup_mode`, off / shadow / active, default off; in the warm-up boost options, independent of the boost mode).
+- Outside a planned pre-heat, a room inside its operating window, calling for heat and at least 0.3 K below its air target for 20 minutes, without warming at 0.2 K an hour or more over that time, is pushed. The uplift follows the pushed room furthest behind: nothing at 0.1 K short, the whole way to 60 C (or the maximum flow, if lower) at 0.8 K, rising at most 1 K a minute. A pushed room stays pushed until it is within 0.1 K, so the recovery the push causes does not end it. The radiator fullness cap, the overshoot trim and the return guard apply as for the other boosts; never during hot water.
+- In `active` the catch-up replaces a smaller house-demand boost; in `shadow` it is only published. Boiler data and the `warmup_boost` report have `catchup_mode`, `catchup_room`, `catchup_shortfall_k`, `catchup_need`, `catchup_uplift` and `catchup_flow`; the `warmup_boost` journal records `catchup_started` and `catchup_ended`.
+- `Controls.warmup_rooms()` rows now carry whether each room is inside its operating window.
+- Why: on 28 Oct at 20:35 the Living Room was 0.4 K below its 19.7 C air target (feels-like about 18.5 against 19.0). Evohome asked for only 23-28 %, the house demand was 0.16, so the flow stayed at its 50 C floor; the burner cycled, the flow averaged 37-39 C and an IR camera showed the K3 radiators at 28 C on top.
+
 ## 0.13.1 - hot water cutoff acts on a quiet sensor's last reading from the charge
 
 - The DHW cutoff can now stop a charge on a reading more than 10 minutes old, provided it was taken during the running charge. While the cylinder charges it only gains heat, so such a reading is a lower bound. Readings from before the charge still never count, and user boosts and overrides are still left alone while they run.

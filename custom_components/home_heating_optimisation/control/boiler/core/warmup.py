@@ -261,3 +261,80 @@ def preheat_step(
     else:
         uplift = max(target, state.uplift - params.decay_k_per_min * minutes)
     return WarmupBoostState(min(uplift, max(0.0, params.boost_max - base)), now)
+
+
+# ---------------------------------------------------------------------------
+# Catch-up: a room stuck below its target outside a planned pre-heat
+# ---------------------------------------------------------------------------
+
+# A room this far below its air target starts the clock ...
+CATCHUP_START_K = 0.3
+# ... and, once pushed, is pushed until it is this close.
+CATCHUP_END_K = 0.1
+# Shortfall that asks for the whole push.
+CATCHUP_FULL_K = 0.8
+# The shortfall must last this long without the room recovering at this rate.
+CATCHUP_SUSTAIN_S = 20 * 60
+CATCHUP_RECOVERING_K_PER_H = 0.2
+# Highest flow a catch-up asks for (below the warm-up maximum: the house is mostly warm).
+CATCHUP_MAX_FLOW = 60.0
+
+
+@dataclass(frozen=True)
+class CatchupTrack:
+    """A room below target: since when, its air then, and whether it is being pushed."""
+
+    since: datetime
+    air_since: float
+    pushing: bool = False
+
+
+def catchup_step(tracks, rooms, now: datetime) -> dict:
+    """Next per-room tracks.
+
+    ``rooms`` is ``[(name, air, air target, heat demand 0-1, in operating window)]``. A room
+    counts only while calling for heat inside its window. One at least ``CATCHUP_START_K``
+    short for ``CATCHUP_SUSTAIN_S``, and warming slower than ``CATCHUP_RECOVERING_K_PER_H``
+    since then, is pushed; a pushed room stays pushed until within ``CATCHUP_END_K``, so the
+    recovery the push causes does not end it.
+    """
+    out = {}
+    for name, air, target, demand, in_window in rooms:
+        if None in (air, target, demand) or demand <= 0 or not in_window:
+            continue
+        short = target - air
+        track = tracks.get(name)
+        if track is not None and track.pushing:
+            if short >= CATCHUP_END_K:
+                out[name] = track
+            continue
+        if short < CATCHUP_START_K:
+            continue
+        if track is None:
+            out[name] = CatchupTrack(now, air)
+            continue
+        elapsed_s = (now - track.since).total_seconds()
+        rate = (air - track.air_since) * 3600 / elapsed_s if elapsed_s > 0 else 0.0
+        pushing = elapsed_s >= CATCHUP_SUSTAIN_S and rate < CATCHUP_RECOVERING_K_PER_H
+        out[name] = CatchupTrack(track.since, track.air_since, pushing)
+    return out
+
+
+def catchup_need(tracks, rooms, base, ceiling):
+    """``(uplift K, room, shortfall K)`` for the pushed room furthest below target.
+
+    The uplift runs from nothing at ``CATCHUP_END_K`` short to ``ceiling - base`` at
+    ``CATCHUP_FULL_K``. ``(0.0, None, None)`` when no room is pushed.
+    """
+    worst = None
+    for name, air, target, *_ in rooms:
+        track = tracks.get(name)
+        if track is None or not track.pushing or None in (air, target):
+            continue
+        if worst is None or target - air > worst[1]:
+            worst = (name, target - air)
+    if worst is None:
+        return 0.0, None, None
+    span = CATCHUP_FULL_K - CATCHUP_END_K
+    share = min(1.0, max(0.0, (worst[1] - CATCHUP_END_K) / span))
+    return max(0.0, ceiling - base) * share, worst[0], worst[1]

@@ -166,7 +166,13 @@ def test_trimmed_uplift_still_falls_at_the_decay_rate():
 
 def test_config_defaults_and_validation():
     cfg = warmup_config({})
-    assert cfg == {"mode": "off", "start": 0.15, "full": 0.40, "decay_k_per_min": 1.0}
+    assert cfg == {
+        "mode": "off",
+        "catchup_mode": "off",
+        "start": 0.15,
+        "full": 0.40,
+        "decay_k_per_min": 1.0,
+    }
     assert warmup_config({"warmup_boost": {"mode": "bogus", "start": 9}})["mode"] == "off"
     assert validation_error(cfg) is None
     assert validation_error({**cfg, "mode": "x"}) == "warmup_boost_invalid"
