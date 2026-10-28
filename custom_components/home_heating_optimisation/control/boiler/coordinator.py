@@ -139,10 +139,13 @@ from .core.policy import (
     zone_max_demand,
 )
 from .core.warmup import (
+    CATCHUP_MAX_FLOW,
     FullnessState,
     WarmupBoostParams,
     WarmupBoostState,
     boost_step,
+    catchup_need,
+    catchup_step,
     fullness,
     fullness_cap,
     fullness_step,
@@ -237,6 +240,14 @@ class BFCCoordinatorData:
     preheat_uplift: float = 0.0
     preheat_flow: float | None = None
     preheat_rooms: int = 0
+    # Catch-up: a room stuck below target outside a pre-heat (`warmup_boost.catchup_mode`).
+    # In shadow they are what active would do.
+    catchup_mode: str = "off"
+    catchup_room: str | None = None
+    catchup_shortfall_k: float | None = None
+    catchup_need: float | None = None
+    catchup_uplift: float = 0.0
+    catchup_flow: float | None = None
     # DHW anti-cycle override: disabled / normal / dhw / restoring / failed, the burn
     # minimum put back afterwards, and the DHW flow source (normal or hot_cylinder).
     dhw_anticycle_state: str = "disabled"
@@ -309,6 +320,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._ac_next_try: datetime | None = None
         self._fullness = FullnessState()
         self._preheat_state = WarmupBoostState()
+        self._catchup_state = WarmupBoostState()
+        self._catchup_tracks: dict = {}
         self._warmup_on = False
         self._warmup_journaled = 0.0
         # Overshoot of each room when the current boost began (memory only).
@@ -703,12 +716,14 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         """
         cfg = self._warmup_config()
         mode = d.warmup_mode = cfg["mode"]
+        catch_mode = d.catchup_mode = cfg.get("catchup_mode", "off")
         pre_mode = d.preheat_mode = self._preheat_config()["mode"]
         heating = base is not None and physical_mode is Mode.HEATING
         rooms = []
         hot = []
+        catch_rooms = []
         if heating:
-            for entity, output, enabled, name, air, target in self._warmup_rooms():
+            for entity, output, enabled, name, air, target, *window in self._warmup_rooms():
                 if not enabled:
                     continue
                 value = self._float_state(
@@ -716,11 +731,12 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 )
                 value = value if value is not None and 0 <= value <= 1 else None
                 hot.append((name, air, target, value))
+                catch_rooms.append((name, air, target, value, window[0] if window else True))
                 rooms.append((value, output))
         else:
             # Radiators cool while the boiler does something else: start the filter afresh.
             self._fullness = FullnessState()
-        if not heating or (mode == "off" and pre_mode == "off"):
+        if not heating or (mode == "off" and pre_mode == "off" and catch_mode == "off"):
             if self._warmup_on:
                 self._warmup_journal("ended", d)
             self._warmup_state, self._warmup_on, self._warmup_journaled = (
@@ -729,6 +745,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 0.0,
             )
             self._preheat_state = WarmupBoostState()
+            self._catchup_state, self._catchup_tracks = WarmupBoostState(), {}
             self._warmup_baselines = {}
             self._warmup_hold = False
             if heating:
@@ -802,9 +819,15 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                     previous, house.fraction if house else None, base, now, params, scale, trim
                 )
             else:
-                # Only pre-heat is on and no room is warming: fall away at the decay rate.
+                # Only pre-heat (or catch-up) is on and no room is warming: fall away at the
+                # decay rate.
                 state = preheat_step(previous, 0.0, base, now, params)
                 applied = pre_mode == "active"
+        catch = self._catchup(d, now, catch_rooms, pre_driving, base, curve_params, params, trim)
+        if catch_mode == "active" and catch.uplift > 0 and not pre_driving:
+            # A room stuck below target outranks a smaller (or only shadowed) house boost.
+            if not applied or catch.uplift > state.uplift:
+                state, applied = catch, True
         self._warmup_state = state
         d.house_demand = None if house is None else round(house.fraction, 3)
         d.room_equivalents = None if house is None else round(house.room_equivalents, 2)
@@ -841,6 +864,37 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._warmup_journaled = d.warmup_boost
             self._warmup_journal("updated", d, routine=True)
         return state.uplift if applied else 0.0
+
+    def _catchup(self, d, now, rooms, pre_driving, base, curve_params, params, trim):
+        """Track rooms stuck below target and publish the catch-up; returns its state.
+
+        Not while a planned pre-heat drives the flow. The uplift is capped by radiator
+        fullness, faded by the overshoot trim and the return guard, and rises at most
+        ``rise_k_per_min``.
+        """
+        if d.catchup_mode == "off" or pre_driving or d.dhw_active:
+            self._catchup_tracks = {}
+        else:
+            self._catchup_tracks = catchup_step(self._catchup_tracks, rooms, now)
+        ceiling = min(curve_params.flow_max, CATCHUP_MAX_FLOW)
+        need, room, short = catchup_need(self._catchup_tracks, rooms, base, ceiling)
+        guard = return_scale(self._return_filtered, self._return_params().return_ceiling, params)
+        cap = fullness_cap(
+            self._fullness.value, base, params.boost_max, params.fullness_low, params.fullness_high
+        )
+        wanted = min(need, cap) * trim * guard
+        was_pushing = d.catchup_mode != "off" and self._catchup_state.uplift > 0
+        self._catchup_state = preheat_step(self._catchup_state, wanted, base, now, params)
+        d.catchup_room = room
+        d.catchup_shortfall_k = None if short is None else round(short, 2)
+        d.catchup_need = round(need, 2)
+        d.catchup_uplift = round(self._catchup_state.uplift, 2)
+        d.catchup_flow = round(min(curve_params.flow_max, base + self._catchup_state.uplift), 1)
+        if room is not None and not was_pushing and self._catchup_state.uplift > 0:
+            self._warmup_journal("catchup_started", d)
+        elif was_pushing and self._catchup_state.uplift <= 0:
+            self._warmup_journal("catchup_ended", d)
+        return self._catchup_state
 
     def _publish_fullness(self, d, now, hot):
         """Update and publish the filtered radiator fullness; returns it (None if unknown).
@@ -885,6 +939,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 "fullness_cap": d.fullness_cap,
                 "radiator_fullness": d.radiator_fullness,
                 "preheat_uplift": d.preheat_uplift,
+                "catchup_mode": d.catchup_mode,
+                "catchup_room": d.catchup_room,
+                "catchup_shortfall_k": d.catchup_shortfall_k,
+                "catchup_need": d.catchup_need,
+                "catchup_uplift": d.catchup_uplift,
             },
             routine=routine,
         )
@@ -906,6 +965,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             "preheat_uplift": data.preheat_uplift if data else 0.0,
             "radiator_fullness": data.radiator_fullness if data else None,
             "peak_overshoot_today": stats["peak_overshoot"],
+            "catchup_mode": self._warmup_config().get("catchup_mode", "off"),
+            "catchup_room": data.catchup_room if data else None,
+            "catchup_shortfall_k": data.catchup_shortfall_k if data else None,
+            "catchup_uplift": data.catchup_uplift if data else 0.0,
+            "catchup_flow": data.catchup_flow if data else None,
         }
 
     # ------------------------------------------------------------------

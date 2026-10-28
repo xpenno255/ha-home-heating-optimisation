@@ -554,7 +554,8 @@ class Controls:
         return found
 
     def warmup_rooms(self):
-        """``[(climate, output W, enabled, name, air temp, air target)]`` for the warm-up boost."""
+        """``[(climate, output W, enabled, name, air temp, air target, in window)]`` for the
+        warm-up boost and catch-up."""
         return [
             (
                 c._config.get("primary_climate"),
@@ -567,6 +568,7 @@ class Controls:
                     if c.data and c.data.preheating
                     else (c.data.air_setpoint if c.data else None)
                 ),
+                bool(c.data and c.data.time_window_active),
             )
             for c in self.rooms.values()
         ]

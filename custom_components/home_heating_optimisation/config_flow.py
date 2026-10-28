@@ -999,7 +999,14 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                     translation_key="warmup_boost_mode",
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
-            )
+            ),
+            vol.Required("catchup_mode", default=old["catchup_mode"]): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["off", "shadow", "active"],
+                    translation_key="warmup_boost_mode",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
         }
         for key, (low, high) in WARMUP_LIMITS.items():
             schema[vol.Required(key, default=old[key])] = vol.All(
