@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.13.1 - hot water cutoff acts on a quiet sensor's last reading from the charge
+
+- The DHW cutoff can now stop a charge on a reading more than 10 minutes old, provided it was taken during the running charge. While the cylinder charges it only gains heat, so such a reading is a lower bound. Readings from before the charge still never count, and user boosts and overrides are still left alone while they run.
+- Why: on 28 Oct the Peloton automation boosted hot water for an hour from 17:51. The cylinder sensor reported 51.8 C at 18:20, then nothing until 60.75 C at 19:19; the controller's own copy had stuck at 46.2 C, so it charged on until about 19:01. When the boost ended at 18:51 the cutoff (51 C) ignored the 31-minute-old 51.8 reading. It would now have stopped the charge at 18:51.
+
 ## 0.13.0 - visitor mode for hot water
 
 - New `switch.home_heating_optimisation_visitor_mode` and `datetime.home_heating_optimisation_visitor_mode_until` (present with the DHW target schedule; the switch is unavailable unless the schedule is enabled and configured). While on, the stored hot water target is held at the schedule's higher target (60 C); when switched off, or once the optional end time passes, it goes back to the normal target (50 C) and the end time is cleared. Setting an end time does not switch it on; an end time already past is dropped when it is switched on.
