@@ -36,8 +36,8 @@ HOLD = timedelta(minutes=60)
 # MAX_HOLD in total. The cylinder can take hours to cool to the reheat point.
 RENEW_BEFORE = timedelta(minutes=5)
 MAX_HOLD = timedelta(hours=4)
-# The sensor reports every minute or two while the cylinder heats; an older reading
-# never stops a charge.
+# The sensor reports every minute or two while the cylinder heats. An older reading
+# stops a charge only if it was taken during that charge (see `charge_temperature`).
 READING_MAX_AGE = timedelta(minutes=10)
 # Time for the controller to echo the override before it is sent once more.
 CONFIRM = timedelta(minutes=3)
@@ -78,10 +78,27 @@ def usable(cfg):
 
 def recent_temperature(state, now):
     """A plausible °C reading reported within READING_MAX_AGE, else None."""
+    return _reading(state, now - READING_MAX_AGE, now)
+
+
+def charge_temperature(state, now, charge_since):
+    """A recent reading, or failing that one taken since the running charge began.
+
+    While the cylinder charges it only gains heat, so a reading from this charge is a
+    lower bound even after the sensor goes quiet. Live 28 Oct: it reported 51.8 °C at
+    18:20, then nothing until 60.75 °C at 19:19, and the controller charged on.
+    """
+    if (value := recent_temperature(state, now)) is not None or charge_since is None:
+        return value
+    return _reading(state, charge_since, now)
+
+
+def _reading(state, earliest, now):
+    """A plausible °C reading reported between `earliest` and `now`, else None."""
     if state is None or state.state in ("unavailable", "unknown", "none", ""):
         return None
     seen = getattr(state, "last_reported", None) or state.last_updated
-    if not timedelta(0) <= now - seen <= READING_MAX_AGE:
+    if not earliest <= seen <= now:
         return None
     try:
         value = float(state.state)

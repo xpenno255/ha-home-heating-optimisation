@@ -9,6 +9,7 @@ from homeassistant.util import dt as dt_util
 from custom_components.home_heating_optimisation.const import DOMAIN, effective_config
 from custom_components.home_heating_optimisation.control.migration import handover
 from custom_components.home_heating_optimisation.dhw.cutoff_policy import (
+    charge_temperature,
     cloud_override,
     cutoff_config,
     is_hold,
@@ -134,6 +135,17 @@ def test_stale_reading_is_never_used(hass):
     assert (
         recent_temperature(hass.states.get("sensor.cylinder"), now + timedelta(minutes=11)) is None
     )
+
+
+def test_old_reading_counts_only_if_taken_during_the_charge(hass):
+    hass.states.async_set("sensor.cylinder", 51.8, {"unit_of_measurement": "°C"})
+    state = hass.states.get("sensor.cylinder")
+    seen = dt_util.utcnow()
+    later = seen + timedelta(minutes=31)
+    assert charge_temperature(state, later, seen - timedelta(minutes=28)) == 51.8
+    assert charge_temperature(state, later, seen + timedelta(seconds=1)) is None
+    assert charge_temperature(state, later, None) is None
+    assert charge_temperature(state, seen, None) == 51.8
 
 
 def test_config_defaults_and_validation():
@@ -390,3 +402,53 @@ async def test_unavailable_cloud_entity_falls_back_to_ramses_mode(
     cylinder(hass, 52.0)
     await tick(hass, freezer, cutoff)
     assert len(calls) == 1
+
+
+async def test_quiet_sensor_after_a_boost_still_stops_the_charge(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    # Live 28 Oct: a one-hour boost; the sensor went quiet at 51.8 °C halfway through
+    # and the controller, still believing 46 °C, charged on after the boost ended.
+    entry, cutoff, calls = await begin(hass, controlled)
+    heater(hass, {"mode": "permanent_override", "active": True, "until": None})
+    hass.states.async_set("sensor.hw", 100)
+    cylinder(hass, 42.0)
+    await tick(hass, freezer, cutoff)
+    cylinder(hass, 51.8)
+    await tick(hass, freezer, cutoff, minutes=28)
+    assert calls == []
+    freezer.tick(timedelta(minutes=31))
+    heater(hass)
+    hass.states.async_set("sensor.hw", 100, force_update=True)
+    await tick(hass, freezer, cutoff)
+    assert calls == [
+        {
+            "entity_id": WH,
+            "mode": "temporary_override",
+            "active": False,
+            "duration": {"minutes": 60},
+        }
+    ]
+    stop = entry.runtime_data.journal.events(kinds=["dhw_cutoff"])[-1]["data"]
+    assert stop["event"] == "stop" and stop["measured"] == 51.8
+
+
+async def test_reading_from_before_the_charge_never_stops_it(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    _, cutoff, calls = await begin(hass, controlled)
+    hass.states.async_set("sensor.hw", 0)
+    cylinder(hass, 55.0)
+    await tick(hass, freezer, cutoff)
+    # Hot water drawn off unseen, then a charge starts with the sensor quiet.
+    freezer.tick(timedelta(minutes=40))
+    hass.states.async_set("sensor.hw", 100)
+    await tick(hass, freezer, cutoff)
+    await tick(hass, freezer, cutoff, minutes=5)
+    assert calls == []

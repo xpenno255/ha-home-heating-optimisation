@@ -4,8 +4,8 @@ Only ``ramses_cc.set_dhw_mode`` is used: a 60-minute temporary override with DHW
 off, and ``follow_schedule`` to hand back early. The controller ends the override
 on its own, so HA stopping or restarting can never leave DHW off for longer. Nothing
 is sent unless the water heater follows its schedule, a charge is running and a
-recent reading is at or above target plus margin; user boosts and overrides are
-left alone.
+recent reading, or any taken during the charge, is at or above target plus margin;
+user boosts and overrides are left alone.
 """
 
 import asyncio
@@ -22,6 +22,7 @@ from .cutoff_policy import (
     MAX_ATTEMPTS,
     MAX_HOLD,
     RENEW_BEFORE,
+    charge_temperature,
     cloud_override,
     cutoff_config,
     cutoff_temperature,
@@ -58,6 +59,8 @@ class DhwCutoff:
         self.standby_reason = None
         # A stop the controller never echoed is not retried until this charge ends.
         self.gave_up = False
+        # When this integration first saw the running charge (None between charges).
+        self.charge_since = None
         self._unsub = []
         self._task = None
         self._lock = asyncio.Lock()
@@ -107,11 +110,15 @@ class DhwCutoff:
         heater = self.hass.states.get(cfg["water_heater_entity"])
         params = read_params(heater)
         mode = heater.attributes.get("mode") if heater is not None else None
-        temperature = recent_temperature(self.hass.states.get(cfg["cylinder_temp_entity"]), now)
+        cylinder = self.hass.states.get(cfg["cylinder_temp_entity"])
+        temperature = recent_temperature(cylinder, now)
         demand = demand_value(self.hass.states.get(cfg["demand_entity"]), now)
 
         if demand is False:
             self.gave_up = False
+            self.charge_since = None
+        elif demand is True and self.charge_since is None:
+            self.charge_since = now
         if self.hold_until is not None and now >= self.hold_until:
             self._clear()
         if self.hold_until is not None:
@@ -128,9 +135,10 @@ class DhwCutoff:
             self.standby_reason = reason
             return
         self.standby_reason = None
-        if not self.gave_up and should_stop(demand, temperature, params, cfg["margin"]):
+        measured = charge_temperature(cylinder, now, self.charge_since)
+        if not self.gave_up and should_stop(demand, measured, params, cfg["margin"]):
             self.attempts = 0
-            await self._hold(now, temperature, params)
+            await self._hold(now, measured, params)
 
     async def _held(self, now, mode, temperature, params):
         if is_hold(mode):
