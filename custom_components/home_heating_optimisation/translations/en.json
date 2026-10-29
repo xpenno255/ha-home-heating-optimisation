@@ -368,11 +368,12 @@
       },
       "dhw_boiler": {
         "title": "Boiler during hot water charges",
-        "description": "Two optional aids, both off until set. The anti-cycle override lowers the boiler's own minimum burn period while a hot water charge runs and puts the normal value back afterwards, so a long 60 \u00b0C session is not broken up by 15-minute waits. The hot-cylinder flow raises the DHW flow target once the cylinder is warm or a raised DHW session is running; it is still limited by the DHW maximum and the boiler's own limit. Check your coil rating before using a high flow. Does not reset any controller.",
+        "description": "Two optional aids, both off until set. The anti-cycle override lowers the boiler's own minimum burn period while a hot water charge runs and puts the normal value back afterwards, so a long 60 \u00b0C session is not broken up by 15-minute waits. It can also lower it while a room is in catch-up (warm-up flow boost options): on a mild day the boiler reaches its flow target within a minute at its lowest output and the burn period then blocks every other Evohome call. The hot-cylinder flow raises the DHW flow target once the cylinder is warm or a raised DHW session is running; it is still limited by the DHW maximum and the boiler's own limit. Check your coil rating before using a high flow. Does not reset any controller.",
         "data": {
           "anticycle_enabled": "Lower the minimum burn period during hot water charges",
           "anticycle_entity": "Minimum burn period entity",
           "anticycle_minutes": "Minimum burn period during a charge (minutes, 0-15)",
+          "catchup_minutes": "Minimum burn period while a room is in catch-up (minutes, 0-15, leave empty to turn off)",
           "hot_flow": "Hot-cylinder DHW flow (\u00b0C, 70-85, leave empty to turn off)",
           "hot_threshold": "Cylinder temperature that counts as hot (\u00b0C)"
         },

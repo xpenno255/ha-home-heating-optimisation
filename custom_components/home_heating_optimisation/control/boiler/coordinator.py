@@ -248,7 +248,7 @@ class BFCCoordinatorData:
     catchup_need: float | None = None
     catchup_uplift: float = 0.0
     catchup_flow: float | None = None
-    # DHW anti-cycle override: disabled / normal / dhw / restoring / failed, the burn
+    # Anti-cycle override: disabled / normal / dhw / catchup / restoring / failed, the burn
     # minimum put back afterwards, and the DHW flow source (normal or hot_cylinder).
     dhw_anticycle_state: str = "disabled"
     dhw_anticycle_normal: float | None = None
@@ -311,6 +311,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._dhw_elevated = dhw_elevated or (lambda: False)
         # DHW anti-cycle override (runtime; the remembered value is persisted in the store).
         self._ac_state = "disabled"
+        self._ac_reason = None
         self._ac_first = True
         self._ac_off_since: datetime | None = None
         self._ac_expected: float | None = None
@@ -563,7 +564,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
     def _ac_journal(self, event, data=None):
         self._journal("dhw_anticycle", {"event": event, "outcome": event, **(data or {})})
 
-    async def _ac_write(self, entity, value, now, event) -> bool:
+    async def _ac_write(self, entity, value, now, event, reason=None) -> bool:
         """One ``number.set_value``; records what is expected back. False when not sent."""
         if not self._write_guard():
             self._ac_journal("blocked", {"entity": entity, "value": value, "action": event})
@@ -579,25 +580,37 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             )
             return False
         self._ac_expected, self._ac_written_at = value, now
-        self._ac_journal(event, {"entity": entity, "value": value})
+        self._ac_journal(
+            event, {"entity": entity, "value": value, **({"reason": reason} if reason else {})}
+        )
         return True
 
     async def _dhw_anticycle(self, d, now) -> None:
-        """Lower the boiler's minimum burn period for a hot water charge, then put it back.
+        """Lower the boiler's minimum burn period for a hot water charge or a room catch-up,
+        then put it back.
 
         The remembered normal value and a pending-restore flag are persisted, so a restart
-        in the middle of a charge still restores it. Restoring needs only the write guard;
-        starting needs the boiler in auto as well.
+        in the middle of either still restores it. Restoring needs only the write guard;
+        lowering needs the boiler in auto as well. It is only ever lowered, never raised
+        above the normal value.
         """
         cfg = self._dhw_boiler_config()
         store = self._store
         pending = bool(store.get("anticycle_pending"))
-        enabled = bool(cfg["anticycle_enabled"] and cfg["anticycle_entity"])
+        dhw_on = cfg["anticycle_enabled"]
+        catchup_on = cfg["catchup_minutes"] is not None
+        enabled = bool((dhw_on or catchup_on) and cfg["anticycle_entity"])
         entity = cfg["anticycle_entity"] if enabled else store.get("anticycle_entity")
         first, self._ac_first = self._ac_first, False
-        value = float(cfg["anticycle_minutes"])
+        want, reason = None, None
+        if enabled and d.dhw_active and dhw_on:
+            want, reason = float(cfg["anticycle_minutes"]), "dhw"
+        elif enabled and catchup_on and d.catchup_mode == "active" and d.catchup_uplift > 0:
+            want, reason = float(cfg["catchup_minutes"]), "catchup"
         d.dhw_anticycle_normal = store.get("anticycle_normal")
-        d.dhw_anticycle_value = value if enabled else None
+        d.dhw_anticycle_value = (
+            want if want is not None else float(cfg["anticycle_minutes"]) if dhw_on else None
+        )
         if not enabled and not pending:
             self._ac_state = d.dhw_anticycle_state = "disabled"
             return
@@ -621,26 +634,32 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                     self._ac_expected, self._ac_state = None, "failed"
                     self._ac_next_try = now + timedelta(minutes=10)
         waiting = self._ac_next_try is not None and now < self._ac_next_try
-        if d.dhw_active:
+        if want is not None:
             self._ac_off_since = None
-            if enabled and not pending and self._ac_expected is None and not waiting:
-                if (
-                    self._enabled
-                    and self._override == OVERRIDE_AUTO
-                    and current is not None
-                    and abs(current - value) > 0.01
-                ):
+            normal = store.get("anticycle_normal") if pending else current
+            target = want if normal is None else min(want, normal)
+            if (
+                self._ac_expected is None
+                and not waiting
+                and self._enabled
+                and self._override == OVERRIDE_AUTO
+                and current is not None
+                and abs(current - target) > 0.01
+            ):
+                if not pending:
                     store.set("anticycle_normal", current)
                     store.set("anticycle_entity", entity)
                     store.set("anticycle_pending", True)
                     await store.async_save()
-                    self._ac_retried = self._ac_restoring = False
-                    if await self._ac_write(entity, value, now, "set"):
-                        self._ac_state = "dhw"
-                    else:
-                        self._ac_next_try = now + timedelta(minutes=10)
+                    pending = True
+                # Also moves between the charge and catch-up values without a restore.
+                self._ac_retried = self._ac_restoring = False
+                if await self._ac_write(entity, target, now, "set", reason):
+                    self._ac_state = reason
+                else:
+                    self._ac_next_try = now + timedelta(minutes=10)
             if self._ac_state != "failed" and (pending or store.get("anticycle_pending")):
-                self._ac_state = "dhw"
+                self._ac_state = self._ac_reason = reason
         elif pending:
             if self._ac_off_since is None:
                 self._ac_off_since = now
@@ -665,10 +684,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                         self._ac_state = "failed"
                         self._ac_next_try = now + timedelta(minutes=10)
             elif self._ac_state not in ("failed", "restoring"):
-                self._ac_state = "dhw"
+                self._ac_state = self._ac_reason or "dhw"
         else:
-            # Outside a charge the entity's value is the normal one, even when the user
-            # changes it, unless a write of ours is still being confirmed.
+            # Outside a charge or catch-up the entity's value is the normal one, even when
+            # the user changes it, unless a write of ours is still being confirmed.
             if self._ac_state != "failed" or not waiting:
                 self._ac_state = "normal"
             if (

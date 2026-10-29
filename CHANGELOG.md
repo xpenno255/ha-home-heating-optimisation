@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.16.0 - shorter burn lock while a room catches up
+
+- New option `catchup_minutes` in **Boiler during hot water charges** (`dhw_boiler`, 0-15 minutes, empty = off): while catch-up is active and pushing (`warmup_boost.catchup_mode` active, catch-up uplift above zero), the boiler's minimum burn period entity (`anticycle_entity`) is lowered to this value, and put back 2 minutes after the catch-up ends. Uses the hot water anti-cycle override's remembered normal value, pending-restore flag, confirmation and retry. It is only ever lowered, never raised above the normal value; a hot water charge takes its own value, and the two switch without a restore in between. Works without the hot water override being enabled.
+- `dhw_anticycle_state` gains `catchup`; `dhw_anticycle` journal `set` events carry `reason` (`dhw` or `catchup`).
+- Why: on 29 Oct (13-14 C outside) the Living Room sat 0.4-0.5 K below target all afternoon while catch-up was raising the flow. From 12:00 to 17:00 the boiler fired for only 16 minutes: 1-minute burns exactly every 20 minutes, because it reached its flow target within a minute at its lowest output and the 15-minute burn period then blocked every other Evohome call (28 Oct: 47 minutes, 26 Oct: 74 minutes).
+
 ## 0.15.0 - sensor matching: write the zone target in the zone sensor's terms
 
 - New per-room switch **`<room> control sensor match enabled`** (off by default, kept across restarts). HHO's air target is in the room sensor's terms, but Evohome drives the valve from its own zone sensor. With matching on, the target written to the zone is the air target less the gap between the two sensors, so the zone sensor aims at what the room sensor should then read.
