@@ -10,6 +10,12 @@ from custom_components.home_heating_optimisation.control.boiler.core.warmup impo
     catchup_need,
     catchup_step,
 )
+from custom_components.home_heating_optimisation.control.boiler.dhw_policy import (
+    dhw_boiler_config,
+)
+from custom_components.home_heating_optimisation.control.boiler.dhw_policy import (
+    validation_error as dhw_validation_error,
+)
 from custom_components.home_heating_optimisation.control.boiler.warmup_policy import (
     validation_error,
     warmup_config,
@@ -138,3 +144,99 @@ async def test_shadow_catchup_only_publishes(hass, controlled, sources, freezer)
     assert data.catchup_uplift > 0 and data.catchup_room == "Living Room"
     assert data.warmup_boost == 0.0
     assert data.requested_target < data.catchup_flow - 1
+
+
+# -- burn period during a catch-up -----------------------------------------------
+
+BURN = "number.burn_min"
+
+
+def test_catchup_minutes_default_off_and_need_the_entity():
+    cfg = dhw_boiler_config({})
+    assert cfg["catchup_minutes"] is None
+    assert dhw_boiler_config({"dhw_boiler": {"catchup_minutes": 10}})["catchup_minutes"] == 10
+    assert dhw_boiler_config({"dhw_boiler": {"catchup_minutes": 20}})["catchup_minutes"] is None
+    assert dhw_validation_error({**cfg, "catchup_minutes": 10}) == "dhw_boiler_needs_entity"
+    assert dhw_validation_error({**cfg, "catchup_minutes": 10, "anticycle_entity": BURN}) is None
+    assert dhw_validation_error({**cfg, "catchup_minutes": 16, "anticycle_entity": BURN}) == (
+        "dhw_boiler_invalid"
+    )
+
+
+async def burn_rig(hass, controlled, freezer, catchup="active", normal=15, minutes=10):  # noqa: F811
+    hass.states.async_set(BURN, normal, {"unit_of_measurement": "min"})
+    config = with_catchup(controlled, catchup)
+    config["dhw_boiler"] = {"anticycle_entity": BURN, "catchup_minutes": minutes}
+    entry, c, calls = await start(hass, config)
+    air = {"value": 19.3}
+
+    def demand():
+        hass.states.async_set(
+            "climate.study",
+            "auto",
+            {"current_temperature": air["value"], "temperature": 19.7, "heat_demand": 0.25},
+        )
+
+    c.boiler._warmup_rooms = lambda: [
+        ("climate.study", None, True, "Living Room", air["value"], 19.7, True)
+    ]
+
+    async def tick(n=1):
+        for _ in range(n):
+            freezer.tick(timedelta(minutes=1))
+            demand()
+            await c.refresh()
+        return c.boiler.data
+
+    demand()
+    await handover(c)
+    await c.set_mode("boiler", "auto")
+    await c.refresh()
+    return entry, c, air, tick
+
+
+def burn(hass):
+    return float(hass.states.get(BURN).state)
+
+
+async def test_active_catchup_lowers_the_burn_period_then_restores_it(
+    hass,
+    controlled,
+    sources,
+    freezer,  # noqa: F811
+):
+    entry, c, air, tick = await burn_rig(hass, controlled, freezer)
+    data = await tick(5)
+    assert data.catchup_uplift == 0.0 and burn(hass) == 15
+    assert data.dhw_anticycle_state == "normal"
+    data = await tick(20)
+    assert data.catchup_uplift > 0 and burn(hass) == 10
+    assert data.dhw_anticycle_state == "catchup" and data.dhw_anticycle_normal == 15
+    assert c.boiler._store.get("anticycle_pending") is True
+    # The room recovers: the uplift falls away, then the period goes back after 2 minutes.
+    air["value"] = 19.7
+    for _ in range(15):
+        data = await tick()
+        if burn(hass) == 15:
+            break
+    assert burn(hass) == 15 and data.catchup_uplift == 0.0
+    data = await tick()
+    assert data.dhw_anticycle_state == "normal"
+    assert c.boiler._store.get("anticycle_pending") is False
+    events = entry.runtime_data.journal.events(kinds=["dhw_anticycle"])
+    sets = [e["data"] for e in events if e["data"]["event"] == "set"]
+    assert sets and sets[0]["reason"] == "catchup" and sets[0]["value"] == 10
+
+
+async def test_shadow_catchup_leaves_the_burn_period_alone(hass, controlled, sources, freezer):  # noqa: F811
+    _, c, _, tick = await burn_rig(hass, controlled, freezer, catchup="shadow")
+    data = await tick(25)
+    assert data.catchup_uplift > 0 and burn(hass) == 15
+    assert data.dhw_anticycle_state == "normal"
+
+
+async def test_catchup_never_raises_a_lower_normal_period(hass, controlled, sources, freezer):  # noqa: F811
+    _, c, _, tick = await burn_rig(hass, controlled, freezer, normal=8)
+    data = await tick(25)
+    assert data.catchup_uplift > 0 and burn(hass) == 8
+    assert c.boiler._store.get("anticycle_pending") is not True

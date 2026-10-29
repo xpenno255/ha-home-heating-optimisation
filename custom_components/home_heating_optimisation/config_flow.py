@@ -1040,6 +1040,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             "anticycle_entity": old["anticycle_entity"]
             or (DHW_BOILER_SUGGESTED if self.hass.states.get(DHW_BOILER_SUGGESTED) else None),
             "hot_flow": old["hot_flow"],
+            "catchup_minutes": old["catchup_minutes"],
         }
         low, high = DHW_BOILER_LIMITS["anticycle_minutes"]
         flow_low, flow_high = DHW_BOILER_LIMITS["hot_flow"]
@@ -1048,6 +1049,9 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             vol.Optional("anticycle_enabled", default=old["anticycle_enabled"]): bool,
             optional("anticycle_entity", suggested): entity_selector(("number",)),
             vol.Required("anticycle_minutes", default=old["anticycle_minutes"]): vol.All(
+                vol.Coerce(int), vol.Range(min=low, max=high)
+            ),
+            optional("catchup_minutes", suggested): vol.All(
                 vol.Coerce(int), vol.Range(min=low, max=high)
             ),
             optional("hot_flow", suggested): vol.All(
