@@ -122,6 +122,7 @@ from .core.policy import (
     ZoneState,
     decide,
 )
+from .core.sensor_match import gap_step, to_zone, zone_offset
 from .hub import OTHubData
 from .schedule_fetch import ScheduleFetcher
 from .store import OTStore
@@ -220,6 +221,12 @@ class OTCoordinatorData:
     air_temp: float | None = None
     air_temp_source: str = ""
     zone_setpoint: float | None = None
+    # The zone's own reading (what Evohome drives the valve from), the filtered gap
+    # air_temp - zone_temp, and the offset taken off written targets when matching is on.
+    zone_temp: float | None = None
+    sensor_gap_k: float | None = None
+    sensor_match: bool = False
+    sensor_offset_k: float = 0.0
     # Model
     mrt_steady_state: float | None = None
     operative_temp: float | None = None
@@ -319,6 +326,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._pending_action: Action | None = None
         self._enabled: bool = True
         self._occupancy_enabled: bool = True
+        self._sensor_match_enabled: bool = False
         self._mode: str = str(self._config.get(CONF_MODE, DEFAULT_MODE))
         self._geometry: RoomGeometry | None = None
         self._geometry_error: str | None = None
@@ -385,6 +393,14 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
     @occupancy_enabled.setter
     def occupancy_enabled(self, value: bool) -> None:
         self._occupancy_enabled = value
+
+    @property
+    def sensor_match_enabled(self) -> bool:
+        return self._sensor_match_enabled
+
+    @sensor_match_enabled.setter
+    def sensor_match_enabled(self, value: bool) -> None:
+        self._sensor_match_enabled = value
 
     @property
     def mode(self) -> str:
@@ -709,6 +725,22 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     else None
                 )
         return None
+
+    def _sensor_gap(self, d: OTCoordinatorData, now: datetime) -> float | None:
+        """Filtered ``air_temp - zone_temp``, kept across restarts; 0 when they are one sensor."""
+        if d.air_temp_source.startswith(f"{self._config.get(CONF_PRIMARY_CLIMATE)}."):
+            return 0.0
+        previous = self._store.get("sensor_gap")
+        at = dt_util.parse_datetime(str(self._store.get("sensor_gap_at") or ""))
+        if d.air_temp is None or d.zone_temp is None:
+            return None if previous is None else round(float(previous), 2)
+        elapsed_h = (now - at).total_seconds() / 3600 if at is not None else 0.0
+        gap = gap_step(
+            None if previous is None else float(previous), d.air_temp - d.zone_temp, elapsed_h
+        )
+        self._store.set("sensor_gap", gap)
+        self._store.set("sensor_gap_at", now.isoformat())
+        return round(gap, 2)
 
     def _air_temperature(
         self, geometry: RoomGeometry | None, fallbacks: list[str]
@@ -1537,6 +1569,12 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             if env.t_out_opaque is not None:
                 d.outdoor_opaque = round(env.t_out_opaque, 2)
         d.air_temp, d.air_temp_source = self._air_temperature(geometry, fallbacks)
+        d.zone_temp = self._temperature_attr(
+            self._config.get(CONF_PRIMARY_CLIMATE), "current_temperature"
+        )
+        d.sensor_gap_k = self._sensor_gap(d, now)
+        d.sensor_match = self._sensor_match_enabled
+        d.sensor_offset_k = zone_offset(d.sensor_gap_k) if d.sensor_match else 0.0
 
         hub_cfg = self._hub_config()
         if zone.schedule_setpoint is not None:
@@ -1605,13 +1643,17 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             holiday_mode=self._is_on(ENTITY_HOLIDAY_MODE) is True,
             within_time_window=d.time_window_active,
             shadow_mode=self._mode != MODE_ACTIVE,
-            computed_setpoint=d.air_setpoint,
+            computed_setpoint=to_zone(d.air_setpoint, d.sensor_offset_k),
             zone=zone,
             memory=self._memory(),
             any_window_open=self._any_on(window_ids),
             command_reverted=self._command_reverted,
             retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
-            preheat_setpoint=preheat_goal if preheat_now and preheat_mode == "active" else None,
+            preheat_setpoint=(
+                to_zone(preheat_goal, d.sensor_offset_k)
+                if preheat_now and preheat_mode == "active"
+                else None
+            ),
             params=self._policy_params(),
         )
         restored = self._restore_complete and hub_data is not None and hub_data.restore_complete
@@ -1656,6 +1698,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     "bounds": list(self._zone_setpoint_bounds()),
                     "schedule_setpoint": zone.schedule_setpoint,
                     "air_setpoint": d.air_setpoint,
+                    "sensor_offset_k": d.sensor_offset_k,
                     "target_ot": d.target_ot,
                     "air_temp": d.air_temp,
                     "outcome": "shadow"

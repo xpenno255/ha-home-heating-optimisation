@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.15.0 - sensor matching: write the zone target in the zone sensor's terms
+
+- New per-room switch **`<room> control sensor match enabled`** (off by default, kept across restarts). HHO's air target is in the room sensor's terms, but Evohome drives the valve from its own zone sensor. With matching on, the target written to the zone is the air target less the gap between the two sensors, so the zone sensor aims at what the room sensor should then read.
+- The gap (`air_temp - zone_temp`) is filtered with a 2-hour time constant and kept across restarts; the offset is capped at +/-1.5 K and set in 0.1 K steps. Rooms whose air sensor is the zone's own reading have no gap. Pre-heat targets are matched the same way. The boiler side, pre-heat tracking and catch-up still judge rooms in room-sensor terms.
+- Room data has `zone_temp`, `sensor_gap_k`, `sensor_match` and `sensor_offset_k`; `decision` journal events carry `sensor_offset_k`. The Evohome display shows the matched target, not the room-sensor one.
+- Why: on 28-29 Oct the Hall's Evohome sensor (the HR92 low by the front door) read 0.5 K below the room's H5075 while heating, so the valve stayed at 60-75 % all day with the room about 0.5 K over target. The Bedroom (+0.8 K) and Utility (+0.7 K) show the same pattern; the Spare Room's runs the other way (-0.3 K).
+
 ## 0.14.0 - catch-up: a room stuck below target raises the flow
 
 - New option **Catch-up for a room stuck below target** (`warmup_boost.catchup_mode`, off / shadow / active, default off; in the warm-up boost options, independent of the boost mode).
