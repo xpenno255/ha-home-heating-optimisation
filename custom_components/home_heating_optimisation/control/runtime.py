@@ -382,7 +382,7 @@ class Controls:
             if unsub:
                 self.entry.async_on_unload(unsub)
         for scope, c in [("boiler", self.boiler), *self.rooms.items()]:
-            for key in ("enabled", "occupancy_enabled"):
+            for key in ("enabled", "occupancy_enabled", "sensor_match_enabled"):
                 value = self.settings.get("flags", {}).get(f"{scope}:{key}")
                 if value is not None and hasattr(c, key):
                     setattr(c, key, value)

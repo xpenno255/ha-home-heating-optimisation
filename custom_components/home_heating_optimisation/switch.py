@@ -1,4 +1,4 @@
-"""Persistent per-module enable and room occupancy settings."""
+"""Persistent per-module enable, room occupancy and sensor-match settings."""
 
 from homeassistant.components.switch import SwitchEntity
 
@@ -19,7 +19,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
             [
                 ControlSwitch(c, scope, key)
                 for scope in ["boiler", *c.rooms]
-                for key in (["enabled"] if scope == "boiler" else ["enabled", "occupancy_enabled"])
+                for key in (
+                    ["enabled"]
+                    if scope == "boiler"
+                    else ["enabled", "occupancy_enabled", "sensor_match_enabled"]
+                )
             ]
         )
 
