@@ -11,8 +11,11 @@ DEFAULTS = {
     "start": 0.15,
     "full": 0.40,
     "decay_k_per_min": 1.0,
+    # Kelvin added to a caught-up room's written zone target; None leaves targets alone.
+    "catchup_overdrive_k": None,
 }
 LIMITS = {"start": (0.05, 0.6), "full": (0.06, 1.0), "decay_k_per_min": (0.2, 5.0)}
+OVERDRIVE_LIMITS = (0.2, 2.0)
 
 
 def warmup_config(config):
@@ -32,7 +35,17 @@ def warmup_config(config):
         out[key] = value
     if out["full"] <= out["start"]:
         out["start"], out["full"] = DEFAULTS["start"], DEFAULTS["full"]
+    out["catchup_overdrive_k"] = _overdrive(out["catchup_overdrive_k"])
     return out
+
+
+def _overdrive(value):
+    try:
+        value = float(value)
+    except TypeError, ValueError:
+        return None
+    low, high = OVERDRIVE_LIMITS
+    return round(value, 1) if math.isfinite(value) and low <= value <= high else None
 
 
 def validation_error(values):
@@ -48,5 +61,8 @@ def validation_error(values):
         ):
             return "warmup_boost_invalid"
     if values["full"] <= values["start"]:
+        return "warmup_boost_invalid"
+    overdrive = values.get("catchup_overdrive_k")
+    if overdrive is not None and _overdrive(overdrive) is None:
         return "warmup_boost_invalid"
     return None

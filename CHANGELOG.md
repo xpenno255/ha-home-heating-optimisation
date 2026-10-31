@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.17.0 - catch-up overdrive: push the stuck room's thermostat, not just the flow
+
+- New option `catchup_overdrive_k` in **Warm-up flow boost** (`warmup_boost`, 0.2-2 K, empty = off). While catch-up is active and pushing a room, the target HHO writes to that room's zone is raised by this much, so its thermostat opens the radiator valve further and Evohome calls the boiler for longer. The room is still judged against its normal air target, so the push, and the overdrive, end once it is within 0.1 K. Applied on top of sensor matching; manual holds, open windows and pre-heat still take precedence. Shadow catch-up never overdrives.
+- Room data `catchup_overdrive_k`; the room's reason gains "catch-up overdrive +N"; `decision` journal events carry `catchup_overdrive_k`.
+- Why: on 31 Oct, after the pre-heat, rooms slid 0.4-0.7 K below target. Evohome's heating call was only 11-20 % (the zone valve open about 1-2 minutes in 10) and each burn lasted 40-60 s, because so little water moved that the flow reached its target almost at once. A shorter burn lock (0.16.0) cannot help when the call itself is that short.
+
 ## 0.16.0 - shorter burn lock while a room catches up
 
 - New option `catchup_minutes` in **Boiler during hot water charges** (`dhw_boiler`, 0-15 minutes, empty = off): while catch-up is active and pushing (`warmup_boost.catchup_mode` active, catch-up uplift above zero), the boiler's minimum burn period entity (`anticycle_entity`) is lowered to this value, and put back 2 minutes after the catch-up ends. Uses the hot water anti-cycle override's remembered normal value, pending-restore flag, confirmation and retry. It is only ever lowered, never raised above the normal value; a hot water charge takes its own value, and the two switch without a restore in between. Works without the hot water override being enabled.

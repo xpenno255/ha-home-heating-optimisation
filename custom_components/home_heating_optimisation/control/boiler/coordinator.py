@@ -884,6 +884,19 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._warmup_journal("updated", d, routine=True)
         return state.uplift if applied else 0.0
 
+    def catchup_overdrive(self, room_name) -> float:
+        """Kelvin to add to a room's written zone target while catch-up pushes it, else 0.
+
+        Only in active catch-up with an overdrive set. The room is still tracked against
+        its normal target, so the push ends within ``CATCHUP_END_K`` of that.
+        """
+        cfg = self._warmup_config()
+        k = cfg.get("catchup_overdrive_k")
+        if not k or cfg.get("catchup_mode") != "active":
+            return 0.0
+        track = self._catchup_tracks.get(room_name)
+        return float(k) if track is not None and track.pushing else 0.0
+
     def _catchup(self, d, now, rooms, pre_driving, base, curve_params, params, trim):
         """Track rooms stuck below target and publish the catch-up; returns its state.
 
