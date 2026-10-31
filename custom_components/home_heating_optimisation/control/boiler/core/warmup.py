@@ -278,6 +278,8 @@ CATCHUP_SUSTAIN_S = 20 * 60
 CATCHUP_RECOVERING_K_PER_H = 0.2
 # Highest flow a catch-up asks for (below the warm-up maximum: the house is mostly warm).
 CATCHUP_MAX_FLOW = 60.0
+# The thermostat overdrive stops this far short: the hot radiators finish the job.
+OVERDRIVE_END_K = 0.3
 
 
 @dataclass(frozen=True)
@@ -318,6 +320,17 @@ def catchup_step(tracks, rooms, now: datetime) -> dict:
         pushing = elapsed_s >= CATCHUP_SUSTAIN_S and rate < CATCHUP_RECOVERING_K_PER_H
         out[name] = CatchupTrack(track.since, track.air_since, pushing)
     return out
+
+
+def overdrive_k(limit, short):
+    """Kelvin added to a pushed room's zone target: its shortfall, at most ``limit``.
+
+    Nothing once the room is within ``OVERDRIVE_END_K``, or without a limit or shortfall.
+    """
+    if not limit or short is None:
+        return 0.0
+    short = round(short, 2)
+    return round(min(float(limit), short), 1) if short >= OVERDRIVE_END_K else 0.0
 
 
 def catchup_need(tracks, rooms, base, ceiling):

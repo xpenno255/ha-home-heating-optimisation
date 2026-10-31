@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.17.2 - catch-up overdrive follows the shortfall and stops early
+
+- The overdrive added to a pushed room's zone target is now the room's shortfall, capped at `catchup_overdrive_k`, instead of the full setting; it stops once the room is within 0.3 K (the catch-up flow push still runs to 0.1 K). A room 0.3 K short gets +0.3, one 1 K short gets the full setting.
+- Why: on 31 Oct, after the boiler pump was set to proportional high, catch-up burns ran 4-8 minutes instead of about one. Living Room was 0.3 K short at 15:45 and got +1 K (valve 91 %); Kitchen the same at 16:05. The overdrive ended at 0.1 K short but the hot radiators carried on: Living Room peaked 0.8 K over, Kitchen 0.4 K, and the Hall between them 1.5 K.
+
 ## 0.17.1 - a hot water charge pauses catch-up instead of resetting it
 
 - During a hot water charge the catch-up tracks are held rather than cleared, so a room already being pushed stays pushed: its overdrive carries on, and once the charge ends the flow uplift and shorter burn lock come back at once instead of after a fresh 20 minutes below target.

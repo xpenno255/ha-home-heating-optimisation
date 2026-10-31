@@ -9,6 +9,7 @@ from custom_components.home_heating_optimisation.control.boiler.core.warmup impo
     CatchupTrack,
     catchup_need,
     catchup_step,
+    overdrive_k,
 )
 from custom_components.home_heating_optimisation.control.boiler.dhw_policy import (
     dhw_boiler_config,
@@ -259,6 +260,16 @@ def test_overdrive_default_off_and_validated():
     assert validation_error({**base, "catchup_overdrive_k": 2.5}) == "warmup_boost_invalid"
 
 
+def test_overdrive_follows_the_shortfall_and_stops_early():
+    assert overdrive_k(1.0, 1.4) == 1.0
+    assert overdrive_k(1.0, 0.6) == 0.6
+    assert overdrive_k(0.5, 0.6) == 0.5
+    assert overdrive_k(1.0, 19.6 - 19.3) == 0.3
+    assert overdrive_k(1.0, 0.29) == 0.0
+    assert overdrive_k(None, 0.6) == 0.0
+    assert overdrive_k(1.0, None) == 0.0
+
+
 async def test_overdrive_only_for_a_pushed_room_in_active(hass, controlled, sources, freezer):  # noqa: F811
     entry, c = await run(hass, controlled, freezer, "active")
     boiler = c.boiler
@@ -268,7 +279,8 @@ async def test_overdrive_only_for_a_pushed_room_in_active(hass, controlled, sour
         "catchup_mode": "active",
         "catchup_overdrive_k": 1.0,
     }
-    assert boiler.catchup_overdrive("Living Room") == 1.0
+    # Living Room is 0.4 K short: the overdrive is its shortfall, under the 1.0 K limit.
+    assert boiler.catchup_overdrive("Living Room") == 0.4
     assert boiler.catchup_overdrive("Kitchen") == 0.0
     boiler._warmup_config = lambda: {
         "mode": "off",
@@ -324,7 +336,7 @@ async def test_hot_water_pauses_catchup_without_resetting_it(hass, controlled, s
         await c.refresh()
     assert boiler.data.dhw_active
     assert boiler._catchup_tracks["Living Room"].pushing
-    assert boiler.catchup_overdrive("Living Room") == 1.0
+    assert boiler.catchup_overdrive("Living Room") == 0.4
     # Straight back to pushing once the charge ends, without a new 20-minute wait.
     hass.states.async_set("sensor.hw", 0)
     for _ in range(3):

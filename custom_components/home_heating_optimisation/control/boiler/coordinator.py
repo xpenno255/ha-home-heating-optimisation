@@ -151,6 +151,7 @@ from .core.warmup import (
     fullness_step,
     house_demand,
     need_uplift,
+    overdrive_k,
     overshoot,
     plan_floor,
     preheat_step,
@@ -323,6 +324,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._preheat_state = WarmupBoostState()
         self._catchup_state = WarmupBoostState()
         self._catchup_tracks: dict = {}
+        self._catchup_short: dict = {}
         self._warmup_on = False
         self._warmup_journaled = 0.0
         # Overshoot of each room when the current boost began (memory only).
@@ -891,14 +893,17 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         """Kelvin to add to a room's written zone target while catch-up pushes it, else 0.
 
         Only in active catch-up with an overdrive set. The room is still tracked against
-        its normal target, so the push ends within ``CATCHUP_END_K`` of that.
+        its normal target; the overdrive follows its shortfall (see ``overdrive_k``) and
+        stops before the push itself, which ends within ``CATCHUP_END_K``.
         """
         cfg = self._warmup_config()
         k = cfg.get("catchup_overdrive_k")
         if not k or cfg.get("catchup_mode") != "active":
             return 0.0
         track = self._catchup_tracks.get(room_name)
-        return float(k) if track is not None and track.pushing else 0.0
+        if track is None or not track.pushing:
+            return 0.0
+        return overdrive_k(k, self._catchup_short.get(room_name))
 
     def _catchup(self, d, now, rooms, pre_driving, base, curve_params, params, trim):
         """Track rooms stuck below target and publish the catch-up; returns its state.
@@ -912,6 +917,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         elif not d.dhw_active:
             # During a hot water charge the tracks are held, not reset.
             self._catchup_tracks = catchup_step(self._catchup_tracks, rooms, now)
+        self._catchup_short = {
+            name: target - air
+            for name, air, target, *_ in rooms
+            if name in self._catchup_tracks and None not in (air, target)
+        }
         ceiling = min(curve_params.flow_max, CATCHUP_MAX_FLOW)
         need, room, short = catchup_need(self._catchup_tracks, rooms, base, ceiling)
         guard = return_scale(self._return_filtered, self._return_params().return_ceiling, params)
