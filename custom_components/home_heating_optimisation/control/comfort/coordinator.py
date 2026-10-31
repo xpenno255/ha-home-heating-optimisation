@@ -227,6 +227,8 @@ class OTCoordinatorData:
     sensor_gap_k: float | None = None
     sensor_match: bool = False
     sensor_offset_k: float = 0.0
+    # Added to the written zone target while the boiler's catch-up pushes this room.
+    catchup_overdrive_k: float = 0.0
     # Model
     mrt_steady_state: float | None = None
     operative_temp: float | None = None
@@ -284,6 +286,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         write_guard=None,
         journal=None,
         preheat_hint=None,
+        catchup_hint=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._entry = entry
@@ -299,6 +302,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._write_guard = write_guard or (lambda: False)
         # ``(now) -> (mode, plan)``: the planner's pre-heat for this room (see Optimum.preheat).
         self._preheat_hint = preheat_hint or (lambda _now: ("off", None))
+        # ``() -> K``: overdrive while the boiler's catch-up pushes this room (else 0).
+        self._catchup_hint = catchup_hint or (lambda: 0.0)
         self.write_status = "not_attempted"
         # Command/readback state is intentionally not persisted.  Policy memory
         # remains persistent exactly as before, but it is not an acknowledgement
@@ -1018,6 +1023,14 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             return None
         return air if air is not None and math.isfinite(air) else None
 
+    def _catchup_overdrive(self) -> float:
+        try:
+            k = float(self._catchup_hint() or 0.0)
+        except Exception:  # noqa: BLE001 - the boiler side must never break the room cycle
+            _LOGGER.debug("OT %s: catch-up hint failed", self.room_name, exc_info=True)
+            return 0.0
+        return k if math.isfinite(k) and k > 0 else 0.0
+
     def _preheat_now(self, now, zone, goal):
         """``(mode, True)`` when the planner says this room should be warming right now."""
         if goal is None or zone.next_switchpoint_at is None or zone.next_switchpoint_at <= now:
@@ -1636,6 +1649,10 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         # --- policy -----------------------------------------------------------
         window_ids = geometry.window_contacts if geometry else []
         preheat_mode, preheat_now = self._preheat_now(now, zone, preheat_goal)
+        d.catchup_overdrive_k = self._catchup_overdrive()
+        computed = to_zone(d.air_setpoint, d.sensor_offset_k)
+        if computed is not None and d.catchup_overdrive_k:
+            computed = round(computed + d.catchup_overdrive_k, 2)
         inputs = PolicyInputs(
             now=now,
             room_enabled=self._enabled,
@@ -1643,7 +1660,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             holiday_mode=self._is_on(ENTITY_HOLIDAY_MODE) is True,
             within_time_window=d.time_window_active,
             shadow_mode=self._mode != MODE_ACTIVE,
-            computed_setpoint=to_zone(d.air_setpoint, d.sensor_offset_k),
+            computed_setpoint=computed,
             zone=zone,
             memory=self._memory(),
             any_window_open=self._any_on(window_ids),
@@ -1686,6 +1703,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         elif preheat_now and preheat_mode == "shadow":
             d.preheat_status = "shadow"
             d.reason += f"; pre-heat (shadow) would command {preheat_goal:.1f}"
+        if d.catchup_overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
+            d.reason += f"; catch-up overdrive +{d.catchup_overdrive_k:.1f}"
         if self._journal_changed("decision", (d.state, d.action, d.reason, d.would_write)):
             self._journal(
                 "decision",
@@ -1699,6 +1718,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     "schedule_setpoint": zone.schedule_setpoint,
                     "air_setpoint": d.air_setpoint,
                     "sensor_offset_k": d.sensor_offset_k,
+                    "catchup_overdrive_k": d.catchup_overdrive_k,
                     "target_ot": d.target_ot,
                     "air_temp": d.air_temp,
                     "outcome": "shadow"

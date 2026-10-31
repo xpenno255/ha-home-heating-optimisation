@@ -172,6 +172,7 @@ def test_config_defaults_and_validation():
         "start": 0.15,
         "full": 0.40,
         "decay_k_per_min": 1.0,
+        "catchup_overdrive_k": None,
     }
     assert warmup_config({"warmup_boost": {"mode": "bogus", "start": 9}})["mode"] == "off"
     assert validation_error(cfg) is None

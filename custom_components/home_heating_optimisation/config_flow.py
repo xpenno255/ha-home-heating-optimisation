@@ -27,9 +27,9 @@ from .control.boiler.dhw_policy import dhw_boiler_config
 from .control.boiler.dhw_policy import validation_error as dhw_boiler_validation_error
 from .control.boiler.warmup_policy import DEFAULTS as WARMUP_DEFAULTS
 from .control.boiler.warmup_policy import LIMITS as WARMUP_LIMITS
+from .control.boiler.warmup_policy import OVERDRIVE_LIMITS, warmup_config
 from .control.boiler.warmup_policy import SECTION as WARMUP_SECTION
 from .control.boiler.warmup_policy import validation_error as warmup_validation_error
-from .control.boiler.warmup_policy import warmup_config
 from .control.configuration import (
     BOILER_DEFAULTS,
     HUB_DEFAULTS,
@@ -1006,6 +1006,11 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                     translation_key="warmup_boost_mode",
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
+            ),
+            optional(
+                "catchup_overdrive_k", {"catchup_overdrive_k": old["catchup_overdrive_k"]}
+            ): vol.All(
+                vol.Coerce(float), vol.Range(min=OVERDRIVE_LIMITS[0], max=OVERDRIVE_LIMITS[1])
             ),
         }
         for key, (low, high) in WARMUP_LIMITS.items():

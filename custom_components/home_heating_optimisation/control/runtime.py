@@ -169,6 +169,7 @@ class Controls:
                 write_guard=lambda rid=room_id: self.can_write(rid),
                 journal=getattr(self.heating, "journal", None),
                 preheat_hint=lambda now, rid=room_id: self.preheat_hint(rid, now),
+                catchup_hint=lambda rid=room_id: self.catchup_overdrive(rid),
             )
             c.mode = "shadow"
             c.journal_room_id = room_id
@@ -504,6 +505,13 @@ class Controls:
             return cutoff.report()
         except Exception as err:  # noqa: BLE001 - reporting must not break the report
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
+
+    def catchup_overdrive(self, room_id):
+        """Kelvin the boiler's catch-up asks to add to this room's written target, else 0."""
+        c = self.rooms.get(room_id)
+        if self.boiler is None or c is None:
+            return 0.0
+        return self.boiler.catchup_overdrive(c.room_name)
 
     def preheat_hint(self, room_id, now=None):
         """``(mode, plan)`` for a room: the optimum planner's pre-heat, resolved lazily.

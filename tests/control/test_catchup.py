@@ -240,3 +240,61 @@ async def test_catchup_never_raises_a_lower_normal_period(hass, controlled, sour
     data = await tick(25)
     assert data.catchup_uplift > 0 and burn(hass) == 8
     assert c.boiler._store.get("anticycle_pending") is not True
+
+
+# -- overdrive ------------------------------------------------------------------
+
+
+def test_overdrive_default_off_and_validated():
+    assert warmup_config({})["catchup_overdrive_k"] is None
+    assert (
+        warmup_config({"warmup_boost": {"catchup_overdrive_k": 1.0}})["catchup_overdrive_k"] == 1.0
+    )
+    assert (
+        warmup_config({"warmup_boost": {"catchup_overdrive_k": 3}})["catchup_overdrive_k"] is None
+    )
+    base = {"mode": "off", "catchup_mode": "active", "start": 0.15, "full": 0.4}
+    base["decay_k_per_min"] = 1.0
+    assert validation_error({**base, "catchup_overdrive_k": 1.0}) is None
+    assert validation_error({**base, "catchup_overdrive_k": 2.5}) == "warmup_boost_invalid"
+
+
+async def test_overdrive_only_for_a_pushed_room_in_active(hass, controlled, sources, freezer):  # noqa: F811
+    entry, c = await run(hass, controlled, freezer, "active")
+    boiler = c.boiler
+    assert boiler.catchup_overdrive("Living Room") == 0.0  # no overdrive configured
+    boiler._warmup_config = lambda: {
+        "mode": "off",
+        "catchup_mode": "active",
+        "catchup_overdrive_k": 1.0,
+    }
+    assert boiler.catchup_overdrive("Living Room") == 1.0
+    assert boiler.catchup_overdrive("Kitchen") == 0.0
+    boiler._warmup_config = lambda: {
+        "mode": "off",
+        "catchup_mode": "shadow",
+        "catchup_overdrive_k": 1.0,
+    }
+    assert boiler.catchup_overdrive("Living Room") == 0.0
+
+
+async def test_overdrive_raises_the_written_target_not_the_judged_one(hass, controlled, sources):  # noqa: F811
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 18.0, "temperature": 20})
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    plain = [d for kind, d in calls if kind == "ramses"][-1]["setpoint"]
+    assert plain == pytest.approx(room.data.air_setpoint) and room.data.catchup_overdrive_k == 0.0
+    room._catchup_hint = lambda: 1.0
+    await c.refresh()
+    pushed = [d for kind, d in calls if kind == "ramses"][-1]["setpoint"]
+    assert room.data.catchup_overdrive_k == 1.0
+    assert pushed == pytest.approx(room.data.air_setpoint + 1.0, abs=0.06)
+    assert "catch-up overdrive +1.0" in room.data.reason
+    # Catch-up still judges the room against its normal air target.
+    assert c.warmup_rooms()[0][5] == room.data.air_setpoint
+    room._catchup_hint = lambda: 0.0
+    await c.refresh()
+    back = [d for kind, d in calls if kind == "ramses"][-1]["setpoint"]
+    assert back == pytest.approx(room.data.air_setpoint, abs=0.06)
