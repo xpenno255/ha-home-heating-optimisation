@@ -764,7 +764,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 0.0,
             )
             self._preheat_state = WarmupBoostState()
-            self._catchup_state, self._catchup_tracks = WarmupBoostState(), {}
+            self._catchup_state = WarmupBoostState()
+            if not d.dhw_active or catch_mode == "off":
+                # A hot water charge only pauses catch-up: a pushed room stays pushed.
+                self._catchup_tracks = {}
             self._warmup_baselines = {}
             self._warmup_hold = False
             if heating:
@@ -900,13 +903,14 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
     def _catchup(self, d, now, rooms, pre_driving, base, curve_params, params, trim):
         """Track rooms stuck below target and publish the catch-up; returns its state.
 
-        Not while a planned pre-heat drives the flow. The uplift is capped by radiator
-        fullness, faded by the overshoot trim and the return guard, and rises at most
-        ``rise_k_per_min``.
+        Not while a planned pre-heat drives the flow; a hot water charge pauses it. The
+        uplift is capped by radiator fullness, faded by the overshoot trim and the return
+        guard, and rises at most ``rise_k_per_min``.
         """
-        if d.catchup_mode == "off" or pre_driving or d.dhw_active:
+        if d.catchup_mode == "off" or pre_driving:
             self._catchup_tracks = {}
-        else:
+        elif not d.dhw_active:
+            # During a hot water charge the tracks are held, not reset.
             self._catchup_tracks = catchup_step(self._catchup_tracks, rooms, now)
         ceiling = min(curve_params.flow_max, CATCHUP_MAX_FLOW)
         need, room, short = catchup_need(self._catchup_tracks, rooms, base, ceiling)

@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.17.1 - a hot water charge pauses catch-up instead of resetting it
+
+- During a hot water charge the catch-up tracks are held rather than cleared, so a room already being pushed stays pushed: its overdrive carries on, and once the charge ends the flow uplift and shorter burn lock come back at once instead of after a fresh 20 minutes below target.
+- Why: on 31 Oct the first live overdrive (Living Room, 09:47) had lifted its valve from 31 % to 83 % open within three minutes when a hot water charge started at 09:50 and cleared it.
+
 ## 0.17.0 - catch-up overdrive: push the stuck room's thermostat, not just the flow
 
 - New option `catchup_overdrive_k` in **Warm-up flow boost** (`warmup_boost`, 0.2-2 K, empty = off). While catch-up is active and pushing a room, the target HHO writes to that room's zone is raised by this much, so its thermostat opens the radiator valve further and Evohome calls the boiler for longer. The room is still judged against its normal air target, so the push, and the overdrive, end once it is within 0.1 K. Applied on top of sensor matching; manual holds, open windows and pre-heat still take precedence. Shadow catch-up never overdrives.

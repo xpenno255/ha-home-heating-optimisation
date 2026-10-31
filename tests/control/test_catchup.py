@@ -298,3 +298,39 @@ async def test_overdrive_raises_the_written_target_not_the_judged_one(hass, cont
     await c.refresh()
     back = [d for kind, d in calls if kind == "ramses"][-1]["setpoint"]
     assert back == pytest.approx(room.data.air_setpoint, abs=0.06)
+
+
+def calling(hass):
+    hass.states.async_set(
+        "climate.study",
+        "auto",
+        {"current_temperature": 19.3, "temperature": 19.7, "heat_demand": 0.25},
+    )
+    hass.states.async_set("sensor.study_demand", 50, {"unit_of_measurement": "%"})
+    hass.states.async_set("binary_sensor.heating", "on")
+
+
+async def test_hot_water_pauses_catchup_without_resetting_it(hass, controlled, sources, freezer):  # noqa: F811
+    entry, c = await run(hass, controlled, freezer, "active")
+    boiler = c.boiler
+    cfg = warmup_config({"warmup_boost": {"catchup_mode": "active", "catchup_overdrive_k": 1.0}})
+    boiler._warmup_config = lambda: cfg
+    assert boiler._catchup_tracks["Living Room"].pushing
+    hass.states.async_set("sensor.hw", 100)
+    for _ in range(5):
+        freezer.tick(timedelta(minutes=1))
+        hass.states.async_set("sensor.hw", 100)
+        calling(hass)
+        await c.refresh()
+    assert boiler.data.dhw_active
+    assert boiler._catchup_tracks["Living Room"].pushing
+    assert boiler.catchup_overdrive("Living Room") == 1.0
+    # Straight back to pushing once the charge ends, without a new 20-minute wait.
+    hass.states.async_set("sensor.hw", 0)
+    for _ in range(3):
+        freezer.tick(timedelta(minutes=1))
+        hass.states.async_set("sensor.hw", 0)
+        calling(hass)
+        await c.refresh()
+    assert not boiler.data.dhw_active and boiler.data.catchup_uplift > 0
+    assert boiler.data.catchup_room == "Living Room"
