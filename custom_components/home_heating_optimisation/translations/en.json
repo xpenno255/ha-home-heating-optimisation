@@ -402,7 +402,7 @@
         "data": {
           "mode": "Mode",
           "catchup_mode": "Catch-up for a room stuck below target",
-          "catchup_overdrive_k": "Catch-up overdrive: raise the stuck room's zone target by (K, 0.2-2, leave empty to turn off)",
+          "catchup_overdrive_k": "Catch-up overdrive: raise the stuck room's zone target by at most (K, 0.2-2, leave empty to turn off)",
           "start": "Demand share where the boost starts (0-1)",
           "full": "Demand share for the full boost (0-1)",
           "decay_k_per_min": "Slowest fall of the boost (K per minute)"
@@ -411,7 +411,7 @@
           "start": "For example 0.15 means 15% of the house's radiator capacity is calling.",
           "full": "Must be above the starting share.",
           "catchup_mode": "Outside a planned pre-heat, a room at least 0.3 K below its air target for 20 minutes and not recovering raises the flow (up to 60 \u00b0C, more the further it is behind) until it is within 0.1 K. Uses the same radiator fullness cap, overshoot trim and return guard. Independent of the boost mode above.",
-          "catchup_overdrive_k": "While catch-up is pushing a room (active mode only), the target written to its zone is raised by this much, so the thermostat opens the radiator valve further and calls the boiler for longer. Back to the normal target once the room is within 0.1 K. The room is still judged against its normal target."
+          "catchup_overdrive_k": "While catch-up is pushing a room (active mode only), the target written to its zone is raised by the room's shortfall, up to this much, so the thermostat opens the radiator valve further and calls the boiler for longer. Back to the normal target once the room is within 0.3 K, so the hot radiators finish the job without overshooting. The room is still judged against its normal target."
         }
       }
     },
