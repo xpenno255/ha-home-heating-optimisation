@@ -1,6 +1,7 @@
 """Overdrive: the written zone target follows how far the room is from its air target."""
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from custom_components.home_heating_optimisation.control.boiler.warmup_policy import (
@@ -92,3 +93,11 @@ async def test_rooms_run_at_the_room_check_interval(hass, controlled):  # noqa: 
     config["warmup_boost"] = {"room_check_minutes": 3}
     entry, c, calls = await start(hass, config)
     assert c.rooms["study"].update_interval == timedelta(minutes=3)
+
+
+async def test_recent_writes_survive_the_room_store(hass, controlled):  # noqa: F811
+    entry, c, calls = await start(hass, controlled)
+    room = c.rooms["study"]
+    memory = replace(room._memory(), recent_writes=((19.6, T0), (19.8, T0 + timedelta(minutes=2))))
+    room._save_memory(memory)
+    assert room._memory().recent_writes == memory.recent_writes
