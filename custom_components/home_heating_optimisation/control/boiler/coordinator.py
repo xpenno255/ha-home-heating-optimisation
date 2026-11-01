@@ -152,7 +152,6 @@ from .core.warmup import (
     handover_tracks,
     house_demand,
     need_uplift,
-    overdrive_k,
     overshoot,
     plan_floor,
     preheat_step,
@@ -325,7 +324,6 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._preheat_state = WarmupBoostState()
         self._catchup_state = WarmupBoostState()
         self._catchup_tracks: dict = {}
-        self._catchup_short: dict = {}
         # Rooms a running pre-heat has not yet brought to goal (handed to catch-up after).
         self._preheat_short: set = set()
         self._warmup_on = False
@@ -893,24 +891,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         return state.uplift if applied else 0.0
 
     def overdrive_limit(self):
-        """The configured overdrive limit in K (catch-up and pre-heat push), or None."""
+        """The configured overdrive limit in K (rooms' overdrive and pre-heat push), or None."""
         return self._warmup_config().get("catchup_overdrive_k")
-
-    def catchup_overdrive(self, room_name) -> float:
-        """Kelvin to add to a room's written zone target while catch-up pushes it, else 0.
-
-        Only in active catch-up with an overdrive set. The room is still tracked against
-        its normal target; the overdrive follows its shortfall (see ``overdrive_k``) and
-        stops before the push itself, which ends within ``CATCHUP_END_K``.
-        """
-        cfg = self._warmup_config()
-        k = cfg.get("catchup_overdrive_k")
-        if not k or cfg.get("catchup_mode") != "active":
-            return 0.0
-        track = self._catchup_tracks.get(room_name)
-        if track is None or not track.pushing:
-            return 0.0
-        return overdrive_k(k, self._catchup_short.get(room_name))
 
     def _catchup(self, d, now, rooms, planned, base, curve_params, params, trim):
         """Track rooms stuck below target and publish the catch-up; returns its state.
@@ -933,11 +915,6 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 tracks = handover_tracks(tracks, rooms, self._preheat_short, now)
                 self._preheat_short = set()
             self._catchup_tracks = catchup_step(tracks, rooms, now)
-        self._catchup_short = {
-            name: target - air
-            for name, air, target, *_ in rooms
-            if name in self._catchup_tracks and None not in (air, target)
-        }
         ceiling = min(curve_params.flow_max, CATCHUP_MAX_FLOW)
         need, room, short = catchup_need(self._catchup_tracks, rooms, base, ceiling)
         guard = return_scale(self._return_filtered, self._return_params().return_ceiling, params)

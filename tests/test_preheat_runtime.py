@@ -278,7 +278,7 @@ async def test_a_room_behind_its_plan_gets_the_preheat_push(hass, controlled, fr
     cloud(hass, 16.0, 21.0, SWITCH)
     room._store.set("last_written_at", datetime.now(timezone.utc).isoformat())
     await refresh(hass, controls)
-    assert room.data.preheating and room.data.catchup_overdrive_k == 0.5
+    assert room.data.preheating and room.data.preheat_push_k == 0.5
     assert writes(calls)[-1] == round(goal + 0.5, 1)
     assert "pre-heat push +0.5" in room.data.reason
     heating.analytics = None

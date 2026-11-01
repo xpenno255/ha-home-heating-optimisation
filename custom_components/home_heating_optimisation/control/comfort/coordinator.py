@@ -112,6 +112,7 @@ from .core.model import (
     sky_depression_k,
     steady_state_mrt,
 )
+from .core.overdrive import OverdriveState, overdrive_step, overdrive_wanted
 from .core.policy import (
     Action,
     Decision,
@@ -227,8 +228,10 @@ class OTCoordinatorData:
     sensor_gap_k: float | None = None
     sensor_match: bool = False
     sensor_offset_k: float = 0.0
-    # Added to the written zone target while the boiler's catch-up pushes this room.
-    catchup_overdrive_k: float = 0.0
+    # Overdrive added to the written zone target (negative: taken off), and the pre-heat
+    # push added to a pre-heat target while the room is behind its plan.
+    overdrive_k: float = 0.0
+    preheat_push_k: float = 0.0
     # Model
     mrt_steady_state: float | None = None
     operative_temp: float | None = None
@@ -286,7 +289,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         write_guard=None,
         journal=None,
         preheat_hint=None,
-        catchup_hint=None,
+        preheat_push_hint=None,
+        overdrive_settings=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._entry = entry
@@ -302,8 +306,11 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._write_guard = write_guard or (lambda: False)
         # ``(now) -> (mode, plan)``: the planner's pre-heat for this room (see Optimum.preheat).
         self._preheat_hint = preheat_hint or (lambda _now: ("off", None))
-        # ``() -> K``: overdrive while the boiler's catch-up pushes this room (else 0).
-        self._catchup_hint = catchup_hint or (lambda: 0.0)
+        # ``() -> K``: the pre-heat push while this room pre-heats behind its plan (else 0).
+        self._preheat_push_hint = preheat_push_hint or (lambda: 0.0)
+        # ``() -> dict``: warm-up settings with the overdrive limit, strength and period.
+        self._overdrive_settings = overdrive_settings or (lambda: {})
+        self._overdrive = OverdriveState()
         self.write_status = "not_attempted"
         # Command/readback state is intentionally not persisted.  Policy memory
         # remains persistent exactly as before, but it is not an acknowledgement
@@ -1023,13 +1030,39 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             return None
         return air if air is not None and math.isfinite(air) else None
 
-    def _catchup_overdrive(self) -> float:
+    def _preheat_push(self) -> float:
         try:
-            k = float(self._catchup_hint() or 0.0)
+            k = float(self._preheat_push_hint() or 0.0)
         except Exception:  # noqa: BLE001 - the boiler side must never break the room cycle
-            _LOGGER.debug("OT %s: catch-up hint failed", self.room_name, exc_info=True)
+            _LOGGER.debug("OT %s: pre-heat push hint failed", self.room_name, exc_info=True)
             return 0.0
         return k if math.isfinite(k) and k > 0 else 0.0
+
+    def _overdrive_now(self, d, now, preheating) -> float:
+        """Advance this room's overdrive (see ``core.overdrive``); returns it in K.
+
+        Nothing outside the room's window, while it pre-heats or without both temperatures.
+        """
+        try:
+            cfg = self._overdrive_settings() or {}
+            limit = cfg.get("catchup_overdrive_k")
+            strength = float(cfg.get("overdrive_strength", 1.0))
+            period_s = float(cfg.get("overdrive_period_min", 10)) * 60
+        except Exception:  # noqa: BLE001 - settings must never break the room cycle
+            _LOGGER.debug("OT %s: overdrive settings failed", self.room_name, exc_info=True)
+            limit = None
+        usable = (
+            limit
+            and d.time_window_active
+            and not preheating
+            and None not in (d.air_temp, d.air_setpoint)
+        )
+        if not usable:
+            self._overdrive = OverdriveState()
+            return 0.0
+        wanted = overdrive_wanted(d.air_setpoint - d.air_temp, strength, limit)
+        self._overdrive = overdrive_step(self._overdrive, wanted, now, period_s)
+        return self._overdrive.value
 
     def _preheat_now(self, now, zone, goal):
         """``(mode, True)`` when the planner says this room should be warming right now."""
@@ -1649,14 +1682,16 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         # --- policy -----------------------------------------------------------
         window_ids = geometry.window_contacts if geometry else []
         preheat_mode, preheat_now = self._preheat_now(now, zone, preheat_goal)
-        d.catchup_overdrive_k = self._catchup_overdrive()
+        preheating = preheat_now and preheat_mode == "active"
+        d.overdrive_k = self._overdrive_now(d, now, preheating)
+        d.preheat_push_k = self._preheat_push() if preheating else 0.0
         computed = to_zone(d.air_setpoint, d.sensor_offset_k)
-        if computed is not None and d.catchup_overdrive_k:
-            computed = round(computed + d.catchup_overdrive_k, 2)
+        if computed is not None and d.overdrive_k:
+            computed = round(computed + d.overdrive_k, 2)
         preheat_zone = to_zone(preheat_goal, d.sensor_offset_k)
-        if preheat_zone is not None and d.catchup_overdrive_k:
+        if preheat_zone is not None and d.preheat_push_k:
             # The pre-heat push: a room behind its plan keeps its valve open.
-            preheat_zone = round(preheat_zone + d.catchup_overdrive_k, 2)
+            preheat_zone = round(preheat_zone + d.preheat_push_k, 2)
         inputs = PolicyInputs(
             now=now,
             room_enabled=self._enabled,
@@ -1670,7 +1705,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             any_window_open=self._any_on(window_ids),
             command_reverted=self._command_reverted,
             retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
-            preheat_setpoint=(preheat_zone if preheat_now and preheat_mode == "active" else None),
+            preheat_setpoint=preheat_zone if preheating else None,
             params=self._policy_params(),
         )
         restored = self._restore_complete and hub_data is not None and hub_data.restore_complete
@@ -1703,10 +1738,10 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         elif preheat_now and preheat_mode == "shadow":
             d.preheat_status = "shadow"
             d.reason += f"; pre-heat (shadow) would command {preheat_goal:.1f}"
-        if d.catchup_overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
-            d.reason += f"; catch-up overdrive +{d.catchup_overdrive_k:.1f}"
-        elif d.catchup_overdrive_k and decision.state is State.PREHEAT:
-            d.reason += f"; pre-heat push +{d.catchup_overdrive_k:.1f}"
+        if d.overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
+            d.reason += f"; overdrive {d.overdrive_k:+.1f}"
+        elif d.preheat_push_k and decision.state is State.PREHEAT:
+            d.reason += f"; pre-heat push +{d.preheat_push_k:.1f}"
         if self._journal_changed("decision", (d.state, d.action, d.reason, d.would_write)):
             self._journal(
                 "decision",
@@ -1720,7 +1755,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     "schedule_setpoint": zone.schedule_setpoint,
                     "air_setpoint": d.air_setpoint,
                     "sensor_offset_k": d.sensor_offset_k,
-                    "catchup_overdrive_k": d.catchup_overdrive_k,
+                    "overdrive_k": d.overdrive_k,
+                    "preheat_push_k": d.preheat_push_k,
                     "target_ot": d.target_ot,
                     "air_temp": d.air_temp,
                     "outcome": "shadow"

@@ -170,7 +170,8 @@ class Controls:
                 write_guard=lambda rid=room_id: self.can_write(rid),
                 journal=getattr(self.heating, "journal", None),
                 preheat_hint=lambda now, rid=room_id: self.preheat_hint(rid, now),
-                catchup_hint=lambda rid=room_id: self.catchup_overdrive(rid),
+                preheat_push_hint=lambda rid=room_id: self.preheat_push(rid),
+                overdrive_settings=lambda: warmup_config(self.heating.config),
             )
             c.mode = "shadow"
             c.journal_room_id = room_id
@@ -507,19 +508,18 @@ class Controls:
         except Exception as err:  # noqa: BLE001 - reporting must not break the report
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 
-    def catchup_overdrive(self, room_id, now=None):
-        """Kelvin to add to this room's written target, else 0.
+    def preheat_push(self, room_id, now=None):
+        """Kelvin to add to this room's pre-heat target while it is behind its plan, else 0.
 
-        The boiler's catch-up overdrive, or the pre-heat push while the room pre-heats behind
-        its plan: its shortfall to the goal, capped by the same setting (see ``overdrive_k``).
+        Its shortfall to the goal, capped by the overdrive limit, ending within 0.3 K (see
+        ``overdrive_k``). Only for an active pre-heat that is not yet done.
         """
         c = self.rooms.get(room_id)
         if self.boiler is None or c is None:
             return 0.0
-        catchup = self.boiler.catchup_overdrive(c.room_name)
         limit = self.boiler.overdrive_limit()
         if not limit:
-            return catchup
+            return 0.0
         now = now or dt_util.utcnow()
         try:
             room = None
@@ -527,10 +527,10 @@ class Controls:
                 room = self._preheat_room(room_id, c, now)
         except Exception:  # noqa: BLE001 - the plan must never break the room cycle
             _LOGGER.debug("pre-heat push unavailable for %s", room_id, exc_info=True)
-            return catchup
+            return 0.0
         if room is None or room.done or room.air_temp is None or not (room.behind_k or 0) > 0:
-            return catchup
-        return max(catchup, overdrive_k(limit, room.goal - room.air_temp))
+            return 0.0
+        return overdrive_k(limit, room.goal - room.air_temp)
 
     def preheat_hint(self, room_id, now=None):
         """``(mode, plan)`` for a room: the optimum planner's pre-heat, resolved lazily.

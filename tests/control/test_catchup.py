@@ -274,26 +274,6 @@ def test_overdrive_follows_the_shortfall_and_stops_early():
     assert overdrive_k(1.0, None) == 0.0
 
 
-async def test_overdrive_only_for_a_pushed_room_in_active(hass, controlled, sources, freezer):  # noqa: F811
-    entry, c = await run(hass, controlled, freezer, "active")
-    boiler = c.boiler
-    assert boiler.catchup_overdrive("Living Room") == 0.0  # no overdrive configured
-    boiler._warmup_config = lambda: {
-        "mode": "off",
-        "catchup_mode": "active",
-        "catchup_overdrive_k": 1.0,
-    }
-    # Living Room is 0.4 K short: the overdrive is its shortfall, under the 1.0 K limit.
-    assert boiler.catchup_overdrive("Living Room") == 0.4
-    assert boiler.catchup_overdrive("Kitchen") == 0.0
-    boiler._warmup_config = lambda: {
-        "mode": "off",
-        "catchup_mode": "shadow",
-        "catchup_overdrive_k": 1.0,
-    }
-    assert boiler.catchup_overdrive("Living Room") == 0.0
-
-
 async def test_overdrive_raises_the_written_target_not_the_judged_one(hass, controlled, sources):  # noqa: F811
     hass.states.async_set("climate.study", "auto", {"current_temperature": 18.0, "temperature": 20})
     entry, c, calls = await start(hass, controlled)
@@ -301,18 +281,21 @@ async def test_overdrive_raises_the_written_target_not_the_judged_one(hass, cont
     await c.set_mode("study", "active")
     room = c.rooms["study"]
     plain = [d for kind, d in calls if kind == "ramses"][-1]["setpoint"]
-    assert plain == pytest.approx(room.data.air_setpoint) and room.data.catchup_overdrive_k == 0.0
-    room._catchup_hint = lambda: 1.0
+    assert plain == pytest.approx(room.data.air_setpoint) and room.data.overdrive_k == 0.0
+    settings = {"catchup_overdrive_k": 1.0, "overdrive_strength": 1.0, "overdrive_period_min": 10}
+    room._overdrive_settings = lambda: settings
     await c.refresh()
     pushed = [d for kind, d in calls if kind == "ramses"][-1]["setpoint"]
-    assert room.data.catchup_overdrive_k == 1.0
+    # Well below target: the full limit.
+    assert room.data.overdrive_k == 1.0
     assert pushed == pytest.approx(room.data.air_setpoint + 1.0, abs=0.06)
-    assert "catch-up overdrive +1.0" in room.data.reason
+    assert "overdrive +1.0" in room.data.reason
     # Catch-up still judges the room against its normal air target.
     assert c.warmup_rooms()[0][5] == room.data.air_setpoint
-    room._catchup_hint = lambda: 0.0
+    settings["catchup_overdrive_k"] = None
     await c.refresh()
     back = [d for kind, d in calls if kind == "ramses"][-1]["setpoint"]
+    assert room.data.overdrive_k == 0.0
     assert back == pytest.approx(room.data.air_setpoint, abs=0.06)
 
 
@@ -340,7 +323,6 @@ async def test_hot_water_pauses_catchup_without_resetting_it(hass, controlled, s
         await c.refresh()
     assert boiler.data.dhw_active
     assert boiler._catchup_tracks["Living Room"].pushing
-    assert boiler.catchup_overdrive("Living Room") == 0.4
     # Straight back to pushing once the charge ends, without a new 20-minute wait.
     hass.states.async_set("sensor.hw", 0)
     for _ in range(3):
@@ -427,23 +409,20 @@ async def test_a_room_the_preheat_finished_is_not_handed_over(hass, controlled, 
 
 
 class _Boiler:
-    def __init__(self, limit, catchup=0.0):
-        self.limit, self.catchup = limit, catchup
+    def __init__(self, limit):
+        self.limit = limit
 
     def overdrive_limit(self):
         return self.limit
-
-    def catchup_overdrive(self, _name):
-        return self.catchup
 
 
 class _Room:
     room_name = "Living Room"
 
 
-def _controls(limit, plan, mode="active", catchup=0.0):
+def _controls(limit, plan, mode="active"):
     controls = Controls.__new__(Controls)
-    controls.boiler = _Boiler(limit, catchup)
+    controls.boiler = _Boiler(limit)
     controls.rooms = {"living": _Room()}
     controls.preheat_hint = lambda _rid, _now: (mode, object())
     controls._preheat_room = lambda _rid, _c, _now: plan
@@ -468,15 +447,13 @@ def _plan(air, behind, done=False):
 
 def test_preheat_push_only_while_behind_plan():
     # Behind its plan and 0.8 K from the goal: the push is capped by the setting.
-    assert _controls(0.5, _plan(18.9, 0.4)).catchup_overdrive("living", T0) == 0.5
+    assert _controls(0.5, _plan(18.9, 0.4)).preheat_push("living", T0) == 0.5
     # Closer to the goal: the push is the shortfall, and none within 0.3 K.
-    assert _controls(0.5, _plan(19.3, 0.2)).catchup_overdrive("living", T0) == 0.4
-    assert _controls(0.5, _plan(19.5, 0.2)).catchup_overdrive("living", T0) == 0.0
+    assert _controls(0.5, _plan(19.3, 0.2)).preheat_push("living", T0) == 0.4
+    assert _controls(0.5, _plan(19.5, 0.2)).preheat_push("living", T0) == 0.0
     # On or ahead of plan, done, shadow pre-heat or no setting: nothing.
-    assert _controls(0.5, _plan(18.9, 0.0)).catchup_overdrive("living", T0) == 0.0
-    assert _controls(0.5, _plan(18.9, 0.4, done=True)).catchup_overdrive("living", T0) == 0.0
+    assert _controls(0.5, _plan(18.9, 0.0)).preheat_push("living", T0) == 0.0
+    assert _controls(0.5, _plan(18.9, 0.4, done=True)).preheat_push("living", T0) == 0.0
     shadow = _controls(0.5, _plan(18.9, 0.4), mode="shadow")
-    assert shadow.catchup_overdrive("living", T0) == 0.0
-    assert _controls(None, _plan(18.9, 0.4)).catchup_overdrive("living", T0) == 0.0
-    # Catch-up's own overdrive still comes through.
-    assert _controls(None, None, catchup=0.4).catchup_overdrive("living", T0) == 0.4
+    assert shadow.preheat_push("living", T0) == 0.0
+    assert _controls(None, _plan(18.9, 0.4)).preheat_push("living", T0) == 0.0
