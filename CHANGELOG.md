@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.18.0 - pre-heat push, catch-up straight after a short pre-heat, hotter catch-up flow
+
+- **Pre-heat push:** while an active pre-heat room is behind its plan, the target written to its zone is raised by its shortfall to the goal, capped by `catchup_overdrive_k` (the same setting as the catch-up overdrive) and stopping within 0.3 K. Evohome then keeps the valve open instead of closing it as the room nears the goal. The room's reason gains "pre-heat push +N".
+- **Hand-over:** a room the pre-heat leaves at least 0.3 K short, still calling inside its window, is pushed by catch-up as soon as the pre-heat stops driving the flow, without the usual 20 minutes below target first.
+- **Catch-up flow cap 60 -> 65 C** (`CATCHUP_MAX_FLOW`); the return guard still fades the uplift as the return nears `return_ceiling`.
+- Why: on 1 Nov (4-5 C outside) the Kitchen pre-heat started at 06:00 and never reached its goal. From 06:35 Evohome closed its valve from 86 % to 39 % while it was still 0.5-1 K short, the burner fell to 50-second burns and the flow averaged about 40 C; the pre-heat ended and catch-up only pushed at 07:34. Afterwards burns stopped at the 54-59 C catch-up flow with the return at 30-35 C.
+
 ## 0.17.2 - catch-up overdrive follows the shortfall and stops early
 
 - The overdrive added to a pushed room's zone target is now the room's shortfall, capped at `catchup_overdrive_k`, instead of the full setting; it stops once the room is within 0.3 K (the catch-up flow push still runs to 0.1 K). A room 0.3 K short gets +0.3, one 1 K short gets the full setting.
