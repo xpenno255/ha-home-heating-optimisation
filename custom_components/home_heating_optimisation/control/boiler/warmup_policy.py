@@ -17,10 +17,17 @@ DEFAULTS = {
     # Overdrive scale (1 = the standard table) and how often a room's overdrive may change.
     "overdrive_strength": 1.0,
     "overdrive_period_min": 10,
+    # How often each room's control runs (minutes).
+    "room_check_minutes": 1,
 }
 LIMITS = {"start": (0.05, 0.6), "full": (0.06, 1.0), "decay_k_per_min": (0.2, 5.0)}
 OVERDRIVE_LIMITS = (0.2, 2.0)
-OVERDRIVE_SETTINGS = {"overdrive_strength": (0.25, 3.0), "overdrive_period_min": (1, 30)}
+OVERDRIVE_SETTINGS = {
+    "overdrive_strength": (0.25, 3.0),
+    "overdrive_period_min": (1, 30),
+    "room_check_minutes": (1, 10),
+}
+INTEGERS = ("overdrive_period_min", "room_check_minutes")
 
 
 def warmup_config(config):
@@ -48,7 +55,7 @@ def warmup_config(config):
                 raise ValueError(key)
         except TypeError, ValueError:
             value = DEFAULTS[key]
-        out[key] = int(round(value)) if key == "overdrive_period_min" else value
+        out[key] = int(round(value)) if key in INTEGERS else value
     return out
 
 

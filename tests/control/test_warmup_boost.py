@@ -175,6 +175,7 @@ def test_config_defaults_and_validation():
         "catchup_overdrive_k": None,
         "overdrive_strength": 1.0,
         "overdrive_period_min": 10,
+        "room_check_minutes": 1,
     }
     assert warmup_config({"warmup_boost": {"mode": "bogus", "start": 9}})["mode"] == "off"
     assert validation_error(cfg) is None

@@ -405,6 +405,7 @@
           "catchup_overdrive_k": "Overdrive limit: most added to a room's zone target (K, 0.2-2, leave empty to turn overdrive off)",
           "overdrive_strength": "Overdrive strength (1 = standard scale, 0.25-3)",
           "overdrive_period_min": "Overdrive update period (minutes, 1-30)",
+          "room_check_minutes": "Room check interval (minutes, 1-10)",
           "start": "Demand share where the boost starts (0-1)",
           "full": "Demand share for the full boost (0-1)",
           "decay_k_per_min": "Slowest fall of the boost (K per minute)"
@@ -415,7 +416,8 @@
           "catchup_mode": "Outside a planned pre-heat, a room at least 0.3 K below its air target for 20 minutes and not recovering raises the flow (up to 65 \u00b0C, more the further it is behind) until it is within 0.1 K. Uses the same radiator fullness cap, overshoot trim and return guard. Independent of the boost mode above.",
           "catchup_overdrive_k": "Evohome opens a valve in proportion to how far its zone is below target, so a room a few tenths short can sit there with the valve part open. Overdrive adds to the target written to each room's zone in proportion to how far the room (by its own sensor) is below its air target: at strength 1, 0.1 K short adds 0.1, 0.2 adds 0.3, 0.3 adds 0.5, 0.5 adds 0.8 and 0.6 adds 1.0, never more than this limit. Over target it takes off one for one, at most 0.5 K. It follows the room and is gone once the room is on target. Not during pre-heat: there, a room behind its plan gets its shortfall to the goal added, up to this limit, ending within 0.3 K.",
           "overdrive_strength": "Multiplies the overdrive scale: 2 adds twice as much for the same shortfall, 0.5 half.",
-          "overdrive_period_min": "A room's overdrive changes at most this often, so sensor flicker does not cause a stream of Evohome writes. Easing back towards the normal target is immediate."
+          "overdrive_period_min": "A room's overdrive is raised at most this often, so sensor flicker does not cause a stream of Evohome writes. Any lowering (the room catching up, or going over target) is applied at the next room check.",
+          "room_check_minutes": "How often each room's control runs: reads its temperatures, updates its overdrive and writes its zone target if it has changed. Shorter reacts faster as a room nears target; Evohome is only written when the target actually changes."
         }
       }
     },
