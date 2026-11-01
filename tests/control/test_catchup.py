@@ -9,6 +9,7 @@ from custom_components.home_heating_optimisation.control.boiler.core.warmup impo
     CatchupTrack,
     catchup_need,
     catchup_step,
+    handover_tracks,
     overdrive_k,
 )
 from custom_components.home_heating_optimisation.control.boiler.dhw_policy import (
@@ -22,6 +23,9 @@ from custom_components.home_heating_optimisation.control.boiler.warmup_policy im
     warmup_config,
 )
 from custom_components.home_heating_optimisation.control.migration import handover
+from custom_components.home_heating_optimisation.control.runtime import Controls
+from custom_components.home_heating_optimisation.optimum.preheat import PreheatRoom
+from custom_components.home_heating_optimisation.optimum.preheat_policy import preheat_config
 from tests.control.test_runtime import controlled as controlled  # noqa: F401 - fixture
 from tests.control.test_runtime import start
 
@@ -346,3 +350,133 @@ async def test_hot_water_pauses_catchup_without_resetting_it(hass, controlled, s
         await c.refresh()
     assert not boiler.data.dhw_active and boiler.data.catchup_uplift > 0
     assert boiler.data.catchup_room == "Living Room"
+
+
+# -- pre-heat handover and push ------------------------------------------------
+
+
+def test_a_room_a_preheat_left_short_is_pushed_at_once():
+    names = {"Living Room"}
+    tracks = handover_tracks({}, room(19.3), names, T0)
+    assert tracks == {"Living Room": CatchupTrack(T0, 19.3, pushing=True)}
+    assert handover_tracks({}, room(19.5), names, T0) == {}  # within CATCHUP_START_K
+    assert handover_tracks({}, room(19.3, demand=0), names, T0) == {}
+    assert handover_tracks({}, room(19.3, window=False), names, T0) == {}
+    assert handover_tracks({}, room(19.3), {"Kitchen"}, T0) == {}
+
+
+def preheating(name="Living Room", done=False):
+    return PreheatRoom(
+        room_id="study",
+        name=name,
+        goal=19.7,
+        commanded=19.7,
+        air_temp=19.3,
+        expected_temp=19.6,
+        behind_k=0.3,
+        started_at=T0,
+        switch_at=T0 + timedelta(hours=1),
+        planned_minutes=60,
+        done=done,
+    )
+
+
+async def test_catchup_takes_over_when_the_preheat_ends_short(hass, controlled, sources, freezer):  # noqa: F811
+    entry, c, calls = await start(hass, with_catchup(controlled, "active"))
+    boiler = c.boiler
+    boiler._preheat_config = lambda: {**preheat_config({}), "mode": "active"}
+    boiler._warmup_rooms = lambda: [("climate.study", None, True, "Living Room", 19.3, 19.7, True)]
+    planned = [preheating()]
+    boiler._preheat_rooms = lambda _now: planned
+    await handover(c)
+    await c.set_mode("boiler", "auto")
+    for _ in range(3):
+        freezer.tick(timedelta(minutes=1))
+        calling(hass)
+        await c.refresh()
+    assert boiler._catchup_tracks == {} and boiler._preheat_short == {"Living Room"}
+    planned.clear()
+    freezer.tick(timedelta(minutes=1))
+    calling(hass)
+    await c.refresh()
+    assert boiler._catchup_tracks["Living Room"].pushing
+    assert boiler.data.catchup_room == "Living Room" and boiler._preheat_short == set()
+
+
+async def test_a_room_the_preheat_finished_is_not_handed_over(hass, controlled, sources, freezer):  # noqa: F811
+    entry, c, calls = await start(hass, with_catchup(controlled, "active"))
+    boiler = c.boiler
+    boiler._preheat_config = lambda: {**preheat_config({}), "mode": "active"}
+    boiler._warmup_rooms = lambda: [("climate.study", None, True, "Living Room", 19.3, 19.7, True)]
+    planned = [preheating()]
+    boiler._preheat_rooms = lambda _now: planned
+    await handover(c)
+    await c.set_mode("boiler", "auto")
+    freezer.tick(timedelta(minutes=1))
+    calling(hass)
+    await c.refresh()
+    planned[0] = preheating(done=True)
+    freezer.tick(timedelta(minutes=1))
+    calling(hass)
+    await c.refresh()
+    planned.clear()
+    freezer.tick(timedelta(minutes=1))
+    calling(hass)
+    await c.refresh()
+    assert not boiler._catchup_tracks["Living Room"].pushing
+
+
+class _Boiler:
+    def __init__(self, limit, catchup=0.0):
+        self.limit, self.catchup = limit, catchup
+
+    def overdrive_limit(self):
+        return self.limit
+
+    def catchup_overdrive(self, _name):
+        return self.catchup
+
+
+class _Room:
+    room_name = "Living Room"
+
+
+def _controls(limit, plan, mode="active", catchup=0.0):
+    controls = Controls.__new__(Controls)
+    controls.boiler = _Boiler(limit, catchup)
+    controls.rooms = {"living": _Room()}
+    controls.preheat_hint = lambda _rid, _now: (mode, object())
+    controls._preheat_room = lambda _rid, _c, _now: plan
+    return controls
+
+
+def _plan(air, behind, done=False):
+    return PreheatRoom(
+        room_id="living",
+        name="Living Room",
+        goal=19.7,
+        commanded=19.7,
+        air_temp=air,
+        expected_temp=air + behind,
+        behind_k=behind,
+        started_at=T0,
+        switch_at=T0 + timedelta(hours=1),
+        planned_minutes=60,
+        done=done,
+    )
+
+
+def test_preheat_push_only_while_behind_plan():
+    # Behind its plan and 0.8 K from the goal: the push is capped by the setting.
+    assert _controls(0.5, _plan(18.9, 0.4)).catchup_overdrive("living", T0) == 0.5
+    # Closer to the goal: the push is the shortfall, and none within 0.3 K.
+    assert _controls(0.5, _plan(19.3, 0.2)).catchup_overdrive("living", T0) == 0.4
+    assert _controls(0.5, _plan(19.5, 0.2)).catchup_overdrive("living", T0) == 0.0
+    # On or ahead of plan, done, shadow pre-heat or no setting: nothing.
+    assert _controls(0.5, _plan(18.9, 0.0)).catchup_overdrive("living", T0) == 0.0
+    assert _controls(0.5, _plan(18.9, 0.4, done=True)).catchup_overdrive("living", T0) == 0.0
+    shadow = _controls(0.5, _plan(18.9, 0.4), mode="shadow")
+    assert shadow.catchup_overdrive("living", T0) == 0.0
+    assert _controls(None, _plan(18.9, 0.4)).catchup_overdrive("living", T0) == 0.0
+    # Catch-up's own overdrive still comes through.
+    assert _controls(None, None, catchup=0.4).catchup_overdrive("living", T0) == 0.4

@@ -276,8 +276,8 @@ CATCHUP_FULL_K = 0.8
 # The shortfall must last this long without the room recovering at this rate.
 CATCHUP_SUSTAIN_S = 20 * 60
 CATCHUP_RECOVERING_K_PER_H = 0.2
-# Highest flow a catch-up asks for (below the warm-up maximum: the house is mostly warm).
-CATCHUP_MAX_FLOW = 60.0
+# Highest flow a catch-up asks for; the return guard still fades it as the return rises.
+CATCHUP_MAX_FLOW = 65.0
 # The thermostat overdrive stops this far short: the hot radiators finish the job.
 OVERDRIVE_END_K = 0.3
 
@@ -319,6 +319,21 @@ def catchup_step(tracks, rooms, now: datetime) -> dict:
         rate = (air - track.air_since) * 3600 / elapsed_s if elapsed_s > 0 else 0.0
         pushing = elapsed_s >= CATCHUP_SUSTAIN_S and rate < CATCHUP_RECOVERING_K_PER_H
         out[name] = CatchupTrack(track.since, track.air_since, pushing)
+    return out
+
+
+def handover_tracks(tracks, rooms, names, now: datetime) -> dict:
+    """``tracks`` with each named room still ``CATCHUP_START_K`` short pushed at once.
+
+    For rooms a pre-heat left short of target: catch-up takes over without first waiting
+    ``CATCHUP_SUSTAIN_S``. Only while calling for heat inside the room's window.
+    """
+    out = dict(tracks)
+    for name, air, target, demand, in_window in rooms:
+        if name not in names or None in (air, target, demand) or demand <= 0 or not in_window:
+            continue
+        if target - air >= CATCHUP_START_K:
+            out[name] = CatchupTrack(now, air, pushing=True)
     return out
 
 

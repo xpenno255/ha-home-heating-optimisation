@@ -149,6 +149,7 @@ from .core.warmup import (
     fullness,
     fullness_cap,
     fullness_step,
+    handover_tracks,
     house_demand,
     need_uplift,
     overdrive_k,
@@ -325,6 +326,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._catchup_state = WarmupBoostState()
         self._catchup_tracks: dict = {}
         self._catchup_short: dict = {}
+        # Rooms a running pre-heat has not yet brought to goal (handed to catch-up after).
+        self._preheat_short: set = set()
         self._warmup_on = False
         self._warmup_journaled = 0.0
         # Overshoot of each room when the current boost began (memory only).
@@ -769,7 +772,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._catchup_state = WarmupBoostState()
             if not d.dhw_active or catch_mode == "off":
                 # A hot water charge only pauses catch-up: a pushed room stays pushed.
-                self._catchup_tracks = {}
+                self._catchup_tracks, self._preheat_short = {}, set()
             self._warmup_baselines = {}
             self._warmup_hold = False
             if heating:
@@ -847,7 +850,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 # decay rate.
                 state = preheat_step(previous, 0.0, base, now, params)
                 applied = pre_mode == "active"
-        catch = self._catchup(d, now, catch_rooms, pre_driving, base, curve_params, params, trim)
+        catch = self._catchup(d, now, catch_rooms, planned, base, curve_params, params, trim)
         if catch_mode == "active" and catch.uplift > 0 and not pre_driving:
             # A room stuck below target outranks a smaller (or only shadowed) house boost.
             if not applied or catch.uplift > state.uplift:
@@ -889,6 +892,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._warmup_journal("updated", d, routine=True)
         return state.uplift if applied else 0.0
 
+    def overdrive_limit(self):
+        """The configured overdrive limit in K (catch-up and pre-heat push), or None."""
+        return self._warmup_config().get("catchup_overdrive_k")
+
     def catchup_overdrive(self, room_name) -> float:
         """Kelvin to add to a room's written zone target while catch-up pushes it, else 0.
 
@@ -905,18 +912,27 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             return 0.0
         return overdrive_k(k, self._catchup_short.get(room_name))
 
-    def _catchup(self, d, now, rooms, pre_driving, base, curve_params, params, trim):
+    def _catchup(self, d, now, rooms, planned, base, curve_params, params, trim):
         """Track rooms stuck below target and publish the catch-up; returns its state.
 
-        Not while a planned pre-heat drives the flow; a hot water charge pauses it. The
-        uplift is capped by radiator fullness, faded by the overshoot trim and the return
-        guard, and rises at most ``rise_k_per_min``.
+        Not while a planned pre-heat drives the flow; a room it leaves short is pushed as
+        soon as it stops. A hot water charge pauses it. The uplift is capped by radiator
+        fullness, faded by the overshoot trim and the return guard, and rises at most
+        ``rise_k_per_min``.
         """
-        if d.catchup_mode == "off" or pre_driving:
+        if d.catchup_mode == "off":
+            self._catchup_tracks, self._preheat_short = {}, set()
+        elif planned:
             self._catchup_tracks = {}
+            done = {p.name for p in planned if p.done}
+            self._preheat_short = (self._preheat_short | {p.name for p in planned}) - done
         elif not d.dhw_active:
             # During a hot water charge the tracks are held, not reset.
-            self._catchup_tracks = catchup_step(self._catchup_tracks, rooms, now)
+            tracks = self._catchup_tracks
+            if self._preheat_short:
+                tracks = handover_tracks(tracks, rooms, self._preheat_short, now)
+                self._preheat_short = set()
+            self._catchup_tracks = catchup_step(tracks, rooms, now)
         self._catchup_short = {
             name: target - air
             for name, air, target, *_ in rooms

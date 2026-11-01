@@ -15,6 +15,7 @@ from ..dhw.policy import dhw_config, usable
 from ..optimum.preheat import PreheatRoom
 from ..optimum.preheat_policy import preheat_config
 from .boiler.coordinator import BFCCoordinator
+from .boiler.core.warmup import overdrive_k
 from .boiler.dhw_policy import dhw_boiler_config
 from .boiler.hub import BoilerFlowHub
 from .boiler.warmup_policy import warmup_config
@@ -506,12 +507,30 @@ class Controls:
         except Exception as err:  # noqa: BLE001 - reporting must not break the report
             return {"status": "error", "last_error": f"{type(err).__name__}: {err}"}
 
-    def catchup_overdrive(self, room_id):
-        """Kelvin the boiler's catch-up asks to add to this room's written target, else 0."""
+    def catchup_overdrive(self, room_id, now=None):
+        """Kelvin to add to this room's written target, else 0.
+
+        The boiler's catch-up overdrive, or the pre-heat push while the room pre-heats behind
+        its plan: its shortfall to the goal, capped by the same setting (see ``overdrive_k``).
+        """
         c = self.rooms.get(room_id)
         if self.boiler is None or c is None:
             return 0.0
-        return self.boiler.catchup_overdrive(c.room_name)
+        catchup = self.boiler.catchup_overdrive(c.room_name)
+        limit = self.boiler.overdrive_limit()
+        if not limit:
+            return catchup
+        now = now or dt_util.utcnow()
+        try:
+            room = None
+            if self.preheat_hint(room_id, now)[0] == "active":
+                room = self._preheat_room(room_id, c, now)
+        except Exception:  # noqa: BLE001 - the plan must never break the room cycle
+            _LOGGER.debug("pre-heat push unavailable for %s", room_id, exc_info=True)
+            return catchup
+        if room is None or room.done or room.air_temp is None or not (room.behind_k or 0) > 0:
+            return catchup
+        return max(catchup, overdrive_k(limit, room.goal - room.air_temp))
 
     def preheat_hint(self, room_id, now=None):
         """``(mode, plan)`` for a room: the optimum planner's pre-heat, resolved lazily.
@@ -532,34 +551,34 @@ class Controls:
         should be by now and ``behind_k`` how far under that it is (positive: behind plan).
         """
         now = now or dt_util.utcnow()
+        found = (self._preheat_room(room_id, c, now) for room_id, c in self.rooms.items())
+        return [room for room in found if room is not None]
+
+    def _preheat_room(self, room_id, c, now):
+        """``PreheatRoom`` for one room warming under a plan right now, else None."""
+        mode, plan = self.preheat_hint(room_id, now)
+        if plan is None or not plan.started:
+            return None
         optimum = getattr(self.heating, "optimum", None)
-        found = []
-        for room_id, c in self.rooms.items():
-            mode, plan = self.preheat_hint(room_id, now)
-            if plan is None or not plan.started:
-                continue
-            air = c.data.air_temp if c.data else None
-            expected = plan.expected_at(now)
-            fit = getattr(optimum, "fits", {}).get(room_id)
-            coast = fit.coast_up_k if fit else 0.3
-            tolerance = optimum._tolerance()
-            found.append(
-                PreheatRoom(
-                    room_id=room_id,
-                    name=c.room_name,
-                    goal=plan.goal,
-                    commanded=c.data.preheat_setpoint if c.data and c.data.preheating else None,
-                    air_temp=air,
-                    expected_temp=expected,
-                    behind_k=None if air is None else round(expected - air, 2),
-                    started_at=plan.begin,
-                    switch_at=plan.switch_at,
-                    planned_minutes=plan.planned_minutes,
-                    done=air is not None and air >= plan.goal - tolerance - coast,
-                    coast_up_k=coast,
-                )
-            )
-        return found
+        air = c.data.air_temp if c.data else None
+        expected = plan.expected_at(now)
+        fit = getattr(optimum, "fits", {}).get(room_id)
+        coast = fit.coast_up_k if fit else 0.3
+        tolerance = optimum._tolerance()
+        return PreheatRoom(
+            room_id=room_id,
+            name=c.room_name,
+            goal=plan.goal,
+            commanded=c.data.preheat_setpoint if c.data and c.data.preheating else None,
+            air_temp=air,
+            expected_temp=expected,
+            behind_k=None if air is None else round(expected - air, 2),
+            started_at=plan.begin,
+            switch_at=plan.switch_at,
+            planned_minutes=plan.planned_minutes,
+            done=air is not None and air >= plan.goal - tolerance - coast,
+            coast_up_k=coast,
+        )
 
     def warmup_rooms(self):
         """``[(climate, output W, enabled, name, air temp, air target, in window)]`` for the

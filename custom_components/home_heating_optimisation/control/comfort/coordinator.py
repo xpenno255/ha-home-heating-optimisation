@@ -1653,6 +1653,10 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         computed = to_zone(d.air_setpoint, d.sensor_offset_k)
         if computed is not None and d.catchup_overdrive_k:
             computed = round(computed + d.catchup_overdrive_k, 2)
+        preheat_zone = to_zone(preheat_goal, d.sensor_offset_k)
+        if preheat_zone is not None and d.catchup_overdrive_k:
+            # The pre-heat push: a room behind its plan keeps its valve open.
+            preheat_zone = round(preheat_zone + d.catchup_overdrive_k, 2)
         inputs = PolicyInputs(
             now=now,
             room_enabled=self._enabled,
@@ -1666,11 +1670,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             any_window_open=self._any_on(window_ids),
             command_reverted=self._command_reverted,
             retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
-            preheat_setpoint=(
-                to_zone(preheat_goal, d.sensor_offset_k)
-                if preheat_now and preheat_mode == "active"
-                else None
-            ),
+            preheat_setpoint=(preheat_zone if preheat_now and preheat_mode == "active" else None),
             params=self._policy_params(),
         )
         restored = self._restore_complete and hub_data is not None and hub_data.restore_complete
@@ -1705,6 +1705,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             d.reason += f"; pre-heat (shadow) would command {preheat_goal:.1f}"
         if d.catchup_overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
             d.reason += f"; catch-up overdrive +{d.catchup_overdrive_k:.1f}"
+        elif d.catchup_overdrive_k and decision.state is State.PREHEAT:
+            d.reason += f"; pre-heat push +{d.catchup_overdrive_k:.1f}"
         if self._journal_changed("decision", (d.state, d.action, d.reason, d.would_write)):
             self._journal(
                 "decision",

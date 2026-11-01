@@ -260,3 +260,25 @@ async def test_short_charge_is_waited_out_then_the_pre_heat_starts(hass, control
     assert started.started and started.start_reason == "planned"
     assert started.dhw_wait_minutes == 16.0
     heating.analytics = None
+
+
+async def test_a_room_behind_its_plan_gets_the_preheat_push(hass, controlled, freezer):  # noqa: F811
+    heating, controls, calls = await ready(
+        hass, controlled, freezer, "active", warmup_boost={"catchup_overdrive_k": 0.5}
+    )
+    optimum, room = heating.optimum, controls.rooms["study"]
+    plan = optimum.plans["study"]
+    freezer.move_to(plan.start_at + timedelta(minutes=1))
+    await refresh(hass, controls)
+    goal = room.data.preheat_setpoint
+    written = writes(calls)[-1]
+    # Halfway through the plan the room has not moved: behind, so its zone target is pushed.
+    freezer.move_to(plan.start_at + (SWITCH - plan.start_at) / 2)
+    climate(hass, 17.0, written)
+    cloud(hass, 16.0, 21.0, SWITCH)
+    room._store.set("last_written_at", datetime.now(timezone.utc).isoformat())
+    await refresh(hass, controls)
+    assert room.data.preheating and room.data.catchup_overdrive_k == 0.5
+    assert writes(calls)[-1] == round(goal + 0.5, 1)
+    assert "pre-heat push +0.5" in room.data.reason
+    heating.analytics = None
