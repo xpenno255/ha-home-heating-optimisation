@@ -49,10 +49,14 @@ class OverdriveState:
 
 
 def overdrive_step(state: OverdriveState, wanted, now: datetime, period_s) -> OverdriveState:
-    """Move to ``wanted`` at most once per ``period_s``; easing towards 0 is immediate."""
+    """Raise to ``wanted`` at most once per ``period_s``; any lowering is immediate.
+
+    Lowering covers a shrinking push, a room crossing above target and one going further
+    over, so the valve starts closing as soon as the room catches up.
+    """
     if wanted == state.value:
         return state
     due = state.changed_at is None or (now - state.changed_at).total_seconds() >= period_s
-    if due or abs(wanted) < abs(state.value):
+    if due or wanted < state.value:
         return OverdriveState(wanted, now)
     return state

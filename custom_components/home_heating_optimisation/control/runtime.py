@@ -19,6 +19,7 @@ from .boiler.core.warmup import overdrive_k
 from .boiler.dhw_policy import dhw_boiler_config
 from .boiler.hub import BoilerFlowHub
 from .boiler.warmup_policy import warmup_config
+from .comfort.const import CONF_RUN_INTERVAL
 from .comfort.coordinator import OTCoordinator
 from .comfort.hub import OTHubData
 from .store import ControlStore
@@ -159,13 +160,14 @@ class Controls:
         # Do not act while configuration and all entities are still restoring.
         self.boiler.override = "shadow"
         await self.boiler.async_config_entry_first_refresh()
+        room_check = warmup_config(self.heating.config)["room_check_minutes"]
         for room_id, spec in self.config["rooms"].items():
             store = await self.store("room." + room_id, spec.get("seed"))
             c = OTCoordinator(
                 self.hass,
                 self.entry,
                 store,
-                config=spec["config"],
+                config={**spec["config"], CONF_RUN_INTERVAL: room_check},
                 state_reader=self.heating.telemetry.get,
                 write_guard=lambda rid=room_id: self.can_write(rid),
                 journal=getattr(self.heating, "journal", None),

@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.19.1 - overdrive cuts back at once; rooms checked every minute
+
+- Overdrive now only waits for its update period when it would **raise** a room's zone target. Any lowering, whether the push shrinking as the room catches up, the room crossing over target or going further over, is applied at the next room check, so the valve starts closing straight away.
+- New option **Room check interval** in **Warm-up flow boost** (`room_check_minutes`, 1-10, default 1): how often each room's control runs (was a fixed 5 minutes). Evohome is still only written when a target changes.
+- Why: in 0.19.0 a room rising past target went from 0 to a negative overdrive only after the 10-minute period, and every change waited for the 5-minute room cycle.
+
 ## 0.19.0 - overdrive follows every room, all the time
 
 - **Overdrive is now continuous and per room.** The target HHO writes to a room's zone is raised in proportion to how far the room (by its own sensor) is below its air target, so Evohome opens the valve harder instead of letting the room sit a few tenths short. At strength 1: 0.1 K short adds 0.1, 0.2 adds 0.3, 0.3 adds 0.5, 0.5 adds 0.8, 0.6 adds 1.0, capped by `catchup_overdrive_k` (now labelled "Overdrive limit"). Over target it takes off one for one, at most 0.5 K. Nothing accumulates: it follows the room and is gone once the room is on target. Only inside the room's window and not during pre-heat (which keeps its own push).
