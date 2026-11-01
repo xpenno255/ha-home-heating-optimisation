@@ -27,7 +27,7 @@ from .control.boiler.dhw_policy import dhw_boiler_config
 from .control.boiler.dhw_policy import validation_error as dhw_boiler_validation_error
 from .control.boiler.warmup_policy import DEFAULTS as WARMUP_DEFAULTS
 from .control.boiler.warmup_policy import LIMITS as WARMUP_LIMITS
-from .control.boiler.warmup_policy import OVERDRIVE_LIMITS, warmup_config
+from .control.boiler.warmup_policy import OVERDRIVE_LIMITS, OVERDRIVE_SETTINGS, warmup_config
 from .control.boiler.warmup_policy import SECTION as WARMUP_SECTION
 from .control.boiler.warmup_policy import validation_error as warmup_validation_error
 from .control.configuration import (
@@ -1011,6 +1011,12 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 "catchup_overdrive_k", {"catchup_overdrive_k": old["catchup_overdrive_k"]}
             ): vol.All(
                 vol.Coerce(float), vol.Range(min=OVERDRIVE_LIMITS[0], max=OVERDRIVE_LIMITS[1])
+            ),
+            vol.Required("overdrive_strength", default=old["overdrive_strength"]): vol.All(
+                vol.Coerce(float), vol.Range(*OVERDRIVE_SETTINGS["overdrive_strength"])
+            ),
+            vol.Required("overdrive_period_min", default=old["overdrive_period_min"]): vol.All(
+                vol.Coerce(int), vol.Range(*OVERDRIVE_SETTINGS["overdrive_period_min"])
             ),
         }
         for key, (low, high) in WARMUP_LIMITS.items():

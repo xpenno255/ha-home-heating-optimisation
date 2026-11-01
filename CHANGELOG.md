@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.19.0 - overdrive follows every room, all the time
+
+- **Overdrive is now continuous and per room.** The target HHO writes to a room's zone is raised in proportion to how far the room (by its own sensor) is below its air target, so Evohome opens the valve harder instead of letting the room sit a few tenths short. At strength 1: 0.1 K short adds 0.1, 0.2 adds 0.3, 0.3 adds 0.5, 0.5 adds 0.8, 0.6 adds 1.0, capped by `catchup_overdrive_k` (now labelled "Overdrive limit"). Over target it takes off one for one, at most 0.5 K. Nothing accumulates: it follows the room and is gone once the room is on target. Only inside the room's window and not during pre-heat (which keeps its own push).
+- New options in **Warm-up flow boost**: `overdrive_strength` (0.25-3, default 1) scales the table; `overdrive_period_min` (1-30, default 10) is the most often a room's overdrive may change, so sensor flicker does not cause a stream of Evohome writes. Easing back towards the normal target is immediate.
+- Replaces the catch-up-only overdrive: catch-up keeps its flow push and burn lock but no longer moves zone targets. Room data `catchup_overdrive_k` becomes `overdrive_k` (continuous) and `preheat_push_k`; reasons read "overdrive +N" / "pre-heat push +N"; `decision` journal events carry both.
+- Why: on 1 Nov (5-6 C outside) the Kitchen sat 0.2-0.3 K and the Living Room up to 0.6 K below target for two hours with their valves 30-50 % open and the boiler making 1-3 minute burns. Below 0.3 K catch-up never started, and above it it waited 20 minutes.
+
 ## 0.18.0 - pre-heat push, catch-up straight after a short pre-heat, hotter catch-up flow
 
 - **Pre-heat push:** while an active pre-heat room is behind its plan, the target written to its zone is raised by its shortfall to the goal, capped by `catchup_overdrive_k` (the same setting as the catch-up overdrive) and stopping within 0.3 K. Evohome then keeps the valve open instead of closing it as the room nears the goal. The room's reason gains "pre-heat push +N".
