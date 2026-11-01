@@ -2,6 +2,14 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.20.1 - rooms card polish
+
+- Columns follow the card's own width (container queries: 3 / 2 / 1), not the browser window, so the card works in a sections column (~500 px) and on a phone; `columns` still overrides. The target no longer disappears and nothing truncates.
+- Rooms within `tolerance` (new option, default 0.15 °C) of target count as on target: green chip, no coloured edge; header counts use the same rule.
+- Shorter tiles, labels on one line and numbers on one baseline, bars aligned with the text, the empty cell after an odd room count blends in, quieter valve rows for idle rooms at 0 %, flatter pre-heat styling, better contrast in light theme.
+- Header shows when the data last updated, in a warning tone after 10 minutes. Rooms still waiting for data after a restart show dashes and neutral styling. Tooltips explain the difference chip, the bar, "Evohome told" and the overdrive chip.
+- Reviewed and refined over three rounds with GPT-6 Astra against renders of the live data in light and dark themes at 360, 492 and 900 px.
+
 ## 0.20.0 - rooms card
 
 - New dashboard card `custom:hho-rooms-card`, served by the integration and loaded on every dashboard automatically (no resource to add). One tile per room: room temperature and target as a labelled pair with the difference ("0.3° below", "on target"), a bar showing how far off it is (blue cold, orange too warm), the target sent to Evohome with its overdrive (or pre-heat push), valve demand, heating/idle or manual hold, window open and outside hours, and planned or running pre-heat. Along the top: rooms below / on / above target, outside, flow and its target, return, burner and hot water charging. Options: `title`, `columns`.

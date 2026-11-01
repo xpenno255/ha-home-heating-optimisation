@@ -144,7 +144,8 @@ The integration serves a dashboard card showing every room at once: room tempera
 type: custom:hho-rooms-card
 # optional:
 # title: Heating
-# columns: 3
+# columns: 3        # otherwise follows the card width
+# tolerance: 0.15   # °C either side of target that counts as on target
 ```
 
 It reads `sensor.home_heating_optimisation_rooms_overview` (state: rooms calling for heat; the room and boiler figures are attributes and are not recorded).
