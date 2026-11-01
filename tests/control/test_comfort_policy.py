@@ -169,6 +169,37 @@ def test_zone_at_our_value_is_not_manual():
     assert d.state is State.ACTIVE
 
 
+def test_late_echo_of_an_earlier_write_is_not_manual():
+    # 31 Oct-style: we wrote 15.7 then 15.9; a broadcast still carrying 15.7 arrives late.
+    t1, t2 = T0 - timedelta(minutes=7), T0 - timedelta(minutes=3)
+    first = decide(inputs(now=t1, computed_setpoint=15.7, zone=ZoneState(16.0, 16.0)))
+    second = decide(
+        inputs(now=t2, computed_setpoint=15.9, memory=first.memory, zone=ZoneState(15.7, 16.0))
+    )
+    assert second.action is Action.WRITE and second.memory.last_written_setpoint == 15.9
+    assert [v for v, _ in second.memory.recent_writes] == [15.7, 15.9]
+    late = decide(inputs(computed_setpoint=15.9, memory=second.memory, zone=ZoneState(15.7, 16.0)))
+    assert late.state is State.ACTIVE and late.memory.manual_detected_at is None
+
+
+def test_an_old_write_echoing_much_later_is_manual_again():
+    old = OverrideMemory(
+        last_written_setpoint=15.9,
+        last_written_at=T0 - timedelta(minutes=3),
+        recent_writes=((15.7, T0 - timedelta(minutes=20)), (15.9, T0 - timedelta(minutes=3))),
+    )
+    d = decide(inputs(computed_setpoint=15.9, memory=old, zone=ZoneState(15.7, 16.0)))
+    assert d.state is State.MANUAL
+
+
+def test_recent_writes_are_pruned():
+    m = OverrideMemory(
+        recent_writes=tuple((15.0 + i / 10, T0 - timedelta(minutes=30)) for i in range(3))
+    )
+    d = decide(inputs(computed_setpoint=19.5, memory=m, zone=ZoneState(19.0, 19.0)))
+    assert d.memory.recent_writes == ((19.5, T0),)
+
+
 def test_exact_prior_command_reversion_is_not_attributed_to_a_person():
     m = held(19.6, minutes_ago=1)
     d = decide(

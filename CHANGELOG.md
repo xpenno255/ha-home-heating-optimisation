@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.19.2 - a late echo of our own write is not a hand on the dial
+
+- Each room remembers the targets it wrote in the last 15 minutes (`recent_writes`, kept across restarts). A zone reporting one of them is a late or out-of-order echo, not a manual change, so it no longer starts a 2-hour manual hold. Values older than that, or anything during a standing manual hold, are judged as before.
+- Why: on 1 Nov the Utility room was written 15.9 at 12:58 (confirmed), then a controller broadcast still carrying the earlier 15.7 arrived at 13:01 and was taken as a hand change, holding the room until 15:02. Overdrive writes targets more often, so this became more likely.
+
 ## 0.19.1 - overdrive cuts back at once; rooms checked every minute
 
 - Overdrive now only waits for its update period when it would **raise** a room's zone target. Any lowering, whether the push shrinking as the room catches up, the room crossing over target or going further over, is applied at the next room check, so the valve starts closing straight away.

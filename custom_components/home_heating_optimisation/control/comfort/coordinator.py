@@ -951,6 +951,14 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
         sp = self._store.get("last_written_setpoint")
         msp = self._store.get("manual_setpoint")
+        recent = []
+        for item in self._store.get("recent_writes") or []:
+            try:
+                at = dt_util.parse_datetime(str(item[1]))
+                if at is not None:
+                    recent.append((float(item[0]), dt_util.as_utc(at)))
+            except TypeError, ValueError, IndexError:
+                continue
         return OverrideMemory(
             last_written_setpoint=float(sp) if sp is not None else None,
             last_written_at=dt("last_written_at"),
@@ -959,6 +967,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             manual_setpoint=float(msp) if msp is not None else None,
             window_open_since=dt("window_open_since"),
             window_closed_at=dt("window_closed_at"),
+            recent_writes=tuple(recent),
         )
 
     def _save_memory(self, m: OverrideMemory) -> None:
@@ -979,6 +988,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._store.set(
             "window_closed_at", m.window_closed_at.isoformat() if m.window_closed_at else None
         )
+        self._store.set("recent_writes", [[v, at.isoformat()] for v, at in m.recent_writes])
 
     def _any_on(self, entity_ids: list[str]) -> bool:
         return any(self._is_on(e) is True for e in entity_ids)

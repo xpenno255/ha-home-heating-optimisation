@@ -31,6 +31,10 @@ class Action(str, Enum):
     RELEASE = "release"  # return the zone to its schedule (follow_schedule)
 
 
+# Most recent writes remembered for recognising late echoes.
+RECENT_WRITES_KEPT = 8
+
+
 @dataclass(frozen=True)
 class PolicyParams:
     step: float = 0.1  # thermostat resolution; writes below this are suppressed
@@ -53,6 +57,8 @@ class PolicyParams:
     # remembered as ours is exactly the value transmitted (ownership depends on it).
     zone_setpoint_min: float = 5.0
     zone_setpoint_max: float = 30.0
+    # A reading equal to one of our own writes this recent is a late echo, not a hand.
+    recent_write_minutes: int = 15
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,8 @@ class OverrideMemory:
     manual_setpoint: float | None = None  # the hand-set value; a different value restarts the hold
     window_open_since: datetime | None = None
     window_closed_at: datetime | None = None
+    # Our recent writes as ``(setpoint, written_at)``, newest last (see recent_write_minutes).
+    recent_writes: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -214,10 +222,17 @@ def _manual_override(inp: PolicyInputs) -> bool:
         and _holding_override(m, inp.now, p)
         and abs(z.current_setpoint - m.last_written_setpoint) < tol
     )
+    # A zone still reporting one of our own recent writes is a late or out-of-order echo:
+    # the controller's broadcasts can trail a newer write by a few minutes.
+    matches_recent = not hold_standing and any(
+        abs(z.current_setpoint - value) < tol
+        and inp.now - at <= timedelta(minutes=p.recent_write_minutes)
+        for value, at in m.recent_writes
+    )
     matches_schedule = (
         z.schedule_setpoint is not None and abs(z.current_setpoint - z.schedule_setpoint) < tol
     )
-    if matches_ours or matches_schedule:
+    if matches_ours or matches_recent or matches_schedule:
         return False
     # Around a switchpoint the cloud schedule source lags the zone by minutes: a zone already
     # sitting at the next switchpoint's value is following its schedule, not a hand. Before the
@@ -289,7 +304,14 @@ def _write(
         reason += "; retrying command after prior state returned"
     if not _write_needed(target, m, inp):
         return Decision(state, Action.NONE, None, reason + "; unchanged, override still valid", m)
-    new_m = replace(m, last_written_setpoint=target, last_written_at=inp.now)
+    window = timedelta(minutes=p.recent_write_minutes)
+    recent = tuple(w for w in m.recent_writes if inp.now - w[1] <= window)
+    new_m = replace(
+        m,
+        last_written_setpoint=target,
+        last_written_at=inp.now,
+        recent_writes=(*recent, (target, inp.now))[-RECENT_WRITES_KEPT:],
+    )
     return Decision(state, Action.WRITE, target, reason, new_m)
 
 
