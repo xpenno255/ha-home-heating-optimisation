@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.20.0 - rooms card
+
+- New dashboard card `custom:hho-rooms-card`, served by the integration and loaded on every dashboard automatically (no resource to add). One tile per room: room temperature and target as a labelled pair with the difference ("0.3° below", "on target"), a bar showing how far off it is (blue cold, orange too warm), the target sent to Evohome with its overdrive (or pre-heat push), valve demand, heating/idle or manual hold, window open and outside hours, and planned or running pre-heat. Along the top: rooms below / on / above target, outside, flow and its target, return, burner and hot water charging. Options: `title`, `columns`.
+- New sensor `sensor.home_heating_optimisation_rooms_overview` behind it: state is the number of rooms calling for heat; `rooms` and `house` attributes carry the figures and are excluded from the recorder.
+- `frontend` and `http` added to the manifest's after-dependencies.
+
 ## 0.19.2 - a late echo of our own write is not a hand on the dial
 
 - Each room remembers the targets it wrote in the last 15 minutes (`recent_writes`, kept across restarts). A zone reporting one of them is a late or out-of-order echo, not a manual change, so it no longer starts a 2-hour manual hold. Values older than that, or anything during a standing manual hold, are judged as before.

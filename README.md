@@ -136,6 +136,19 @@ demand readings; a missing fallback demand attribute reduces availability. Unsel
 system sources are excluded. Their individual sensors remain unknown with quality
 `not_configured`.
 
+## Rooms card
+
+The integration serves a dashboard card showing every room at once: room temperature against target (with how far off, coloured blue when cold and orange when too warm), the target sent to Evohome and the overdrive in it, valve demand, and any planned or running pre-heat, plus outside, flow, return and burner along the top. It loads automatically on every dashboard; add it with:
+
+```yaml
+type: custom:hho-rooms-card
+# optional:
+# title: Heating
+# columns: 3
+```
+
+It reads `sensor.home_heating_optimisation_rooms_overview` (state: rooms calling for heat; the room and boiler figures are attributes and are not recorded).
+
 ## Source quality and units
 
 Each source-derived sensor includes `quality`, `source_entity` and

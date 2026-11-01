@@ -10,6 +10,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .advisor.coordinator import Advisor
 from .analytics.coordinator import AnalyticsCoordinator
+from .card import async_register_card
 from .const import DOMAIN
 from .control.runtime import Controls
 from .coordinator import HeatingCoordinator
@@ -42,6 +43,7 @@ type HeatingEntry = ConfigEntry[HeatingCoordinator]
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_services(hass)
     async_register_source_identity(hass)
+    await async_register_card(hass)
     return True
 
 
