@@ -217,8 +217,11 @@ class ControlMode(ControlEntity, SelectEntity):
 def sensors(controls):
     if not controls.boiler:
         return []
+    from .overview import RoomsOverviewSensor
+
     return (
         [
+            RoomsOverviewSensor(controls),
             BoilerEfficiencySensor(controls),
             BoilerRollingEfficiencySensor(controls, "24h", "24 hours"),
             BoilerRollingEfficiencySensor(controls, "7d", "7 days"),
