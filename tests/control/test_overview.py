@@ -28,6 +28,7 @@ async def test_overview_carries_each_room_and_the_boiler(hass, controlled, sourc
     assert room["air"] == round(data.air_temp, 2) and room["target"] == round(data.air_setpoint, 2)
     assert room["overdrive"] == 1.0 and room["demand"] == 35 and room["calling"] is True
     assert room["preheat"] is None
+    assert room["climate"] == c.rooms["study"]._config.get("primary_climate")
     assert set(state.attributes["house"]) >= {"outdoor", "flow", "flow_target", "return", "burner"}
     assert "hot_water" in state.attributes
 
@@ -67,3 +68,4 @@ async def test_hot_water_view_reads_the_cylinder_and_cloud_schedule(hass, contro
     view = hot_water_view(c)
     assert view["temp"] == 47.2 and view["target"] == 50.0 and view["mode"] == "follow_schedule"
     assert view["scheduled_on"] is False and view["next_state"] == "On"
+    assert view["entity"] == "water_heater.hw"
