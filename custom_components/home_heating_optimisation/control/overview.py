@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN, NAME, VERSION
 
@@ -69,6 +70,57 @@ def house_view(controls):
     }
 
 
+def _float(hass, entity_id):
+    state = hass.states.get(entity_id or "")
+    try:
+        return float(state.state) if state else None
+    except TypeError, ValueError:
+        return None
+
+
+def hot_water_view(controls):
+    """The cylinder: temperature, target, Evohome's schedule state and whether it is charging."""
+    heating = controls.heating
+    dhw = getattr(heating, "dhw", None)
+    cutoff = getattr(heating, "dhw_cutoff", None)
+    cfg = dict(getattr(cutoff, "cfg", None) or {})
+    cfg.update({k: v for k, v in (getattr(dhw, "cfg", None) or {}).items() if v})
+    boiler = controls.boiler
+    cylinder = cfg.get("cylinder_temp_entity") or (
+        boiler._config.get("cylinder_temp_entity") if boiler else None
+    )
+    heater = controls.hass.states.get(cfg.get("water_heater_entity") or "")
+    if heater is None and cylinder is None:
+        return None
+    attrs = heater.attributes if heater else {}
+    mode = attrs.get("mode") if isinstance(attrs.get("mode"), dict) else {}
+    view = {
+        "temp": _round(_float(controls.hass, cylinder)),
+        "target": _round(attrs.get("temperature")),
+        "mode": mode.get("mode"),
+        "until": mode.get("until"),
+        "charging": bool(boiler.data.dhw_active) if boiler and boiler.data else None,
+        "scheduled_on": None,
+        "next_change": None,
+        "next_state": None,
+        "visitor": None,
+    }
+    cloud = controls.hass.states.get(cfg.get("cloud_entity") or "")
+    status = cloud.attributes.get("status") if cloud else None
+    setpoints = status.get("setpoints") if isinstance(status, dict) else None
+    if isinstance(setpoints, dict):
+        this = str(setpoints.get("this_sp_state") or "").lower()
+        view["scheduled_on"] = this == "on" if this in ("on", "off") else None
+        view["next_change"] = setpoints.get("next_sp_from")
+        view["next_state"] = setpoints.get("next_sp_state")
+    if dhw is not None:
+        try:
+            view["visitor"] = bool(dhw._visitor_live(dt_util.utcnow()))
+        except Exception:  # noqa: BLE001 - the overview must never break on the DHW store
+            view["visitor"] = None
+    return view
+
+
 class RoomsOverviewSensor(SensorEntity):
     """State: rooms calling for heat. Attributes: every room's figures and the boiler's."""
 
@@ -76,7 +128,7 @@ class RoomsOverviewSensor(SensorEntity):
     _attr_should_poll = False
     _attr_icon = "mdi:home-thermometer"
     # Live view only: the room lists change every minute and are already recorded elsewhere.
-    _unrecorded_attributes = frozenset({"rooms", "house"})
+    _unrecorded_attributes = frozenset({"rooms", "house", "hot_water"})
 
     def __init__(self, controls):
         self.controls = controls
@@ -111,7 +163,11 @@ class RoomsOverviewSensor(SensorEntity):
         rooms = [
             room_view(self.controls, rid, c, preheat) for rid, c in self.controls.rooms.items()
         ]
-        snapshot = {"rooms": rooms, "house": house_view(self.controls)}
+        try:
+            hot_water = hot_water_view(self.controls)
+        except Exception:  # noqa: BLE001 - the overview must never break on hot water
+            hot_water = None
+        snapshot = {"rooms": rooms, "house": house_view(self.controls), "hot_water": hot_water}
         if snapshot == self._snapshot:
             return
         self._snapshot = snapshot
