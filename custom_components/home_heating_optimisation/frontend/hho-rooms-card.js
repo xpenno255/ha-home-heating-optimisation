@@ -3,7 +3,8 @@
  * Reads sensor.home_heating_optimisation_rooms_overview (served with the integration), which
  * carries every room's temperature, target, overdrive, Evohome target, valve demand and
  * pre-heat state. Usage: `type: custom:hho-rooms-card`.
- * Optional `tolerance` sets the on-target band in degrees Celsius (default 0.15).
+ * Optional `tolerance` sets the on-target band in degrees Celsius (default 0.15), `order` lists
+ * room names in display order (others follow), and `hot_water: false` hides the cylinder tile.
  */
 
 const DEFAULT_ENTITY = "sensor.home_heating_optimisation_rooms_overview";
@@ -72,6 +73,8 @@ ha-card{display:block;overflow:hidden;container:hho / inline-size;color:var(--in
 .valve.zero b{color:var(--muted)}.valve.zero .meter{opacity:.5}
 .meter{flex:1;min-width:0;height:5px;border-radius:3px;background:var(--track);overflow:hidden}.meter i{display:block;height:100%;background:var(--heat);border-radius:0 3px 3px 0}
 .valve b{min-width:32px;text-align:right;color:var(--ink);font-weight:500;font-size:12px;font-variant-numeric:tabular-nums}
+.tank{position:relative;height:6px;border-radius:3px;background:var(--track);overflow:hidden}.tank i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--heat)}
+.room.hw{--edge:transparent}
 .pre{display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:1.5;color:var(--ink);padding:6px 9px;border-left:2px solid var(--pre);border-radius:0 5px 5px 0;background:color-mix(in srgb,var(--pre) 10%,var(--tile))}
 .pre svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--pre)}
 .empty{padding:24px;color:var(--muted)}
@@ -202,11 +205,51 @@ class HhoRoomsCard extends HTMLElement {
     </div>`;
   }
 
+  _ordered(rooms) {
+    const order = Array.isArray(this._config.order) ? this._config.order.map((n) => String(n).toLowerCase()) : [];
+    if (!order.length) return rooms;
+    const rank = (r) => {
+      const i = order.indexOf(String(r.name ?? "").toLowerCase());
+      return i < 0 ? order.length : i;
+    };
+    return rooms.map((r, i) => [r, i]).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map(([r]) => r);
+  }
+
+  _hotWater(w) {
+    const has = hasNumber(w.temp) && hasNumber(w.target);
+    const temp = Number(w.temp), target = Number(w.target);
+    const ready = has && temp >= target - 5;
+    const chip = !has ? "" : ready ? `<span class="delta ok" title="Within Evohome's 5 °C differential of the target">ready</span>`
+      : `<span class="delta below" title="Cylinder temperature minus target">${(target - temp).toFixed(1)}° below</span>`;
+    const boost = ["temporary_override", "permanent_override", "countdown_override"].includes(w.mode);
+    const status = w.charging
+      ? `<span class="st on">${FLAME}Charging</span>`
+      : w.scheduled_on === true ? `<span class="st">On</span>` : w.scheduled_on === false ? `<span class="st">Off</span>` : `<span class="st"></span>`;
+    const lo = 20, fill = has ? Math.max(0, Math.min(100, ((temp - lo) / Math.max(1, target - lo)) * 100)) : 0;
+    const next = w.next_change ? `${String(w.next_state || "").toLowerCase() === "on" ? "on" : "off"} at ${this._time(w.next_change)}` : "";
+    const sched = w.scheduled_on === true ? "Schedule on" : w.scheduled_on === false ? "Schedule off" : "Schedule";
+    const notes = [];
+    if (boost) notes.push(`Override${w.until ? " until " + this._time(w.until) : ""}`);
+    if (w.visitor) notes.push("Visitor mode");
+    return `<div class="room hw">
+      <div class="top"><h3>Hot water</h3>${status}</div>
+      <div class="pair">
+        <div class="now"><div class="lbl">Cylinder</div><div class="v">${fmt(w.temp)}<sup>°</sup></div></div>
+        ${chip}
+        <div class="tgt"><div class="lbl">Target</div><div class="v">${fmt(w.target, 0)}<sup>°</sup></div></div>
+      </div>
+      <div class="tank" role="img" title="Cylinder temperature from ${lo} °C to the target"><i style="width:${fill}%"></i></div>
+      <div class="evo"><span>${esc(sched)}</span><span>${esc(next)}</span></div>
+      ${notes.length ? `<div class="pre">${CLOCK}<span>${esc(notes.join(" · "))}</span></div>` : ""}
+    </div>`;
+  }
+
   _render() {
     if (!this.shadowRoot || !this._config) return;
     const state = this._last;
     const a = state?.attributes || {};
-    const rooms = Array.isArray(a.rooms) ? a.rooms : [];
+    const rooms = this._ordered(Array.isArray(a.rooms) ? a.rooms : []);
+    const hw = this._config.hot_water !== false && a.hot_water ? this._hotWater(a.hot_water) : "";
     const h = a.house || {};
     let below = 0, ok = 0, above = 0;
     for (const r of rooms) {
@@ -220,7 +263,7 @@ class HhoRoomsCard extends HTMLElement {
     const cols = Number.isInteger(columns) && columns > 0 ? `style="--cols:${columns}"` : "";
     const body = !state
       ? `<div class="empty">Entity ${esc(this._config.entity)} not found. Is Home Heating Optimisation 0.20 or later installed?</div>`
-      : `<div class="grid" ${cols}>${rooms.map((r) => this._room(r)).join("")}</div>`;
+      : `<div class="grid" ${cols}>${rooms.map((r) => this._room(r)).join("")}${hw}</div>`;
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>
       <div class="head">
         <div><div class="heading"><h2>${esc(this._config.title)}</h2><span class="freshness" hidden></span></div><div class="sub">Home Heating Optimisation · ${rooms.length} rooms</div></div>

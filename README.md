@@ -146,6 +146,8 @@ type: custom:hho-rooms-card
 # title: Heating
 # columns: 3        # otherwise follows the card width
 # tolerance: 0.15   # °C either side of target that counts as on target
+# order: [Kitchen, Living Room, Hall]   # display order; others follow
+# hot_water: false   # hide the hot water tile
 ```
 
 It reads `sensor.home_heating_optimisation_rooms_overview` (state: rooms calling for heat; the room and boiler figures are attributes and are not recorded).

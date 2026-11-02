@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.21.0 - rooms card: room order and hot water
+
+- Card option `order`: a list of room names in display order (others follow in their usual order), e.g. to match the Evohome controller.
+- Hot water tile at the end of the card (hide with `hot_water: false`): cylinder temperature against target with "ready" (within Evohome's 5 °C differential) or how far below, a cylinder bar from 20 °C to the target, Charging / On / Off, the next Evohome schedule change, and any override or visitor mode.
+- The rooms overview sensor gains an unrecorded `hot_water` attribute (cylinder and target from the hot water settings, schedule state from the Evohome cloud entity, charging from the boiler).
+
 ## 0.20.1 - rooms card polish
 
 - Columns follow the card's own width (container queries: 3 / 2 / 1), not the browser window, so the card works in a sections column (~500 px) and on a phone; `columns` still overrides. The target no longer disappears and nothing truncates.
