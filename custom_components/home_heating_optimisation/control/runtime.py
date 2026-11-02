@@ -520,6 +520,9 @@ class Controls:
         if self.boiler is None or c is None:
             return 0.0
         limit = self.boiler.overdrive_limit()
+        room_limit = c.get_tunable("overdrive_limit") if hasattr(c, "get_tunable") else 0.0
+        if room_limit and room_limit > 0:
+            limit = room_limit
         if not limit:
             return 0.0
         now = now or dt_util.utcnow()

@@ -101,3 +101,25 @@ async def test_recent_writes_survive_the_room_store(hass, controlled):  # noqa: 
     memory = replace(room._memory(), recent_writes=((19.6, T0), (19.8, T0 + timedelta(minutes=2))))
     room._save_memory(memory)
     assert room._memory().recent_writes == memory.recent_writes
+
+
+async def test_a_room_limit_replaces_the_house_limit(hass, controlled, sources):  # noqa: F811
+    from custom_components.home_heating_optimisation.control.migration import handover
+
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 17.0, "temperature": 20})
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    settings = {"catchup_overdrive_k": 1.0, "overdrive_strength": 1.0, "overdrive_period_min": 10}
+    room._overdrive_settings = lambda: settings
+    await c.refresh()
+    assert room.data.overdrive_k == 1.0  # house limit
+    room.set_tunable("overdrive_limit", 2.0)
+    room._overdrive = OverdriveState()
+    await c.refresh()
+    assert room.data.overdrive_k == 2.0
+    room.set_tunable("overdrive_limit", 0.0)
+    room._overdrive = OverdriveState()
+    await c.refresh()
+    assert room.data.overdrive_k == 1.0

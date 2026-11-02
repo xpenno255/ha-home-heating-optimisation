@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.22.0 - per-room overdrive limit
+
+- New per-room number **`<room> control overdrive limit`** (0-3 K, 0.1 steps, default 0 = use the Overdrive limit in the warm-up settings). When set, it replaces the house-wide limit for that room's overdrive and its pre-heat push.
+- Why: on 2 Nov the Spare Room (office from 08:00, target 19.5) sat at 18.3-18.6 by its room sensor for three hours with the full +1.0 overdrive. Its Evohome sensor, in the radiator valve head, read 20.0-20.6 while heating (1.4-2 K above the room; about 1 K below it when idle), so Evohome kept the valve 40-60 % open against a 20.6 target.
+
 ## 0.21.1 - rooms card: tap a tile to open its thermostat
 
 - Tapping (or Enter on) a room tile opens that room's Evohome thermostat (its primary climate entity, the RAMSES one) in Home Assistant's more-info dialog; the hot water tile opens the hot water heater. `more_info: false` turns this off.
