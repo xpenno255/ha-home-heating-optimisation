@@ -36,8 +36,15 @@ def room_view(controls, room_id, c, preheat):
         pre = {"status": "planned", "starts": plan["planned_start"], "warm_by": plan.get("warm_by")}
     else:
         pre = None
+    climate = c._config.get("primary_climate")
     if d is None:
-        return {"id": room_id, "name": c.room_name, "state": "no_data", "preheat": pre}
+        return {
+            "id": room_id,
+            "name": c.room_name,
+            "state": "no_data",
+            "preheat": pre,
+            "climate": climate,
+        }
     target = d.preheat_setpoint if d.preheating else d.air_setpoint
     push = d.preheat_push_k if d.preheating else d.overdrive_k
     demand = _demand(controls, c)
@@ -53,6 +60,7 @@ def room_view(controls, room_id, c, preheat):
         "demand": demand,
         "calling": bool(demand),
         "preheat": pre,
+        "climate": climate,
     }
 
 
@@ -95,6 +103,7 @@ def hot_water_view(controls):
     attrs = heater.attributes if heater else {}
     mode = attrs.get("mode") if isinstance(attrs.get("mode"), dict) else {}
     view = {
+        "entity": cfg.get("water_heater_entity"),
         "temp": _round(_float(controls.hass, cylinder)),
         "target": _round(attrs.get("temperature")),
         "mode": mode.get("mode"),

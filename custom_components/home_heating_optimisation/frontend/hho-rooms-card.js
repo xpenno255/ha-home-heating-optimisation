@@ -5,6 +5,7 @@
  * pre-heat state. Usage: `type: custom:hho-rooms-card`.
  * Optional `tolerance` sets the on-target band in degrees Celsius (default 0.15), `order` lists
  * room names in display order (others follow), and `hot_water: false` hides the cylinder tile.
+ * Tapping a tile opens that room's thermostat (`more_info: false` turns this off).
  */
 
 const DEFAULT_ENTITY = "sensor.home_heating_optimisation_rooms_overview";
@@ -75,6 +76,7 @@ ha-card{display:block;overflow:hidden;container:hho / inline-size;color:var(--in
 .valve b{min-width:32px;text-align:right;color:var(--ink);font-weight:500;font-size:12px;font-variant-numeric:tabular-nums}
 .tank{position:relative;height:6px;border-radius:3px;background:var(--track);overflow:hidden}.tank i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--heat)}
 .room.hw{--edge:transparent}
+.room[data-entity]{cursor:pointer}.room[data-entity]:hover{background:color-mix(in srgb,var(--ink) 4%,var(--tile))}.room[data-entity]:focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:-2px}
 .pre{display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:1.5;color:var(--ink);padding:6px 9px;border-left:2px solid var(--pre);border-radius:0 5px 5px 0;background:color-mix(in srgb,var(--pre) 10%,var(--tile))}
 .pre svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--pre)}
 .empty{padding:24px;color:var(--muted)}
@@ -120,11 +122,26 @@ class HhoRoomsCard extends HTMLElement {
     label.title = `Last entity update: ${new Date(updated).toLocaleString(this._hass?.locale?.language || undefined)}${stale ? "; more than 10 minutes ago" : ""}`;
   }
 
+  _open(event) {
+    if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+    const tile = event.composedPath().find((el) => el?.dataset?.entity);
+    if (!tile) return;
+    event.preventDefault();
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", { detail: { entityId: tile.dataset.entity }, bubbles: true, composed: true })
+    );
+  }
+
   setConfig(config) {
     this._config = { entity: DEFAULT_ENTITY, title: "Heating", ...config };
     const tolerance = Number(config.tolerance ?? 0.15);
     this._config.tolerance = Number.isFinite(tolerance) && tolerance >= 0 ? tolerance : 0.15;
-    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+      // Tapping a tile opens that room's Evohome thermostat (or the hot water heater).
+      this.shadowRoot.addEventListener("click", (e) => this._open(e));
+      this.shadowRoot.addEventListener("keydown", (e) => this._open(e));
+    }
     this._last = undefined;
     this._render();
   }
@@ -191,7 +208,8 @@ class HhoRoomsCard extends HTMLElement {
     const hasDemand = hasNumber(r.demand);
     const demand = hasDemand ? Math.max(0, Math.min(100, Number(r.demand))) : 0;
     const quietValve = hasDemand && demand === 0 && !r.calling && !flag;
-    return `<div class="room ${st}${!has ? " no-data" : ""}${preheating ? " preheating" : ""}${["off", "outside_window"].includes(r.state) ? " quiet" : ""}">
+    const open = r.climate && this._config.more_info !== false ? ` data-entity="${esc(r.climate)}" role="button" tabindex="0" aria-label="${esc(r.name)}: open thermostat"` : "";
+    return `<div${open} class="room ${st}${!has ? " no-data" : ""}${preheating ? " preheating" : ""}${["off", "outside_window"].includes(r.state) ? " quiet" : ""}">
       <div class="top"><h3 title="${esc(r.name)}">${esc(r.name)}</h3>${status}</div>
       <div class="pair">
         <div class="now"><div class="lbl">Room</div><div class="v">${fmt(r.air)}<sup>°</sup></div></div>
@@ -231,7 +249,8 @@ class HhoRoomsCard extends HTMLElement {
     const notes = [];
     if (boost) notes.push(`Override${w.until ? " until " + this._time(w.until) : ""}`);
     if (w.visitor) notes.push("Visitor mode");
-    return `<div class="room hw">
+    const open = w.entity && this._config.more_info !== false ? ` data-entity="${esc(w.entity)}" role="button" tabindex="0" aria-label="Hot water: open"` : "";
+    return `<div${open} class="room hw">
       <div class="top"><h3>Hot water</h3>${status}</div>
       <div class="pair">
         <div class="now"><div class="lbl">Cylinder</div><div class="v">${fmt(w.temp)}<sup>°</sup></div></div>

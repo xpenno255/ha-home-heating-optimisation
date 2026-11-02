@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.21.1 - rooms card: tap a tile to open its thermostat
+
+- Tapping (or Enter on) a room tile opens that room's Evohome thermostat (its primary climate entity, the RAMSES one) in Home Assistant's more-info dialog; the hot water tile opens the hot water heater. `more_info: false` turns this off.
+- The rooms overview sensor carries each room's `climate` entity and the hot water `entity`.
+
 ## 0.21.0 - rooms card: room order and hot water
 
 - Card option `order`: a list of room names in display order (others follow in their usual order), e.g. to match the Evohome controller.
