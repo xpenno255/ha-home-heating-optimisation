@@ -10,6 +10,8 @@ ROOM_NUMBERS = (
     ("trust_k", 0, 1, 0.05, None),
     ("cap_up", 0, 3, 0.5, "K"),
     ("cap_down", 0, 3, 0.5, "K"),
+    # 0 = use the Overdrive limit in the warm-up settings.
+    ("overdrive_limit", 0, 3, 0.1, "K"),
 )
 BOILER_NUMBERS = (
     ("design_flow", 30, 80, 1, "°C"),

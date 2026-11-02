@@ -204,6 +204,9 @@ DEFAULT_TRUST_K = 0.8
 CONF_CAP_UP = "cap_up"
 CONF_CAP_DOWN = "cap_down"
 DEFAULT_CAP = 1.5
+# Per-room overdrive limit (K); 0 uses the warm-up settings' limit.
+CONF_OVERDRIVE_LIMIT = "overdrive_limit"
+DEFAULT_OVERDRIVE_LIMIT = 0.0
 CONF_MANUAL_HOLD = "manual_hold_minutes"
 DEFAULT_MANUAL_HOLD = 120
 CONF_PREHEAT_RELEASE = "preheat_release_minutes"

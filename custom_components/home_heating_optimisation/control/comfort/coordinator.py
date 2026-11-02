@@ -42,6 +42,7 @@ from .const import (
     CONF_NAME,
     CONF_OCCUPANCY_SENSOR,
     CONF_OUTDOOR_TEMP_SENSOR,
+    CONF_OVERDRIVE_LIMIT,
     CONF_OVERRIDE_DURATION,
     CONF_PREHEAT_RELEASE,
     CONF_PRIMARY_CLIMATE,
@@ -72,6 +73,7 @@ from .const import (
     DEFAULT_MANUAL_FLOW_TEMP,
     DEFAULT_MANUAL_HOLD,
     DEFAULT_MODE,
+    DEFAULT_OVERDRIVE_LIMIT,
     DEFAULT_OVERRIDE_DURATION,
     DEFAULT_PREHEAT_RELEASE,
     DEFAULT_RUN_INTERVAL,
@@ -364,6 +366,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             (CONF_TRUST_K, DEFAULT_TRUST_K),
             (CONF_CAP_UP, DEFAULT_CAP),
             (CONF_CAP_DOWN, DEFAULT_CAP),
+            (CONF_OVERDRIVE_LIMIT, DEFAULT_OVERDRIVE_LIMIT),
         ):
             stored = store.get(key)
             fallback = self._config.get(
@@ -1056,6 +1059,10 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         try:
             cfg = self._overdrive_settings() or {}
             limit = cfg.get("catchup_overdrive_k")
+            # A room's own limit, when set, replaces the house-wide one.
+            room_limit = self._tunables.get(CONF_OVERDRIVE_LIMIT, 0.0)
+            if room_limit and room_limit > 0:
+                limit = room_limit
             strength = float(cfg.get("overdrive_strength", 1.0))
             period_s = float(cfg.get("overdrive_period_min", 10)) * 60
         except Exception:  # noqa: BLE001 - settings must never break the room cycle

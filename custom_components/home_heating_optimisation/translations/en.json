@@ -923,7 +923,7 @@
         },
         "parameter": {
           "name": "Parameter",
-          "description": "Room: trust_k, cap_up, cap_down. Boiler: design_flow, design_outdoor, return_ceiling."
+          "description": "Room: trust_k, cap_up, cap_down, overdrive_limit. Boiler: design_flow, design_outdoor, return_ceiling."
         },
         "target_value": {
           "name": "Target value",
