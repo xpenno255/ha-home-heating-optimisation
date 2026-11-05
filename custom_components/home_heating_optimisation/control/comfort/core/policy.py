@@ -31,8 +31,8 @@ class Action(str, Enum):
     RELEASE = "release"  # return the zone to its schedule (follow_schedule)
 
 
-# Most recent writes remembered for recognising late echoes.
-RECENT_WRITES_KEPT = 8
+# Most recent writes remembered for recognising late echoes (busy rooms write ~8/h).
+RECENT_WRITES_KEPT = 16
 
 
 @dataclass(frozen=True)
@@ -57,8 +57,10 @@ class PolicyParams:
     # remembered as ours is exactly the value transmitted (ownership depends on it).
     zone_setpoint_min: float = 5.0
     zone_setpoint_max: float = 30.0
-    # A reading equal to one of our own writes this recent is a late echo, not a hand.
-    recent_write_minutes: int = 15
+    # A reading equal to one of our own writes this recent is ours, not a hand. Matches
+    # override_minutes: any write that could still be in force on the controller can come
+    # back (a late broadcast, a lost newer write, Evohome's open-window restore).
+    recent_write_minutes: int = 60
 
 
 @dataclass(frozen=True)

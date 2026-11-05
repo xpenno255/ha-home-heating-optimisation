@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.22.1 - HHO's own older writes are not "set by hand"
+
+- A zone reading equal to any of HHO's own writes from the last 60 min (the life of its Evohome override) now counts as HHO's, not a manual change. Was 15 min. Up to 16 recent writes are remembered (was 8).
+- Why: 3-5 Nov showed about 7 false "set by hand" holds in 48 h, each freezing the room for about an hour. Every one was the zone reporting an older HHO write: a late broadcast of a 47-min-old value (Bedroom), a newer write that never landed so the zone stayed on the previous one (Bedroom), and Evohome's open-window function putting back a 54-min-old write (Hall).
+
 ## 0.22.0 - per-room overdrive limit
 
 - New per-room number **`<room> control overdrive limit`** (0-3 K, 0.1 steps, default 0 = use the Overdrive limit in the warm-up settings). When set, it replaces the house-wide limit for that room's overdrive and its pre-heat push.

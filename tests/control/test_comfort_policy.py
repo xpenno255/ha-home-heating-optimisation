@@ -182,19 +182,52 @@ def test_late_echo_of_an_earlier_write_is_not_manual():
     assert late.state is State.ACTIVE and late.memory.manual_detected_at is None
 
 
-def test_an_old_write_echoing_much_later_is_manual_again():
+def test_an_older_write_still_in_force_is_not_manual():
+    # 3 Nov Bedroom: wrote 16.0, then 16.1 47 min later; a broadcast carrying 16.0 came back.
+    m = OverrideMemory(
+        last_written_setpoint=16.1,
+        last_written_at=T0 - timedelta(minutes=2),
+        recent_writes=((16.0, T0 - timedelta(minutes=47)), (16.1, T0 - timedelta(minutes=2))),
+    )
+    d = decide(inputs(computed_setpoint=16.1, memory=m, zone=ZoneState(16.0, 18.0)))
+    assert d.state is State.ACTIVE and d.memory.manual_detected_at is None
+
+
+def test_a_write_restored_after_evohome_open_window_is_not_manual():
+    # 4 Nov Hall: Evohome's open-window function parked the zone at 5.0, then put back
+    # the 17.9 we wrote 54 min earlier.
+    m = OverrideMemory(
+        last_written_setpoint=18.0,
+        last_written_at=T0 - timedelta(minutes=50),
+        recent_writes=((17.9, T0 - timedelta(minutes=54)), (18.0, T0 - timedelta(minutes=50))),
+    )
+    d = decide(inputs(computed_setpoint=18.0, memory=m, zone=ZoneState(17.9, 19.0)))
+    assert d.state is State.ACTIVE and d.memory.manual_detected_at is None
+
+
+def test_an_old_write_echoing_after_its_override_expired_is_manual_again():
     old = OverrideMemory(
         last_written_setpoint=15.9,
         last_written_at=T0 - timedelta(minutes=3),
-        recent_writes=((15.7, T0 - timedelta(minutes=20)), (15.9, T0 - timedelta(minutes=3))),
+        recent_writes=((15.7, T0 - timedelta(minutes=61)), (15.9, T0 - timedelta(minutes=3))),
     )
     d = decide(inputs(computed_setpoint=15.9, memory=old, zone=ZoneState(15.7, 16.0)))
     assert d.state is State.MANUAL
 
 
+def test_a_value_we_never_wrote_is_still_manual():
+    m = OverrideMemory(
+        last_written_setpoint=16.1,
+        last_written_at=T0 - timedelta(minutes=2),
+        recent_writes=((16.0, T0 - timedelta(minutes=30)), (16.1, T0 - timedelta(minutes=2))),
+    )
+    d = decide(inputs(computed_setpoint=16.1, memory=m, zone=ZoneState(16.5, 18.0)))
+    assert d.state is State.MANUAL
+
+
 def test_recent_writes_are_pruned():
     m = OverrideMemory(
-        recent_writes=tuple((15.0 + i / 10, T0 - timedelta(minutes=30)) for i in range(3))
+        recent_writes=tuple((15.0 + i / 10, T0 - timedelta(minutes=61)) for i in range(3))
     )
     d = decide(inputs(computed_setpoint=19.5, memory=m, zone=ZoneState(19.0, 19.0)))
     assert d.memory.recent_writes == ((19.5, T0),)
