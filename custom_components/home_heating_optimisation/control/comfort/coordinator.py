@@ -922,10 +922,19 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             )
         return low, high
 
+    def _write_step(self) -> float:
+        """Smallest change in the zone target worth sending (warm-up settings)."""
+        try:
+            value = float((self._overdrive_settings() or {}).get("room_write_step"))
+        except Exception:  # noqa: BLE001 - settings must never break the room cycle
+            return THERMOSTAT_STEP
+        return value if math.isfinite(value) and value > THERMOSTAT_STEP else THERMOSTAT_STEP
+
     def _policy_params(self) -> PolicyParams:
         zone_min, zone_max = self._zone_setpoint_bounds()
         return PolicyParams(
             step=THERMOSTAT_STEP,
+            write_step=self._write_step(),
             override_minutes=int(
                 self._config.get(CONF_OVERRIDE_DURATION, DEFAULT_OVERRIDE_DURATION)
             ),

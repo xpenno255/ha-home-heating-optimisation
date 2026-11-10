@@ -225,6 +225,35 @@ async def test_unexpected_target_at_opening_pauses(hass, controlled, sources, fr
     assert writes == [] and schedule.status == "paused"
 
 
+async def test_a_pause_skips_one_session_only(hass, controlled, sources, freezer):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    heater(hass, 52.0)
+    await at(hass, freezer, schedule, monday(4))
+    assert writes == [] and schedule.status == "paused"
+    assert schedule.report()["paused_day"] == "2026-09-28"
+    # Still paused for the rest of that day, even with the target put back.
+    heater(hass, 50.0)
+    await at(hass, freezer, schedule, monday(5))
+    assert writes == [] and schedule.status == "paused"
+    await at(hass, freezer, schedule, monday(12) + timedelta(days=1))
+    assert schedule.status == "armed" and schedule.store.data["paused"] is None
+    # Next week's session runs.
+    await at(hass, freezer, schedule, monday(4) + timedelta(days=7))
+    assert len(writes) == 1 and writes[0]["setpoint"] == 60.0
+    assert schedule.status == "elevated"
+
+
+async def test_a_target_still_changed_next_week_is_skipped_again(
+    hass, controlled, sources, freezer
+):  # noqa: F811
+    _, schedule, writes = await begin(hass, controlled, freezer)
+    heater(hass, 52.0)
+    await at(hass, freezer, schedule, monday(4))
+    await at(hass, freezer, schedule, monday(4) + timedelta(days=7))
+    assert writes == [] and schedule.status == "paused"
+    assert schedule.report()["paused_day"] == "2026-10-05"
+
+
 async def test_save_failure_means_no_write(hass, controlled, sources, freezer):  # noqa: F811
     _, schedule, writes = await begin(hass, controlled, freezer)
     with patch.object(schedule.store.backend, "async_save", side_effect=OSError("disk")):

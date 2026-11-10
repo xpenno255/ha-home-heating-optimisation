@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.23.0 - fewer Evohome writes, lighter boiler logging, hot water pause skips one session
+
+- New warm-up setting **Smallest change sent to Evohome** (`room_write_step`, 0.1-0.5 K, default 0.3). A room's zone target is only re-sent once it differs from the last value sent by at least this much; 0.1 is the old behaviour. A held-back value still goes out at the usual refresh before the override expires, and the room's reason says "change below the 0.3 K write step, not sent". Applies on update without re-saving the settings.
+- Why: on 9 Nov Study and Utility each had 109 zone target changes in the day and the Spare Room 102, about two thirds of them 0.1 K nudges. Replaying that day with a 0.3 K step leaves 24-30 per room.
+- Boiler sensors no longer publish on every return or burner-power reading, only once per control cycle (each minute) and on burner starts and stops. The two main boiler sensors were storing their full attributes about 284 times an hour each.
+- Hot water schedule: when someone else has changed the cylinder target, that session is skipped and the schedule shows `paused` for the rest of that day only (new `paused_day` attribute). The next session runs if the target is back at the normal value. Before, it stayed paused until the settings were re-saved. A refused normal-target write (after enabling or changing the normal target) still waits for the settings to change.
+
 ## 0.22.1 - HHO's own older writes are not "set by hand"
 
 - A zone reading equal to any of HHO's own writes from the last 60 min (the life of its Evohome override) now counts as HHO's, not a manual change. Was 15 min. Up to 16 recent writes are remembered (was 8).

@@ -16,6 +16,9 @@ EMPTY = {
     "applied_revision": None,
     # Configuration revision paused by an external change; a new revision re-arms.
     "paused": None,
+    # Local date (ISO) of the weekly session that pause skipped: it lifts the next day.
+    # None with a pause set means a refused normal-target write, held until a new revision.
+    "paused_day": None,
     # The one owned setpoint change still to be restored, if any.
     "transaction": None,
     "last": None,

@@ -192,7 +192,12 @@ class DhwSchedule:
             await self._open_visitor(now)
             return
         if data["paused"] == cfg["revision"]:
-            return
+            if self._paused(now):
+                return
+            # The skipped session's day has passed: try the next one as normal.
+            data["paused"] = data["paused_day"] = None
+            await self.store.save()
+            self._journal("resumed", {})
         if data["applied_revision"] != cfg["revision"]:
             await self._baseline(now)
             return
@@ -558,8 +563,25 @@ class DhwSchedule:
             self._journal("command_result", {"outcome": "sent", "transaction": txn["id"]})
             return "sent"
 
+    def _paused(self, now=None):
+        """A pause in force: only for the day of the session it skipped.
+
+        Someone else's target is never overwritten, so that session is given up; the
+        next one opens only if the target is back at the normal value. A pause with no
+        day (a refused normal-target write) holds until the settings change.
+        """
+        data = self.store.data
+        if data["paused"] != self.cfg["revision"]:
+            return False
+        day = data.get("paused_day")
+        if day is None:
+            return True
+        zone = dt_util.get_default_time_zone()
+        return (now or dt_util.utcnow()).astimezone(zone).date().isoformat() <= day
+
     async def _pause(self, day, outcome):
         self.store.data["paused"] = self.cfg["revision"]
+        self.store.data["paused_day"] = day
         self.store.data["consumed"] = max(filter(None, (self.store.data["consumed"], day)))
         self.store.data["last"] = {"outcome": outcome, "day": day, "at": _now()}
         await self.store.save()
@@ -568,6 +590,7 @@ class DhwSchedule:
     async def _end(self, txn, outcome, pause=False):
         if pause:
             self.store.data["paused"] = txn["revision"]
+            self.store.data["paused_day"] = txn.get("day")
         await self._finish(txn, outcome)
 
     async def _finish(self, txn, outcome):
@@ -576,7 +599,7 @@ class DhwSchedule:
         if txn["kind"] == "baseline" and outcome == "baseline_ok":
             data["applied_revision"] = txn["revision"]
             if data["paused"] == txn["revision"]:
-                data["paused"] = None
+                data["paused"] = data["paused_day"] = None
         self._record(txn, outcome)
         self._written = self._restore_sent = None
         self.evidence = None
@@ -649,7 +672,7 @@ class DhwSchedule:
             return "disabled"
         if not usable(self.cfg):
             return "misconfigured"
-        if self.store.data["paused"] == self.cfg["revision"]:
+        if self._paused():
             return "paused"
         return "armed"
 
@@ -676,6 +699,7 @@ class DhwSchedule:
                 "active": self._visitor_live(dt_util.utcnow()),
             },
             "last": self.store.data["last"],
+            "paused_day": self.store.data.get("paused_day") if self.status == "paused" else None,
             "blocked": self.last_block,
             "storage": self.store.status,
             "meaning": "requested setpoint changes; controller replies are observed, not assumed",

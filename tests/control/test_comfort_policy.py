@@ -119,6 +119,31 @@ def test_change_of_one_step_writes_smaller_change_does_not():
     )
 
 
+def test_write_step_holds_back_small_changes_but_not_big_ones_or_refreshes():
+    p = PolicyParams(write_step=0.3)
+    m = held(19.5, minutes_ago=10)
+
+    def run(target, memory=m):
+        zone = ZoneState(memory.last_written_setpoint, 19.0)
+        return decide(inputs(params=p, memory=memory, computed_setpoint=target, zone=zone))
+
+    for target in (19.6, 19.7, 19.3):
+        d = run(target)
+        assert d.action is Action.NONE and "write step" in d.reason
+        assert d.memory.last_written_setpoint == 19.5  # still measured from the value sent
+    assert "unchanged" in run(19.5).reason
+    for target in (19.8, 19.2, 20.5):
+        d = run(target)
+        assert d.action is Action.WRITE and d.setpoint == target
+    # Near expiry the held-back value is what gets sent.
+    d = run(19.7, held(19.5, minutes_ago=50))
+    assert d.action is Action.WRITE and d.setpoint == 19.7
+    # First write is never held back, and a step below the thermostat's has no effect.
+    assert run(19.6, OverrideMemory()).action is Action.WRITE
+    first = inputs(params=PolicyParams(write_step=0.05), memory=m, computed_setpoint=19.6)
+    assert decide(first).action is Action.WRITE
+
+
 # --- manual override ---------------------------------------------------------
 
 
