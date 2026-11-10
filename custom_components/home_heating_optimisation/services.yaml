@@ -72,6 +72,15 @@ get_energy_report:
           min: 1
           max: 90
           mode: box
+get_scorecard:
+  fields:
+    days:
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 1100
+          mode: box
 get_house_model:
 reload_house_model:
 run_review:

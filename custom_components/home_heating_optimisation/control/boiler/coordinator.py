@@ -1359,6 +1359,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 self._update_cycling(self.data, now)
                 self.async_update_listeners()
 
+    def burn_rows(self) -> list:
+        """Completed burns, oldest first: [start epoch, seconds, mean modulation %, DHW]."""
+        return [list(b) for b in self._burns]
+
     def _update_cycling(self, d: BFCCoordinatorData, now: datetime) -> None:
         """Cycling aggregates and the cycling-adjusted efficiency for 24 h and 7 d."""
         nominal = NOMINAL_KW.get(self._config.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED))
