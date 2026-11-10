@@ -2,6 +2,14 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.24.0 - daily scorecard
+
+- New **daily scorecard**: one row per local day, kept for up to 1100 days in the integration's own storage. Each row has outdoor and indoor mean temperature, degree-days (base 15.5 °C), gas split into heating and hot water, heating gas per degree-day, burner starts / short burns (under 90 s) / mean burn, the share of heating firing time with the return below 55 °C, Evohome writes, and for each room the time on target (within 0.3 K), time more than 0.5 K short, and degree-hours short and over.
+- Comfort is measured against each room's air target before overdrive or sensor matching, and only while the room is in normal control: pre-heat, a manual hold, an open window and time outside the room's window are left out (hold and window time is reported as `held_minutes`).
+- Gas comes from the first configured `fuel_input` meter and is split with the boiler controller's own hot water detection. Gas that arrives across a gap in sampling is counted in the total but not called hot water (`gas_unsplit_kwh`). `coverage` is the share of the day that was sampled.
+- Read it with the service `home_heating_optimisation.get_scorecard` (`days`, default 30; today's part-day is returned separately) or the sensor `sensor.home_heating_optimisation_daily_scorecard` (state: yesterday's heating kWh per degree-day; attributes: yesterday's headline figures, today so far and the last 14 days, the lists unrecorded).
+- Why: every change so far was judged from one or two days of hand-pulled history, and Home Assistant keeps only 14 days of it.
+
 ## 0.23.0 - fewer Evohome writes, lighter boiler logging, hot water pause skips one session
 
 - New warm-up setting **Smallest change sent to Evohome** (`room_write_step`, 0.1-0.5 K, default 0.3). A room's zone target is only re-sent once it differs from the last value sent by at least this much; 0.1 is the old behaviour. A held-back value still goes out at the usual refresh before the override expires, and the room's reason says "change below the 0.3 K write step, not sent". Applies on update without re-saving the settings.

@@ -22,6 +22,7 @@ from .gateway.monitor import GatewayMonitor
 from .journal.coordinator import Journal
 from .observations import watched_entities
 from .optimum.coordinator import Optimum
+from .scorecard.coordinator import Scorecard
 from .services import async_register_services
 from .source_identity import async_register_source_identity
 from .trials.coordinator import Trials
@@ -96,6 +97,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
             # Metered energy is optional evidence; its failure never blocks heating.
             LOGGER.exception("Energy evidence could not start; continuing without it")
             coordinator.energy = None
+    try:
+        coordinator.scorecard = Scorecard(hass, entry, coordinator)
+        await coordinator.scorecard.initialise()
+        entry.async_on_unload(coordinator.scorecard.stop)
+    except Exception:
+        # The scorecard is optional evidence; its failure never blocks heating.
+        LOGGER.exception("Daily scorecard could not start; continuing without it")
+        coordinator.scorecard = None
     # Remove only our entities for explicitly removed rooms, retaining all others' IDs.
     registry = er.async_get(hass)
     valid_rooms = {room["id"] for room in coordinator.config["rooms"]}
@@ -132,6 +141,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingEntry) -> bool:
             coordinator.energy.start()
         except Exception:
             LOGGER.exception("Energy evidence collection failed to start")
+    if coordinator.scorecard:
+        coordinator.scorecard.start()
     entry.async_on_unload(entry.add_update_listener(async_reload))
     return True
 

@@ -807,6 +807,16 @@
         }
       }
     },
+    "get_scorecard": {
+      "name": "Get daily scorecard",
+      "description": "Return one row per local day: outdoor temperature and degree-days, heating and hot water gas, gas per degree-day, each room's time on target against its air target, burner starts and Evohome writes. Today's part-day is returned separately.",
+      "fields": {
+        "days": {
+          "name": "Days",
+          "description": "Number of recent days to include (1 to 1100)."
+        }
+      }
+    },
     "get_energy_report": {
       "name": "Get energy report",
       "description": "Return metered-energy days with coverage, weather degree hours, hot-water share, configuration eras and comparability limits. No savings figure is produced when context is insufficient.",

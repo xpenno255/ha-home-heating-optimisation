@@ -110,6 +110,21 @@ def async_register_services(hass):
             raise ServiceValidationError("Configure at least one energy meter first")
         return energy.report(call.data["days"])
 
+    async def scorecard(call):
+        card = heating().scorecard
+        if card is None:
+            raise ServiceValidationError("The daily scorecard is not running")
+        return card.report(call.data["days"])
+
+    hass.services.async_register(
+        DOMAIN,
+        "get_scorecard",
+        scorecard,
+        schema=vol.Schema(
+            {vol.Optional("days", default=30): vol.All(vol.Coerce(int), vol.Range(min=1, max=1100))}
+        ),
+        supports_response=SupportsResponse.ONLY,
+    )
     hass.services.async_register(
         DOMAIN,
         "get_energy_report",
