@@ -1195,7 +1195,17 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
 
     @callback
     def _handle_efficiency_event(self, event) -> None:
-        self._publish_efficiency()
+        """A return or burner-power reading: refresh the running figure without publishing.
+
+        These arrive every few seconds; publishing each one stored the whole boiler
+        snapshot in the recorder about 280 times an hour. The control cycle publishes
+        once a minute, and burner starts and stops still publish at once.
+        """
+        if (
+            self.data is not None
+            and self._config.get(CONF_EFFICIENCY_PROFILE, PROFILE_DISABLED) != PROFILE_DISABLED
+        ):
+            self._update_efficiency(self.data, dt_util.utcnow())
 
     @callback
     def _publish_efficiency(self) -> None:

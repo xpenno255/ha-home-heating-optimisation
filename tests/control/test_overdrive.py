@@ -86,6 +86,11 @@ def test_settings_defaults_and_validation():
     assert validation_error({**base, "overdrive_period_min": 31}) == "warmup_boost_invalid"
     assert validation_error({**base, "overdrive_strength": 0.1}) == "warmup_boost_invalid"
     assert validation_error({**base, "room_check_minutes": 0}) == "warmup_boost_invalid"
+    assert warmup_config({})["room_write_step"] == 0.3
+    assert warmup_config({"warmup_boost": {"room_write_step": 0.1}})["room_write_step"] == 0.1
+    assert warmup_config({"warmup_boost": {"room_write_step": 0.6}})["room_write_step"] == 0.3
+    assert validation_error({**base, "room_write_step": 0.5}) is None
+    assert validation_error({**base, "room_write_step": 0.05}) == "warmup_boost_invalid"
 
 
 async def test_rooms_run_at_the_room_check_interval(hass, controlled):  # noqa: F811

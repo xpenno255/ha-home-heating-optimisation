@@ -1021,6 +1021,9 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             vol.Required("room_check_minutes", default=old["room_check_minutes"]): vol.All(
                 vol.Coerce(int), vol.Range(*OVERDRIVE_SETTINGS["room_check_minutes"])
             ),
+            vol.Required("room_write_step", default=old["room_write_step"]): vol.All(
+                vol.Coerce(float), vol.Range(*OVERDRIVE_SETTINGS["room_write_step"])
+            ),
         }
         for key, (low, high) in WARMUP_LIMITS.items():
             schema[vol.Required(key, default=old[key])] = vol.All(

@@ -19,6 +19,8 @@ DEFAULTS = {
     "overdrive_period_min": 10,
     # How often each room's control runs (minutes).
     "room_check_minutes": 1,
+    # Smallest change in a room's zone target worth sending to Evohome (K).
+    "room_write_step": 0.3,
 }
 LIMITS = {"start": (0.05, 0.6), "full": (0.06, 1.0), "decay_k_per_min": (0.2, 5.0)}
 OVERDRIVE_LIMITS = (0.2, 2.0)
@@ -26,6 +28,7 @@ OVERDRIVE_SETTINGS = {
     "overdrive_strength": (0.25, 3.0),
     "overdrive_period_min": (1, 30),
     "room_check_minutes": (1, 10),
+    "room_write_step": (0.1, 0.5),
 }
 INTEGERS = ("overdrive_period_min", "room_check_minutes")
 
@@ -56,6 +59,7 @@ def warmup_config(config):
         except TypeError, ValueError:
             value = DEFAULTS[key]
         out[key] = int(round(value)) if key in INTEGERS else value
+    out["room_write_step"] = round(out["room_write_step"], 1)
     return out
 
 

@@ -324,7 +324,7 @@
           "window_end": "Window end (local time)"
         },
         "data_description": {
-          "enabled": "Turning this on, or changing the normal target, sets the normal target once. Other saves and restarts never reapply it. If someone else changes the target, the schedule pauses until it is turned off and on again.",
+          "enabled": "Turning this on, or changing the normal target, sets the normal target once. Other saves and restarts never reapply it. If someone else changes the target, it is left alone and that session is skipped; the next one runs if the target is back at the normal value.",
           "demand_entity": "Used as charging evidence. The water heater's on state only means heating is allowed, so it is not used for this.",
           "high_target": "Raised at the window start. It returns to normal once the first charge has reached this temperature and demand has been off for 10 minutes, or when Evohome turns DHW off, or at the window end.",
           "window_end": "A restart or settings change during a session returns the target to normal and does not resume the session."
@@ -406,6 +406,7 @@
           "overdrive_strength": "Overdrive strength (1 = standard scale, 0.25-3)",
           "overdrive_period_min": "Overdrive update period (minutes, 1-30)",
           "room_check_minutes": "Room check interval (minutes, 1-10)",
+          "room_write_step": "Smallest change sent to Evohome (K, 0.1-0.5)",
           "start": "Demand share where the boost starts (0-1)",
           "full": "Demand share for the full boost (0-1)",
           "decay_k_per_min": "Slowest fall of the boost (K per minute)"
@@ -417,7 +418,8 @@
           "catchup_overdrive_k": "Evohome opens a valve in proportion to how far its zone is below target, so a room a few tenths short can sit there with the valve part open. Overdrive adds to the target written to each room's zone in proportion to how far the room (by its own sensor) is below its air target: at strength 1, 0.1 K short adds 0.1, 0.2 adds 0.3, 0.3 adds 0.5, 0.5 adds 0.8 and 0.6 adds 1.0, never more than this limit. Over target it takes off one for one, at most 0.5 K. It follows the room and is gone once the room is on target. Not during pre-heat: there, a room behind its plan gets its shortfall to the goal added, up to this limit, ending within 0.3 K.",
           "overdrive_strength": "Multiplies the overdrive scale: 2 adds twice as much for the same shortfall, 0.5 half.",
           "overdrive_period_min": "A room's overdrive is raised at most this often, so sensor flicker does not cause a stream of Evohome writes. Any lowering (the room catching up, or going over target) is applied at the next room check.",
-          "room_check_minutes": "How often each room's control runs: reads its temperatures, updates its overdrive and writes its zone target if it has changed. Shorter reacts faster as a room nears target; Evohome is only written when the target actually changes."
+          "room_check_minutes": "How often each room's control runs: reads its temperatures, updates its overdrive and writes its zone target if it has changed. Shorter reacts faster as a room nears target; Evohome is only written when the target actually changes.",
+          "room_write_step": "A room's zone target is only re-sent to Evohome once it differs from the last value sent by at least this much. 0.1 sends every change (about 100 a day per room); 0.3 sends about a quarter as many. Until then Evohome keeps the last value, so its target can sit up to just under this far from the ideal one. Bigger moves, such as a schedule change of 0.5 K or a window-open setback, still go at once."
         }
       }
     },

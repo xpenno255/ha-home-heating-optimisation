@@ -38,6 +38,9 @@ RECENT_WRITES_KEPT = 16
 @dataclass(frozen=True)
 class PolicyParams:
     step: float = 0.1  # thermostat resolution; writes below this are suppressed
+    # Smallest change from the last written target worth sending. Below `step` it has
+    # no effect. `step` alone still sets the tolerance for recognising a reading.
+    write_step: float = 0.1
     override_minutes: int = 60
     refresh_before_expiry_minutes: int = 15
     manual_hold_minutes: int = 120
@@ -270,7 +273,7 @@ def _write_needed(target: float, m: OverrideMemory, inp: PolicyInputs) -> bool:
         return True
     if m.last_written_setpoint is None:
         return True
-    if abs(target - m.last_written_setpoint) >= p.step - 1e-6:
+    if abs(target - m.last_written_setpoint) >= max(p.step, p.write_step) - 1e-6:
         return True
     return _override_expiring(m, inp.now, p)
 
@@ -305,7 +308,13 @@ def _write(
     if inp.retry_reverted_command:
         reason += "; retrying command after prior state returned"
     if not _write_needed(target, m, inp):
-        return Decision(state, Action.NONE, None, reason + "; unchanged, override still valid", m)
+        held_back = abs(target - m.last_written_setpoint) >= p.step - 1e-6
+        note = (
+            f"; change below the {p.write_step:g} K write step, not sent"
+            if held_back
+            else "; unchanged, override still valid"
+        )
+        return Decision(state, Action.NONE, None, reason + note, m)
     window = timedelta(minutes=p.recent_write_minutes)
     recent = tuple(w for w in m.recent_writes if inp.now - w[1] <= window)
     new_m = replace(
