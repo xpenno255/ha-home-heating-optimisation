@@ -306,7 +306,11 @@
           "meter_2_unit": "Meter 2 unit override",
           "meter_3_entity": "Meter 3 sensor (energy or gas counter)",
           "meter_3_kind": "Meter 3 measures",
-          "meter_3_unit": "Meter 3 unit override"
+          "meter_3_unit": "Meter 3 unit override",
+          "billing_meter": "Supplier's gas meter, running total (optional)"
+        },
+        "data_description": {
+          "billing_meter": "For the daily scorecard only. A cumulative reading from the gas supplier's smart meter, for example the Octopus 'current total consumption' sensor. When it reported for at least 90% of a day, the scorecard takes that day's gas from it and uses the boiler's own counter only to split it between heating and hot water. Otherwise the scorecard falls back to the boiler counter."
         }
       },
       "dhw_schedule": {

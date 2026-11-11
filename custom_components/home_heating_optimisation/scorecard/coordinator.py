@@ -16,16 +16,19 @@ from .core import (
     BASE_C,
     MAX_DAYS,
     MAX_STEP_MINUTES,
+    METER_FRESH_MINUTES,
+    METER_MAX_SILENCE_MINUTES,
     SHORT_K,
     TOLERANCE_K,
     add_gas,
+    add_meter_gas,
     add_sample,
     add_write,
     burner_summary,
     empty_day,
     finalise,
     gas_delta,
-    valid_day,
+    restore_day,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -51,6 +54,9 @@ class Scorecard:
         self._failed = False
         specs = [s for s in meter_specs(heating.config) if s["kind"] == "fuel_input"]
         self.meter_spec = specs[0] if specs else None
+        # The supplier's meter, when one is configured: slow, but it is what is billed.
+        self.billing_entity = (heating.config.get("energy") or {}).get("billing_meter") or None
+        self.billing: dict | None = None  # last reading: {"kwh", "changed", "seen"}
 
     async def initialise(self):
         data = await self.store.async_load()
@@ -58,11 +64,13 @@ class Scorecard:
             days = data.get("days")
             if isinstance(days, list):
                 self.days = [d for d in days if isinstance(d, dict) and d.get("date")]
-            if valid_day(data.get("current")):
-                self.current = data["current"]
+            self.current = restore_day(data.get("current"))
             meter = data.get("meter")
             if isinstance(meter, dict) and "kwh" in meter and "at" in meter:
                 self.meter = meter
+            billing = data.get("billing")
+            if isinstance(billing, dict) and all(k in billing for k in ("kwh", "changed", "seen")):
+                self.billing = billing
         self.status = "ready"
 
     def start(self):
@@ -79,7 +87,12 @@ class Scorecard:
     async def _save(self):
         try:
             await self.store.async_save(
-                {"days": self.days, "current": self.current, "meter": self.meter}
+                {
+                    "days": self.days,
+                    "current": self.current,
+                    "meter": self.meter,
+                    "billing": self.billing,
+                }
             )
         except Exception:  # noqa: BLE001 - evidence only
             self.status = "save_failed"
@@ -133,6 +146,7 @@ class Scorecard:
         bdata = boiler.data if boiler is not None else None
         dhw = bool(bdata.dhw_active) if bdata is not None else False
         self._gas(day, now, dhw)
+        meter_live = self._billing(day, now)
         rooms = {}
         for room_id, c in (getattr(controls, "rooms", None) or {}).items():
             d = c.data
@@ -161,8 +175,51 @@ class Scorecard:
                 "return_c": bdata.return_temperature_used if bdata.return_fresh else None,
             },
             rooms=rooms,
+            meter_live=meter_live,
         )
         return rolled
+
+    def _billing(self, day, now) -> bool:
+        """Read the billing meter; True while it is reporting."""
+        if not self.billing_entity:
+            return False
+        state = self.hass.states.get(self.billing_entity)
+        if state is None:
+            return False
+        try:
+            value = float(state.state)
+        except TypeError, ValueError:
+            return False
+        spec = self.meter_spec or {}
+        kwh = to_kwh(
+            value,
+            state.attributes.get("unit_of_measurement"),
+            **{k: spec[k] for k in ("calorific_value_mj_m3", "volume_correction") if spec.get(k)},
+        )
+        if kwh is None:
+            return False
+        reported = getattr(state, "last_reported", None) or state.last_updated
+        if (now - reported).total_seconds() / 60 > METER_FRESH_MINUTES:
+            return False
+        last = self.billing
+        changed = state.last_changed.isoformat()
+        if last is None:
+            self.billing = {"kwh": kwh, "changed": changed, "seen": now.isoformat()}
+            return True
+        if kwh != last["kwh"]:
+            try:
+                silence = (now - datetime.fromisoformat(last["seen"])).total_seconds() / 60
+                since = (now - datetime.fromisoformat(last["changed"])).total_seconds() / 60
+            except TypeError, ValueError:
+                silence = since = None
+            # After a long silence the jump covers time nobody watched: leave it out.
+            if silence is not None and silence <= METER_MAX_SILENCE_MINUTES:
+                delta = gas_delta(last["kwh"], kwh, since)
+                if delta is not None:
+                    add_meter_gas(day, delta)
+            last = {"kwh": kwh, "changed": changed}
+        self.billing = {**last, "seen": now.isoformat()}
+        return True
 
     def _gas(self, day, now, dhw):
         spec = self.meter_spec
@@ -210,7 +267,10 @@ class Scorecard:
                 "short_below_k": SHORT_K,
                 "comfort": "room air against its air target before overdrive, only while the "
                 "room is in normal control",
-                "gas": spec["entity"] if (spec := self.meter_spec) else None,
+                "gas": "billing meter for the amount when it covered the day, else the boiler "
+                "counter; the boiler counter always gives the heating / hot water split",
+                "boiler_counter": spec["entity"] if (spec := self.meter_spec) else None,
+                "billing_meter": self.billing_entity,
             },
             "today": self.today(),
             "days": self.days[-days:],

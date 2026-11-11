@@ -6,13 +6,14 @@ import pytest
 
 from custom_components.home_heating_optimisation.scorecard.core import (
     add_gas,
+    add_meter_gas,
     add_sample,
     add_write,
     burner_summary,
     empty_day,
     finalise,
     gas_delta,
-    valid_day,
+    restore_day,
 )
 from custom_components.home_heating_optimisation.scorecard.sensor import ENTITY_ID
 from tests.control.test_runtime import controlled as controlled  # noqa: F401 - fixture
@@ -96,16 +97,60 @@ def test_a_mild_day_gives_no_ratio_and_stored_days_are_checked():
     add_sample(day, 5, boiler={"outdoor": 15.0}, rooms={"study": room(19, 19)})
     add_gas(day, 4.0, dhw=False, split=True)
     assert finalise(day)["heating_kwh_per_degree_day"] is None
-    assert valid_day(day) and not valid_day({"date": "x"}) and not valid_day(None)
+    assert restore_day({"date": "x"}) is None and restore_day(None) is None
+    # A part-day stored by an older version gains whatever has been added since.
     day["rooms"]["study"].pop("held")
-    assert not valid_day(day)
+    day.pop("gas_meter")
+    day.pop("meter_minutes")
+    restored = restore_day(day)
+    assert restored["rooms"]["study"]["held"] == 0.0 and restored["gas"] == 4.0
+    assert restored["gas_meter"] is None and restored["meter_minutes"] == 0.0
+    add_sample(restored, 5, boiler={"outdoor": 15.0}, rooms={"study": room(19, 19)})
+    assert finalise(restored)["gas_source"] == "boiler_counter"
+
+
+def metered_day(live_samples, total_samples=288):
+    day = empty_day("2026-11-12")
+    for index in range(total_samples):
+        add_sample(day, 5, boiler={"outdoor": 5.5}, rooms={}, meter_live=index < live_samples)
+    add_gas(day, 80.0, dhw=False, split=True)
+    add_gas(day, 20.0, dhw=True, split=True)
+    add_meter_gas(day, 92.0)
+    return day
+
+
+def test_the_billing_meter_sets_the_amount_and_the_boiler_counter_the_split():
+    row = finalise(metered_day(288))
+    assert row["gas_source"] == "meter" and row["gas_kwh"] == 92.0
+    assert row["gas_dhw_kwh"] == 18.4 and row["gas_heating_kwh"] == 73.6
+    assert row["gas_counter_kwh"] == 100.0 and row["gas_meter_kwh"] == 92.0
+    assert row["counter_to_meter"] == pytest.approx(1.087, abs=1e-3)
+    assert row["heating_kwh_per_degree_day"] == pytest.approx(73.6 / 10, abs=0.01)
+
+
+def test_a_meter_that_missed_part_of_the_day_is_not_used():
+    row = finalise(metered_day(200))  # reporting for under 90 % of the day
+    assert row["gas_source"] == "boiler_counter" and row["gas_kwh"] == 100.0
+    assert row["gas_dhw_kwh"] == 20.0 and row["counter_to_meter"] is None
+    assert row["gas_meter_kwh"] == 92.0 and row["gas_meter_coverage"] == pytest.approx(
+        0.694, abs=1e-3
+    )
+    # A live meter on a day with no gas reads zero, not nothing.
+    day = empty_day("2026-07-01")
+    add_sample(day, 5, boiler={"outdoor": 20.0}, rooms={}, meter_live=True)
+    row = finalise(day)
+    assert row["gas_kwh"] == 0.0 and row["gas_source"] == "meter" and row["gas_heating_kwh"] is None
 
 
 async def test_collector_samples_rolls_the_day_and_reports(hass, controlled, sources, freezer):  # noqa: F811
     await hass.config.async_set_time_zone("Europe/London")
     freezer.move_to(datetime(2026, 11, 10, 23, 50, tzinfo=timezone.utc))
-    controlled["energy"] = {"meters": [{"entity": "sensor.gas", "kind": "fuel_input"}]}
+    controlled["energy"] = {
+        "meters": [{"entity": "sensor.gas", "kind": "fuel_input"}],
+        "billing_meter": "sensor.supplier_gas",
+    }
     hass.states.async_set("sensor.gas", 1000.0, {"unit_of_measurement": "kWh"})
+    hass.states.async_set("sensor.supplier_gas", 500.0, {"unit_of_measurement": "kWh"})
     hass.states.async_set("climate.study", "auto", {"current_temperature": 18.0, "temperature": 20})
     entry, c, calls = await start(hass, controlled)
     card = entry.runtime_data.scorecard
@@ -114,9 +159,13 @@ async def test_collector_samples_rolls_the_day_and_reports(hass, controlled, sou
     for step in range(1, 6):
         freezer.tick(timedelta(minutes=1))
         hass.states.async_set("sensor.gas", 1000.0 + 0.3 * step, {"unit_of_measurement": "kWh"})
+        if step == 4:  # the supplier's meter reports rarely
+            hass.states.async_set("sensor.supplier_gas", 501.2, {"unit_of_measurement": "kWh"})
         await card.sample()
     today = card.today()
-    assert today["date"] == "2026-11-10" and today["gas_kwh"] == pytest.approx(1.5)
+    assert today["date"] == "2026-11-10" and today["gas_counter_kwh"] == pytest.approx(1.5)
+    assert today["gas_source"] == "meter" and today["gas_kwh"] == pytest.approx(1.2)
+    assert today["counter_to_meter"] == pytest.approx(1.25)
     assert today["coverage"] == pytest.approx(6 / 1440, abs=1e-3)
     assert "study" in today["rooms"] and today["burner"]["starts"] == 0
     freezer.move_to(datetime(2026, 11, 11, 0, 1, tzinfo=timezone.utc))
@@ -126,7 +175,8 @@ async def test_collector_samples_rolls_the_day_and_reports(hass, controlled, sou
     assert card.today()["date"] == "2026-11-11"
     state = hass.states.get(ENTITY_ID)
     assert state is not None and state.attributes["date"] == "2026-11-10"
-    assert state.attributes["gas_kwh"] == pytest.approx(1.5)
+    assert state.attributes["gas_kwh"] == pytest.approx(1.2)
+    assert state.attributes["gas_source"] == "meter"
     assert "rooms" not in state.attributes["days"][0]
     response = await hass.services.async_call(
         "home_heating_optimisation",
@@ -142,4 +192,54 @@ async def test_collector_samples_rolls_the_day_and_reports(hass, controlled, sou
     await hass.async_block_till_done()
     again = entry.runtime_data.scorecard
     assert again is not card and [d["date"] for d in again.days] == ["2026-11-10"]
-    assert again.current["date"] == "2026-11-11"
+    assert again.current["date"] == "2026-11-11" and again.billing["kwh"] == 501.2
+    # A reading after a long silence covers time nobody watched, so it is left out.
+    freezer.tick(timedelta(hours=5))
+    hass.states.async_set("sensor.supplier_gas", 560.0, {"unit_of_measurement": "kWh"})
+    await again.sample()
+    assert again.current["gas_meter"] in (None, 0.0) and again.billing["kwh"] == 560.0
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set("sensor.supplier_gas", 560.4, {"unit_of_measurement": "kWh"})
+    await again.sample()
+    assert again.current["gas_meter"] == pytest.approx(0.4)
+
+
+async def test_options_flow_stores_the_billing_meter(hass, config, sources):
+    from custom_components.home_heating_optimisation.const import effective_config
+    from tests.test_integration import setup
+
+    entry = await setup(hass, config)
+    hass.states.async_set(
+        "sensor.gas", 10.0, {"unit_of_measurement": "kWh", "device_class": "energy"}
+    )
+    hass.states.async_set(
+        "sensor.supplier_gas", 5.0, {"unit_of_measurement": "kWh", "device_class": "energy"}
+    )
+    hass.states.async_set("sensor.not_a_meter", 5.0, {"unit_of_measurement": "°C"})
+
+    async def submit(values):
+        flow = await hass.config_entries.options.async_init(entry.entry_id)
+        flow = await hass.config_entries.options.async_configure(
+            flow["flow_id"], {"next_step_id": "energy"}
+        )
+        return await hass.config_entries.options.async_configure(flow["flow_id"], values)
+
+    base = {
+        "meter_1_entity": "sensor.gas",
+        "meter_1_kind": "fuel_input",
+        "calorific_value_mj_m3": 39.5,
+        "volume_correction": 1.02264,
+    }
+    bad = await submit({**base, "billing_meter": "sensor.not_a_meter"})
+    assert bad["errors"] == {"base": "invalid_energy_meter"}
+    same = await submit({**base, "billing_meter": "sensor.gas"})
+    assert same["errors"] == {"base": "invalid_energy_meter"}
+    assert (await submit({**base, "billing_meter": "sensor.supplier_gas"}))[
+        "type"
+    ] == "create_entry"
+    await hass.async_block_till_done()
+    assert effective_config(entry)["energy"]["billing_meter"] == "sensor.supplier_gas"
+    assert entry.runtime_data.scorecard.billing_entity == "sensor.supplier_gas"
+    assert (await submit(base))["type"] == "create_entry"
+    await hass.async_block_till_done()
+    assert "billing_meter" not in effective_config(entry)["energy"]

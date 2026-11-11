@@ -1278,8 +1278,20 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 )
             if not errors and len({m["entity"] for m in selected}) != len(selected):
                 errors["base"] = "duplicate_energy_meter"
+            billing = user_input.get("billing_meter") or None
+            if billing and not errors:
+                state = self.hass.states.get(billing)
+                if (
+                    not billing.startswith("sensor.")
+                    or state is None
+                    or state.attributes.get("device_class") not in ("energy", "gas")
+                    or billing in {m["entity"] for m in selected}
+                ):
+                    errors["base"] = "invalid_energy_meter"
             if not errors:
                 energy = {"meters": selected} if selected else {}
+                if billing:
+                    energy["billing_meter"] = billing
                 return self.async_create_entry(title=NAME, data={**self.current, "energy": energy})
         schema = {}
         for index in range(1, MAX_METERS + 1):
@@ -1299,6 +1311,11 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             schema[optional(unit_key, {unit_key: meter.get("unit")})] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=list(UNITS))
             )
+        schema[optional("billing_meter", {"billing_meter": old.get("billing_meter")})] = (
+            selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["sensor"], device_class=["energy", "gas"])
+            )
+        )
         first = meters[0] if meters else {}
         schema.update(
             dict(
