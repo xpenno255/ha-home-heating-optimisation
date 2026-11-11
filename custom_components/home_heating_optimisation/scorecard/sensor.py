@@ -15,6 +15,7 @@ RECORDED = (
     "gas_kwh",
     "gas_heating_kwh",
     "gas_dhw_kwh",
+    "gas_source",
     "comfort_within",
     "short_degree_hours",
     "writes",

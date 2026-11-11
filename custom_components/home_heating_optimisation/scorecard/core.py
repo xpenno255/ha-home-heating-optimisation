@@ -20,6 +20,11 @@ CONDENSING_RETURN_C = 55.0
 SHORT_BURN_SECONDS = 90.0
 MAX_STEP_MINUTES = 5.0  # a longer gap between samples is not counted
 MAX_GAS_KW = 36.0  # no boiler here burns faster; a bigger jump is a counter fault
+# The billing meter reports about every half hour. A day counts as metered only when the
+# meter was reporting for most of it, and a reading after a long silence is not trusted.
+METER_FRESH_MINUTES = 90.0
+METER_MAX_SILENCE_MINUTES = 120.0
+METER_MIN_COVERAGE = 0.9
 MAX_DAYS = 1100
 HELD_STATES = ("manual", "window_open")
 
@@ -44,6 +49,8 @@ def empty_day(date: str) -> dict:
         "gas": None,
         "gas_dhw": 0.0,
         "gas_unsplit": 0.0,
+        "gas_meter": None,
+        "meter_minutes": 0.0,
         "fire_minutes": 0.0,
         "fire_condensing_minutes": 0.0,
         "fire_return_sum": 0.0,
@@ -70,17 +77,23 @@ def _room(day: dict, room_id: str, name) -> dict:
     return room
 
 
-def add_sample(day: dict, minutes: float, *, boiler: dict | None, rooms: dict) -> None:
+def add_sample(
+    day: dict, minutes: float, *, boiler: dict | None, rooms: dict, meter_live: bool = False
+) -> None:
     """Add one sample covering `minutes`.
 
     `boiler`: outdoor, dhw, power (burner %), return_c. `rooms`: id -> name, state,
-    in_window, air, target.
+    in_window, air, target. `meter_live`: the billing meter is currently reporting.
     """
     minutes = _num(minutes)
     if minutes is None or minutes <= 0:
         return
     minutes = min(minutes, MAX_STEP_MINUTES)
     day["minutes"] += minutes
+    if meter_live:
+        day["meter_minutes"] += minutes
+        if day["gas_meter"] is None:
+            day["gas_meter"] = 0.0
     boiler = boiler or {}
     outdoor = _num(boiler.get("outdoor"))
     if outdoor is not None:
@@ -142,6 +155,11 @@ def add_gas(day: dict, kwh: float, *, dhw: bool, split: bool) -> None:
         day["gas_dhw"] += kwh
 
 
+def add_meter_gas(day: dict, kwh: float) -> None:
+    """Add gas read from the billing meter."""
+    day["gas_meter"] = (day["gas_meter"] or 0.0) + kwh
+
+
 def burner_summary(burns, start_ts: float, end_ts: float) -> dict:
     """Burns that started in [start, end): rows of [start epoch, seconds, mean %, DHW]."""
     inside = [b for b in burns if start_ts <= b[0] < end_ts]
@@ -161,9 +179,21 @@ def _ratio(part, whole, digits=3):
 
 def finalise(day: dict, burner: dict | None = None) -> dict:
     """The day's row. Figures with nothing behind them are None, never zero."""
-    gas = day.get("gas")
-    dhw = day["gas_dhw"] if gas is not None else None
-    heating = gas - dhw if gas is not None else None
+    # The boiler's own counter gives the split between heating and hot water. The billing
+    # meter, when it covered the day, gives the amount, and the split is scaled to it.
+    counter = day.get("gas")
+    meter_coverage = _ratio(min(day["meter_minutes"], day["minutes"]), day["minutes"])
+    meter = day.get("gas_meter")
+    metered = meter is not None and (meter_coverage or 0) >= METER_MIN_COVERAGE
+    gas, dhw, unsplit, source = counter, None, None, None
+    if counter is not None:
+        dhw, unsplit, source = day["gas_dhw"], day["gas_unsplit"], "boiler_counter"
+    if metered:
+        gas, source = meter, "meter"
+        scale = meter / counter if counter else None
+        dhw = dhw * scale if scale is not None else None
+        unsplit = unsplit * scale if scale is not None else None
+    heating = gas - dhw if gas is not None and dhw is not None else None
     degree_days = day["degree_minutes"] / 1440 if day["outdoor_minutes"] else None
     rooms, total = {}, {"minutes": 0.0, "within": 0.0, "short_dm": 0.0, "over_dm": 0.0}
     writes = 0
@@ -193,7 +223,14 @@ def finalise(day: dict, burner: dict | None = None) -> dict:
         "gas_kwh": None if gas is None else round(gas, 1),
         "gas_heating_kwh": None if heating is None else round(heating, 1),
         "gas_dhw_kwh": None if dhw is None else round(dhw, 1),
-        "gas_unsplit_kwh": None if gas is None else round(day["gas_unsplit"], 1),
+        "gas_unsplit_kwh": None if unsplit is None else round(unsplit, 1),
+        "gas_source": source,
+        "gas_meter_kwh": None if meter is None else round(meter, 1),
+        "gas_meter_coverage": meter_coverage if meter is not None else None,
+        "gas_counter_kwh": None if counter is None else round(counter, 1),
+        "counter_to_meter": (
+            round(counter / meter, 3) if metered and counter is not None and meter > 0 else None
+        ),
         # Below one degree-day the ratio says more about the weather than the house.
         "heating_kwh_per_degree_day": (
             round(heating / degree_days, 2)
@@ -211,14 +248,20 @@ def finalise(day: dict, burner: dict | None = None) -> dict:
     }
 
 
-def valid_day(day) -> bool:
-    """A stored part-day this version can keep adding to."""
+def restore_day(stored) -> dict | None:
+    """A stored part-day, with anything a newer version added filled in; None if unusable."""
     if not (
-        isinstance(day, dict)
-        and isinstance(day.get("date"), str)
-        and isinstance(day.get("rooms"), dict)
-        and all(key in day for key in empty_day(""))
+        isinstance(stored, dict)
+        and isinstance(stored.get("date"), str)
+        and isinstance(stored.get("rooms"), dict)
     ):
-        return False
-    keys = set(_room(empty_day(""), "x", None))
-    return all(isinstance(r, dict) and keys <= set(r) for r in day["rooms"].values())
+        return None
+    day = {**empty_day(stored["date"]), **stored}
+    blank = _room(empty_day(""), "x", None)
+    rooms = {}
+    for room_id, room in day["rooms"].items():
+        if not isinstance(room, dict):
+            return None
+        rooms[room_id] = {**blank, **room}
+    day["rooms"] = rooms
+    return day

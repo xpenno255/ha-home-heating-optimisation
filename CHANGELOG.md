@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.25.0 - scorecard takes the day's gas from the supplier's meter
+
+- New optional setting under **Metered energy evidence**: **Supplier's gas meter, running total** (`energy.billing_meter`), for example the Octopus "current total consumption" sensor. When that meter reported for at least 90 % of a day, the scorecard takes the day's gas from it (`gas_source: meter`) and uses the boiler's own counter only to split it between heating and hot water. Otherwise it falls back to the boiler counter (`gas_source: boiler_counter`).
+- Each row now also carries both raw figures (`gas_meter_kwh`, `gas_counter_kwh`), the meter's coverage of the day and their ratio (`counter_to_meter`). A meter reading that arrives after more than two hours of silence is left out, so a feed coming back after an outage does not land on one day.
+- Why: on 9 and 11 Nov the boiler's counter (EMS-ESP estimate, increases only) read 9 % above the Octopus meter (92.4 against 84.9 kWh, and 85.4 against 78.6). The same counter also steps backwards on some gateway dropouts, losing up to 10 kWh in a day, which is why the scorecard has only ever counted its increases.
+- A part-day stored by 0.24.0 is kept across the update.
+
 ## 0.24.0 - daily scorecard
 
 - New **daily scorecard**: one row per local day, kept for up to 1100 days in the integration's own storage. Each row has outdoor and indoor mean temperature, degree-days (base 15.5 °C), gas split into heating and hot water, heating gas per degree-day, burner starts / short burns (under 90 s) / mean burn, the share of heating firing time with the return below 55 °C, Evohome writes, and for each room the time on target (within 0.3 K), time more than 0.5 K short, and degree-hours short and over.
