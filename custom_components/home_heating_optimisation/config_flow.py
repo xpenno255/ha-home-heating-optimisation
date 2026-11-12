@@ -391,6 +391,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 "advisor",
                 "gateways",
                 "energy",
+                "scorecard",
                 "dhw_schedule",
                 "dhw_cutoff",
                 "optimum",
@@ -1245,6 +1246,49 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         )
         return self.async_show_form(
             step_id="advisor", errors=errors, data_schema=vol.Schema(schema)
+        )
+
+    async def async_step_scorecard(self, user_input=None):
+        """Optional black globe thermometer for the daily scorecard; evidence only."""
+        self.current = effective_config(self.config_entry)
+        old = self.current.get("scorecard") or {}
+        rooms = {
+            room_id: (spec.get("config") or {}).get("name") or room_id
+            for room_id, spec in ((self.current.get("control") or {}).get("rooms") or {}).items()
+        }
+        errors = {}
+        if user_input is not None:
+            globe = user_input.get("globe_entity") or None
+            room = user_input.get("globe_room") or None
+            state = self.hass.states.get(globe) if globe else None
+            if globe and (
+                not globe.startswith("sensor.")
+                or state is None
+                or state.attributes.get("device_class") != "temperature"
+                or self.invalid_sources([globe])
+                or room not in rooms
+            ):
+                errors["base"] = "invalid_globe"
+            else:
+                card = {"globe_entity": globe, "globe_room": room} if globe else {}
+                return self.async_create_entry(title=NAME, data={**self.current, "scorecard": card})
+        schema = {
+            optional("globe_entity", {"globe_entity": old.get("globe_entity")}): (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=["sensor"], device_class=["temperature"])
+                )
+            ),
+            optional("globe_room", {"globe_room": old.get("globe_room")}): (
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[{"value": k, "label": v} for k, v in rooms.items()],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            ),
+        }
+        return self.async_show_form(
+            step_id="scorecard", errors=errors, data_schema=vol.Schema(schema)
         )
 
     async def async_step_energy(self, user_input=None):

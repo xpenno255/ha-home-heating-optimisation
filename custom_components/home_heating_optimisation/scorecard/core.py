@@ -27,6 +27,24 @@ METER_MAX_SILENCE_MINUTES = 120.0
 METER_MIN_COVERAGE = 0.9
 MAX_DAYS = 1100
 HELD_STATES = ("manual", "window_open")
+CONTROL_STATES = ("active", "preheat")
+# Morning arrival: a rise in a room's scheduled comfort target of at least this much.
+ARRIVAL_STEP_K = 0.3
+ARRIVAL_WATCH_MINUTES = 180.0
+MAX_ARRIVALS = 4
+# Black globe: felt (operative) temperature sits this share of the air-to-globe gap below
+# the air temperature. For a small globe the share is 0.7-0.95; 0.8 is used throughout.
+GLOBE_FACTOR = 0.8
+GLOBE_FRESH_MINUTES = 30.0
+DAY_PARTS = (("night", 23, 6), ("morning", 6, 9), ("daytime", 9, 16), ("evening", 16, 23))
+
+
+def day_part(hour: int) -> str:
+    """The part of the day a local hour falls in."""
+    for name, start, end in DAY_PARTS:
+        if start <= hour < end or (start > end and (hour >= start or hour < end)):
+            return name
+    return "night"
 
 
 def _num(value):
@@ -54,24 +72,32 @@ def empty_day(date: str) -> dict:
         "fire_minutes": 0.0,
         "fire_condensing_minutes": 0.0,
         "fire_return_sum": 0.0,
+        "globe": {},
         "rooms": {},
+    }
+
+
+def _blank_room(name=None) -> dict:
+    return {
+        "name": name,
+        "minutes": 0.0,
+        "error_sum": 0.0,
+        "within": 0.0,
+        "short": 0.0,
+        "short_degree_minutes": 0.0,
+        "over_degree_minutes": 0.0,
+        "held": 0.0,
+        "writes": 0,
+        "offset_sum": 0.0,
+        "offset_minutes": 0.0,
+        "arrivals": [],
     }
 
 
 def _room(day: dict, room_id: str, name) -> dict:
     room = day["rooms"].get(room_id)
     if room is None:
-        room = day["rooms"][room_id] = {
-            "name": name,
-            "minutes": 0.0,
-            "error_sum": 0.0,
-            "within": 0.0,
-            "short": 0.0,
-            "short_degree_minutes": 0.0,
-            "over_degree_minutes": 0.0,
-            "held": 0.0,
-            "writes": 0,
-        }
+        room = day["rooms"][room_id] = _blank_room(name)
     if name:
         room["name"] = name
     return room
@@ -119,6 +145,10 @@ def add_sample(
             continue
         error = air - target
         room["minutes"] += minutes
+        offset = _num(sample.get("offset"))
+        if offset is not None:
+            room["offset_sum"] += offset * minutes
+            room["offset_minutes"] += minutes
         room["error_sum"] += error * minutes
         if abs(error) <= TOLERANCE_K + 1e-9:
             room["within"] += minutes
@@ -133,6 +163,76 @@ def add_sample(
 
 def add_write(day: dict, room_id: str, name=None) -> None:
     _room(day, room_id, name)["writes"] += 1
+
+
+def note_arrival(day: dict, room_id: str, name, *, at: str, ts: float, step_k, error_k) -> None:
+    """A room's scheduled target just rose: record how far the room was from its new air
+    target at that moment. Zero minutes when it was already there."""
+    step_k, error_k = _num(step_k), _num(error_k)
+    arrivals = _room(day, room_id, name)["arrivals"]
+    if step_k is None or error_k is None or len(arrivals) >= MAX_ARRIVALS:
+        return
+    arrivals.append(
+        {
+            "at": at,
+            "ts": ts,
+            "step_k": round(step_k, 2),
+            "error_k": round(error_k, 2),
+            "minutes": 0 if error_k >= -TOLERANCE_K - 1e-9 else None,
+        }
+    )
+
+
+def progress_arrivals(day: dict, room_id: str, *, ts: float, error_k) -> None:
+    """Close any open arrival once the room is within the on-target band."""
+    error_k = _num(error_k)
+    room = day["rooms"].get(room_id)
+    if room is None or error_k is None or error_k < -TOLERANCE_K - 1e-9:
+        return
+    for arrival in room["arrivals"]:
+        waited = (ts - arrival["ts"]) / 60
+        if arrival["minutes"] is None and 0 <= waited <= ARRIVAL_WATCH_MINUTES:
+            arrival["minutes"] = round(waited)
+
+
+def add_globe(
+    day: dict, part: str, minutes: float, *, air, globe, applied, target, outdoor=None
+) -> None:
+    """One sample of the room holding the black globe, filed under the part of the day.
+
+    `applied` is the correction the controller added to the comfort target; `target` is
+    that comfort (operative) target.
+    """
+    minutes, air, globe = _num(minutes), _num(air), _num(globe)
+    applied, target, outdoor = _num(applied), _num(target), _num(outdoor)
+    if minutes is None or minutes <= 0 or air is None or globe is None:
+        return
+    minutes = min(minutes, MAX_STEP_MINUTES)
+    acc = day["globe"].setdefault(
+        part,
+        {
+            "minutes": 0.0,
+            "gap_sum": 0.0,
+            "applied_sum": 0.0,
+            "applied_minutes": 0.0,
+            "felt_sum": 0.0,
+            "felt_minutes": 0.0,
+            "outdoor_sum": 0.0,
+            "outdoor_minutes": 0.0,
+        },
+    )
+    gap = air - globe
+    acc["minutes"] += minutes
+    acc["gap_sum"] += gap * minutes
+    if applied is not None:
+        acc["applied_sum"] += applied * minutes
+        acc["applied_minutes"] += minutes
+    if target is not None:
+        acc["felt_sum"] += (air - GLOBE_FACTOR * gap - target) * minutes
+        acc["felt_minutes"] += minutes
+    if outdoor is not None:
+        acc["outdoor_sum"] += outdoor * minutes
+        acc["outdoor_minutes"] += minutes
 
 
 def gas_delta(previous, current, minutes):
@@ -213,6 +313,30 @@ def finalise(day: dict, burner: dict | None = None) -> dict:
             "over_degree_hours": round(r["over_degree_minutes"] / 60, 2),
             "held_minutes": round(r["held"]),
             "writes": r["writes"],
+            "applied_correction_k": _ratio(r["offset_sum"], r["offset_minutes"], 2),
+            # Each rise in the scheduled target: how far under the room was at that
+            # moment, and minutes until it was within the on-target band (None: not
+            # within three hours).
+            "arrivals": [
+                {
+                    "at": a["at"],
+                    "step_k": a["step_k"],
+                    "error_k": a["error_k"],
+                    "minutes_to_target": a["minutes"],
+                }
+                for a in r["arrivals"]
+            ],
+        }
+    globe = {}
+    for part, g in day.get("globe", {}).items():
+        gap = _ratio(g["gap_sum"], g["minutes"], 2)
+        globe[part] = {
+            "minutes": round(g["minutes"]),
+            "outdoor_c": _ratio(g["outdoor_sum"], g["outdoor_minutes"], 1),
+            "air_minus_globe_k": gap,
+            "needed_k": None if gap is None else round(GLOBE_FACTOR * gap, 2),
+            "applied_k": _ratio(g["applied_sum"], g["applied_minutes"], 2),
+            "felt_vs_target_k": _ratio(g["felt_sum"], g["felt_minutes"], 2),
         }
     return {
         "date": day["date"],
@@ -244,6 +368,7 @@ def finalise(day: dict, burner: dict | None = None) -> dict:
         "short_degree_hours": round(total["short_dm"] / 60, 2),
         "over_degree_hours": round(total["over_dm"] / 60, 2),
         "writes": writes,
+        "globe": globe or None,
         "rooms": rooms,
     }
 
@@ -257,11 +382,14 @@ def restore_day(stored) -> dict | None:
     ):
         return None
     day = {**empty_day(stored["date"]), **stored}
-    blank = _room(empty_day(""), "x", None)
+    if not isinstance(day["globe"], dict):
+        day["globe"] = {}
     rooms = {}
     for room_id, room in day["rooms"].items():
         if not isinstance(room, dict):
             return None
-        rooms[room_id] = {**blank, **room}
+        rooms[room_id] = {**_blank_room(), **room}
+        if not isinstance(rooms[room_id]["arrivals"], list):
+            rooms[room_id]["arrivals"] = []
     day["rooms"] = rooms
     return day

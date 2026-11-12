@@ -84,6 +84,7 @@
           "advisor": "Heating Advisor",
           "gateways": "Gateway monitoring",
           "energy": "Metered energy evidence",
+          "scorecard": "Daily scorecard: black globe",
           "dhw_schedule": "DHW target schedule",
           "dhw_cutoff": "DHW measured-temperature cutoff",
           "optimum": "Optimum start predictor (shadow)",
@@ -313,6 +314,17 @@
           "billing_meter": "For the daily scorecard only. A cumulative reading from the gas supplier's smart meter, for example the Octopus 'current total consumption' sensor. When it reported for at least 90% of a day, the scorecard takes that day's gas from it and uses the boiler's own counter only to split it between heating and hot water. Otherwise the scorecard falls back to the boiler counter."
         }
       },
+      "scorecard": {
+        "title": "Daily scorecard: black globe",
+        "description": "Optional, evidence only. If a black globe thermometer stands in one of the controlled rooms, the daily scorecard records, for the night, morning, daytime and evening: how far the globe reads below that room's air temperature, the correction the comfort model applied, and the felt temperature against the room's comfort target. Leave both empty to turn this off. Nothing here changes control.",
+        "data": {
+          "globe_entity": "Black globe temperature sensor",
+          "globe_room": "Room the globe is in"
+        },
+        "data_description": {
+          "globe_room": "Change this whenever the globe is moved to another room."
+        }
+      },
       "dhw_schedule": {
         "title": "DHW target schedule",
         "description": "Raises the stored hot water target on the selected weekdays for the start-of-day heating window only, then returns it to the normal target. Evohome keeps its own DHW schedule, on/off control and cutoff; only the cylinder setpoint is changed, through RAMSES, keeping the current overrun and differential. No weekdays selected means no higher sessions. This is target scheduling, not guaranteed thermal disinfection or legionella protection.",
@@ -450,6 +462,7 @@
       "invalid_ai_profile": "Select an available Extended OpenAI or Anthropic AI Task profile with Home Assistant APIs and all tools disabled. For Extended OpenAI, set Functions to [].",
       "missing_ai_profile": "Select a profile for each scheduled task.",
       "invalid_energy_meter": "Choose sensor entities with the energy or gas device class that currently have a state.",
+      "invalid_globe": "Choose a temperature sensor that currently has a state and is not one of this integration's own, and the control room it stands in.",
       "duplicate_energy_meter": "Each meter sensor can only be selected once.",
       "missing_notify_event": "Select at least one notification event, or turn notifications off.",
       "invalid_notify_target": "Notification services must be notify.* services.",

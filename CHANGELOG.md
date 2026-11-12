@@ -2,6 +2,14 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.26.0 - scorecard: black globe, morning arrival and applied correction
+
+- **Black globe.** New options step **Daily scorecard: black globe** (`scorecard.globe_entity`, `scorecard.globe_room`). When a globe thermometer stands in a controlled room, each row carries a `globe` block for the night (23-06), morning (06-09), daytime (09-16) and evening (16-23): how far the globe read below the room's air (`air_minus_globe_k`), the correction the comfort model applied (`applied_k`), the correction the globe implies (`needed_k`, 0.8 of the gap) and the felt temperature against the comfort target (`felt_vs_target_k`), with the outdoor mean. A globe silent for 30 minutes is not counted.
+- **Morning arrival.** Each room gets `arrivals`: for every rise of 0.3 K or more in its scheduled target (up to four a day), the time, the size of the rise, how far under its air target the room was at that moment, and the minutes until it was within 0.3 K (empty when it took over three hours).
+- **Applied correction.** Each room gets `applied_correction_k`, the day's mean comfort-model correction while in normal control.
+- Why: Home Assistant keeps the globe and air temperatures long term but not the correction the controller applied or the targets, and nothing recorded how late a room arrived. On 12 Nov (2.9 C at 06:00) the Study was still 1.0 K under at 07:05, and that evening the globe read 1.0 K below the Living room air against 0.55-0.65 K on milder evenings.
+- Evidence only; nothing here changes control. A part-day stored by an earlier version is kept.
+
 ## 0.25.0 - scorecard takes the day's gas from the supplier's meter
 
 - New optional setting under **Metered energy evidence**: **Supplier's gas meter, running total** (`energy.billing_meter`), for example the Octopus "current total consumption" sensor. When that meter reported for at least 90 % of a day, the scorecard takes the day's gas from it (`gas_source: meter`) and uses the boiler's own counter only to split it between heating and hot water. Otherwise it falls back to the boiler counter (`gas_source: boiler_counter`).

@@ -3,16 +3,22 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from homeassistant.data_entry_flow import InvalidData
 
+from custom_components.home_heating_optimisation.control.migration import handover
 from custom_components.home_heating_optimisation.scorecard.core import (
     add_gas,
+    add_globe,
     add_meter_gas,
     add_sample,
     add_write,
     burner_summary,
+    day_part,
     empty_day,
     finalise,
     gas_delta,
+    note_arrival,
+    progress_arrivals,
     restore_day,
 )
 from custom_components.home_heating_optimisation.scorecard.sensor import ENTITY_ID
@@ -100,10 +106,16 @@ def test_a_mild_day_gives_no_ratio_and_stored_days_are_checked():
     assert restore_day({"date": "x"}) is None and restore_day(None) is None
     # A part-day stored by an older version gains whatever has been added since.
     day["rooms"]["study"].pop("held")
+    day["rooms"]["study"].pop("arrivals")
+    day["rooms"]["other"] = {"name": "Other"}
     day.pop("gas_meter")
     day.pop("meter_minutes")
+    day.pop("globe")
     restored = restore_day(day)
     assert restored["rooms"]["study"]["held"] == 0.0 and restored["gas"] == 4.0
+    assert restored["globe"] == {} and restored["rooms"]["study"]["arrivals"] == []
+    # Each room gets its own list, not one shared between them.
+    assert restored["rooms"]["study"]["arrivals"] is not restored["rooms"]["other"]["arrivals"]
     assert restored["gas_meter"] is None and restored["meter_minutes"] == 0.0
     add_sample(restored, 5, boiler={"outdoor": 15.0}, rooms={"study": room(19, 19)})
     assert finalise(restored)["gas_source"] == "boiler_counter"
@@ -243,3 +255,122 @@ async def test_options_flow_stores_the_billing_meter(hass, config, sources):
     assert (await submit(base))["type"] == "create_entry"
     await hass.async_block_till_done()
     assert "billing_meter" not in effective_config(entry)["energy"]
+
+
+def test_arrivals_record_how_far_under_and_how_long_to_get_there():
+    day = empty_day("2026-11-12")
+    t0 = 1_800_000_000.0
+    note_arrival(day, "study", "Study", at="07:00", ts=t0, step_k=0.5, error_k=-1.04)
+    note_arrival(day, "hall", "Hall", at="07:00", ts=t0, step_k=1.0, error_k=-0.2)  # already there
+    progress_arrivals(day, "study", ts=t0 + 20 * 60, error_k=-0.6)
+    assert day["rooms"]["study"]["arrivals"][0]["minutes"] is None
+    progress_arrivals(day, "study", ts=t0 + 47 * 60, error_k=-0.3)
+    progress_arrivals(day, "study", ts=t0 + 90 * 60, error_k=0.1)  # already closed
+    # A second rise that the room never reaches within three hours stays open.
+    note_arrival(day, "study", "Study", at="08:00", ts=t0 + 3600, step_k=1.5, error_k=-1.5)
+    progress_arrivals(day, "study", ts=t0 + 3600 + 181 * 60, error_k=0.0)
+    row = finalise(day)
+    assert row["rooms"]["study"]["arrivals"] == [
+        {"at": "07:00", "step_k": 0.5, "error_k": -1.04, "minutes_to_target": 47},
+        {"at": "08:00", "step_k": 1.5, "error_k": -1.5, "minutes_to_target": None},
+    ]
+    assert row["rooms"]["hall"]["arrivals"][0]["minutes_to_target"] == 0
+    for _ in range(6):
+        note_arrival(day, "hall", "Hall", at="09:00", ts=t0, step_k=0.5, error_k=0.0)
+    assert len(day["rooms"]["hall"]["arrivals"]) == 4
+
+
+def test_globe_figures_by_part_of_day_and_applied_correction():
+    assert [day_part(h) for h in (23, 0, 5, 6, 8, 9, 15, 16, 22)] == [
+        "night", "night", "night", "morning", "morning", "daytime", "daytime", "evening", "evening",
+    ]  # fmt: skip
+    day = empty_day("2026-11-12")
+    for _ in range(12):
+        add_globe(day, "evening", 5, air=20.4, globe=19.4, applied=0.68, target=19.5, outdoor=2.3)
+    add_globe(day, "evening", 5, air=None, globe=19.4, applied=0.68, target=19.5)  # ignored
+    add_globe(day, "daytime", 5, air=19.6, globe=18.9, applied=None, target=None)
+    add_sample(
+        day,
+        5,
+        boiler=None,
+        rooms={"living": {**room(20.4, 20.2), "offset": 0.68}},
+    )
+    row = finalise(day)
+    evening = row["globe"]["evening"]
+    assert evening["minutes"] == 60 and evening["outdoor_c"] == 2.3
+    assert evening["air_minus_globe_k"] == 1.0 and evening["needed_k"] == 0.8
+    assert evening["applied_k"] == 0.68 and evening["felt_vs_target_k"] == 0.1
+    assert row["globe"]["daytime"]["applied_k"] is None
+    assert row["globe"]["daytime"]["felt_vs_target_k"] is None
+    assert row["rooms"]["living"]["applied_correction_k"] == 0.68
+    assert finalise(empty_day("2026-11-13"))["globe"] is None
+
+
+async def test_collector_records_the_globe_and_an_arrival(hass, controlled, sources, freezer):  # noqa: F811
+    await hass.config.async_set_time_zone("Europe/London")
+    freezer.move_to(datetime(2026, 11, 12, 18, 0, tzinfo=timezone.utc))
+    controlled["scorecard"] = {"globe_entity": "sensor.globe", "globe_room": "study"}
+    hass.states.async_set("sensor.globe", 17.2, {"unit_of_measurement": "°C"})
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 18.0, "temperature": 20})
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    await c.refresh()
+    card = entry.runtime_data.scorecard
+    data = c.rooms["study"].data
+    assert data.state == "active" and data.target_ot is not None
+    await card.sample()
+    # The scheduled target was a degree lower a minute ago.
+    card._last_target["study"] = data.target_ot - 1.0
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set("sensor.globe", 17.2, {"unit_of_measurement": "°C"})
+    await card.sample()
+    today = card.today()
+    evening = today["globe"]["evening"]
+    assert evening["air_minus_globe_k"] == pytest.approx(data.air_temp - 17.2, abs=0.01)
+    assert evening["applied_k"] == pytest.approx(data.offset_final, abs=0.01)
+    [arrival] = today["rooms"]["study"]["arrivals"]
+    assert arrival["at"] == "18:01" and arrival["step_k"] == 1.0
+    assert arrival["error_k"] == pytest.approx(data.air_temp - data.air_setpoint, abs=0.01)
+    # A globe that has gone quiet is not counted.
+    freezer.tick(timedelta(minutes=45))
+    await card.sample()
+    assert card.today()["globe"]["evening"]["minutes"] == evening["minutes"]
+
+
+async def test_options_flow_stores_the_globe(hass, controlled, sources):  # noqa: F811
+    from custom_components.home_heating_optimisation.const import effective_config
+
+    entry, c, calls = await start(hass, controlled)
+    hass.states.async_set(
+        "sensor.globe", 19.0, {"unit_of_measurement": "°C", "device_class": "temperature"}
+    )
+    hass.states.async_set("sensor.gas", 10.0, {"device_class": "energy"})
+
+    async def submit(values):
+        flow = await hass.config_entries.options.async_init(entry.entry_id)
+        assert "scorecard" in flow["menu_options"]
+        flow = await hass.config_entries.options.async_configure(
+            flow["flow_id"], {"next_step_id": "scorecard"}
+        )
+        return await hass.config_entries.options.async_configure(flow["flow_id"], values)
+
+    for bad in (
+        {"globe_entity": "sensor.gas", "globe_room": "study"},
+        {"globe_entity": "sensor.globe"},
+    ):
+        assert (await submit(bad))["errors"] == {"base": "invalid_globe"}
+    # A room that is not one of the controlled rooms never gets past the form.
+    with pytest.raises(InvalidData):
+        await submit({"globe_entity": "sensor.globe", "globe_room": "nowhere"})
+    saved = await submit({"globe_entity": "sensor.globe", "globe_room": "study"})
+    assert saved["type"] == "create_entry"
+    await hass.async_block_till_done()
+    assert effective_config(entry)["scorecard"] == {
+        "globe_entity": "sensor.globe",
+        "globe_room": "study",
+    }
+    assert entry.runtime_data.scorecard.globe_room == "study"
+    assert (await submit({}))["type"] == "create_entry"
+    await hass.async_block_till_done()
+    assert effective_config(entry)["scorecard"] == {}
