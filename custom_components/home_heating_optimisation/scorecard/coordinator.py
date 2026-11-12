@@ -13,7 +13,11 @@ from homeassistant.util import dt as dt_util
 
 from ..energy.meter import meter_specs, to_kwh
 from .core import (
+    ARRIVAL_STEP_K,
     BASE_C,
+    CONTROL_STATES,
+    GLOBE_FACTOR,
+    GLOBE_FRESH_MINUTES,
     MAX_DAYS,
     MAX_STEP_MINUTES,
     METER_FRESH_MINUTES,
@@ -21,13 +25,17 @@ from .core import (
     SHORT_K,
     TOLERANCE_K,
     add_gas,
+    add_globe,
     add_meter_gas,
     add_sample,
     add_write,
     burner_summary,
+    day_part,
     empty_day,
     finalise,
     gas_delta,
+    note_arrival,
+    progress_arrivals,
     restore_day,
 )
 
@@ -57,6 +65,11 @@ class Scorecard:
         # The supplier's meter, when one is configured: slow, but it is what is billed.
         self.billing_entity = (heating.config.get("energy") or {}).get("billing_meter") or None
         self.billing: dict | None = None  # last reading: {"kwh", "changed", "seen"}
+        # A black globe thermometer and the room it stands in, when one is set.
+        card = heating.config.get("scorecard") or {}
+        self.globe_entity = card.get("globe_entity") or None
+        self.globe_room = card.get("globe_room") or None
+        self._last_target: dict = {}
 
     async def initialise(self):
         data = await self.store.async_load()
@@ -158,7 +171,9 @@ class Scorecard:
                 "in_window": d.time_window_active,
                 "air": d.air_temp,
                 "target": d.air_setpoint,
+                "offset": d.offset_final,
             }
+            self._arrival(day, now, room_id, c.room_name, d)
             stamp = d.last_write.isoformat() if d.last_write else None
             if room_id in self._last_write and stamp and stamp != self._last_write[room_id]:
                 add_write(day, room_id, c.room_name)
@@ -177,7 +192,59 @@ class Scorecard:
             rooms=rooms,
             meter_live=meter_live,
         )
+        self._globe(day, now, minutes, bdata)
         return rolled
+
+    def _arrival(self, day, now, room_id, name, d):
+        """Note a rise in the room's scheduled target, and close open ones on arrival."""
+        previous, target = self._last_target.get(room_id), d.target_ot
+        self._last_target[room_id] = target
+        if d.air_temp is None or d.air_setpoint is None:
+            return
+        error = d.air_temp - d.air_setpoint
+        if (
+            previous is not None
+            and target is not None
+            and target - previous >= ARRIVAL_STEP_K - 1e-9
+            and d.state in CONTROL_STATES
+            and d.time_window_active
+        ):
+            note_arrival(
+                day,
+                room_id,
+                name,
+                at=dt_util.as_local(now).strftime("%H:%M"),
+                ts=now.timestamp(),
+                step_k=target - previous,
+                error_k=error,
+            )
+        progress_arrivals(day, room_id, ts=now.timestamp(), error_k=error)
+
+    def _globe(self, day, now, minutes, bdata):
+        if not self.globe_entity or not self.globe_room:
+            return
+        room = (getattr(self.heating.controls, "rooms", None) or {}).get(self.globe_room)
+        state = self.hass.states.get(self.globe_entity)
+        if room is None or room.data is None or state is None:
+            return
+        try:
+            globe = float(state.state)
+        except TypeError, ValueError:
+            return
+        reported = getattr(state, "last_reported", None) or state.last_updated
+        if (now - reported).total_seconds() / 60 > GLOBE_FRESH_MINUTES:
+            return
+        d = room.data
+        add_globe(
+            day,
+            day_part(dt_util.as_local(now).hour),
+            minutes,
+            air=d.air_temp,
+            globe=globe,
+            applied=d.offset_final,
+            target=d.target_ot,
+            outdoor=bdata.outdoor_temp if bdata is not None else None,
+        )
 
     def _billing(self, day, now) -> bool:
         """Read the billing meter; True while it is reporting."""
@@ -271,6 +338,11 @@ class Scorecard:
                 "counter; the boiler counter always gives the heating / hot water split",
                 "boiler_counter": spec["entity"] if (spec := self.meter_spec) else None,
                 "billing_meter": self.billing_entity,
+                "globe": self.globe_entity,
+                "globe_room": self.globe_room,
+                "globe_factor": GLOBE_FACTOR,
+                "arrivals": "each rise in a room's scheduled target: how far under its air "
+                "target the room was at that moment, and minutes until within the band",
             },
             "today": self.today(),
             "days": self.days[-days:],
