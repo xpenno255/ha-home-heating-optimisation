@@ -114,6 +114,10 @@ class PolicyInputs:
     # HHO's own pre-heat: raise the zone to this target ahead of the upward switchpoint.
     # Set by the coordinator only when the planner says this room should be warming now.
     preheat_setpoint: float | None = None
+    # The room is at or below the air temperature it is being driven to. A raise of the
+    # zone target is then never held back by the write step: holding it leaves Evohome
+    # aiming low, so the room has to sag further before the push arrives.
+    room_wants_heat: bool = False
     params: PolicyParams = field(default_factory=PolicyParams)
 
 
@@ -273,7 +277,10 @@ def _write_needed(target: float, m: OverrideMemory, inp: PolicyInputs) -> bool:
         return True
     if m.last_written_setpoint is None:
         return True
-    if abs(target - m.last_written_setpoint) >= max(p.step, p.write_step) - 1e-6:
+    change = target - m.last_written_setpoint
+    if abs(change) >= max(p.step, p.write_step) - 1e-6:
+        return True
+    if inp.room_wants_heat and change >= p.step - 1e-6:
         return True
     return _override_expiring(m, inp.now, p)
 

@@ -1732,6 +1732,13 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             command_reverted=self._command_reverted,
             retry_reverted_command=(self._command_reverted and not self._reversion_retry_used),
             preheat_setpoint=preheat_zone if preheating else None,
+            # Pre-heating means the room is below where it is being taken.
+            room_wants_heat=preheating
+            or (
+                d.air_temp is not None
+                and d.air_setpoint is not None
+                and d.air_temp <= d.air_setpoint + 1e-6
+            ),
             params=self._policy_params(),
         )
         restored = self._restore_complete and hub_data is not None and hub_data.restore_complete

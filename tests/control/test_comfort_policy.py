@@ -144,6 +144,31 @@ def test_write_step_holds_back_small_changes_but_not_big_ones_or_refreshes():
     assert decide(first).action is Action.WRITE
 
 
+def test_a_raise_is_never_held_back_while_the_room_wants_heat():
+    p = PolicyParams(write_step=0.3)
+    m = held(19.5, minutes_ago=10)
+
+    def run(target, wants_heat):
+        return decide(
+            inputs(
+                params=p,
+                memory=m,
+                computed_setpoint=target,
+                zone=ZoneState(19.5, 19.0),
+                room_wants_heat=wants_heat,
+            )
+        )
+
+    # At or below its air target: a 0.1 or 0.2 K raise goes out at once.
+    for target in (19.6, 19.7):
+        d = run(target, True)
+        assert d.action is Action.WRITE and d.setpoint == target
+    # A lowering is still held back, and so is a raise while the room is over target.
+    assert run(19.3, True).action is Action.NONE
+    assert "write step" in run(19.7, False).reason
+    assert run(19.5, True).action is Action.NONE
+
+
 # --- manual override ---------------------------------------------------------
 
 
