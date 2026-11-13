@@ -435,7 +435,7 @@
           "overdrive_strength": "Multiplies the overdrive scale: 2 adds twice as much for the same shortfall, 0.5 half.",
           "overdrive_period_min": "A room's overdrive is raised at most this often, so sensor flicker does not cause a stream of Evohome writes. Any lowering (the room catching up, or going over target) is applied at the next room check.",
           "room_check_minutes": "How often each room's control runs: reads its temperatures, updates its overdrive and writes its zone target if it has changed. Shorter reacts faster as a room nears target; Evohome is only written when the target actually changes.",
-          "room_write_step": "A room's zone target is only re-sent to Evohome once it differs from the last value sent by at least this much. 0.1 sends every change (about 100 a day per room); 0.3 sends about a quarter as many. Until then Evohome keeps the last value, so its target can sit up to just under this far from the ideal one. Bigger moves, such as a schedule change of 0.5 K or a window-open setback, still go at once."
+          "room_write_step": "A room's zone target is only re-sent to Evohome once it differs from the last value sent by at least this much. 0.1 sends every change (about 100 a day per room); 0.3 sends about a quarter as many. Until then Evohome keeps the last value, so its target can sit up to just under this far from the ideal one. The exception: while a room is at or below its air target, any raise is sent at once, so a room that needs heat is never left waiting for it. Bigger moves, such as a schedule change of 0.5 K or a window-open setback, still go at once."
         }
       }
     },

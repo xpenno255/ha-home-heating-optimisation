@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.26.1 - the write step no longer holds back a raise a room needs
+
+- While a room is at or below its air target (or is pre-heating), any raise of its zone target is sent to Evohome at once. The write step (default 0.3 K) still holds back lowerings, and raises while the room is over target.
+- Why: on 13 Nov, at 1 C outside, the Kitchen slipped from on target to 0.3 K under between 20:15 and 21:40. Overdrive stepped up as it fell (+0.1, +0.3, +0.5) but each raise reached Evohome about 0.2 K short: it was told 19.8 when 20.0 was wanted and 20.0 when 20.2 was wanted. Over the evening a raise of about 0.2 K was being held back in roughly 30 % of the minutes. Holding back a raise leaves Evohome aiming low, so the room sags further before the push lands; 0.23.0 only considered late trims after an overshoot.
+
 ## 0.26.0 - scorecard: black globe, morning arrival and applied correction
 
 - **Black globe.** New options step **Daily scorecard: black globe** (`scorecard.globe_entity`, `scorecard.globe_room`). When a globe thermometer stands in a controlled room, each row carries a `globe` block for the night (23-06), morning (06-09), daytime (09-16) and evening (16-23): how far the globe read below the room's air (`air_minus_globe_k`), the correction the comfort model applied (`applied_k`), the correction the globe implies (`needed_k`, 0.8 of the gap) and the felt temperature against the comfort target (`felt_vs_target_k`), with the outdoor mean. A globe silent for 30 minutes is not counted.
