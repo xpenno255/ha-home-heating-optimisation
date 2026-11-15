@@ -1323,3 +1323,51 @@ async def test_switchpoint_change_time_uses_the_cycle_clock(hass, controlled, so
     zone = room._schedule(now)
     assert zone.previous_schedule_setpoint == 18 and zone.schedule_setpoint == 19
     assert zone.schedule_changed_at == now
+
+
+async def test_boiler_keeps_its_previous_target_just_after_a_start(
+    hass, controlled, sources, freezer
+):
+    """Readings have not arrived straight after a start; the bare curve must not replace
+    a target written just before it."""
+    from custom_components.home_heating_optimisation.control.boiler.coordinator import (
+        STARTUP_HOLD,
+    )
+
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("boiler", "auto")
+    boiler = c.boiler
+    now = dt_util.utcnow()
+    # As if 61 had been written a minute before this start, and the boiler still holds it.
+    state = hass.states.get("number.flow_setpoint")
+    hass.states.async_set("number.flow_setpoint", 61, state.attributes)
+    boiler._hub.last_written_setpoint = 61.0
+    boiler._hub.last_written_at = now - timedelta(minutes=1)
+    boiler._hub.last_target_change = now - timedelta(minutes=30)
+    boiler._started_at, boiler._startup_checked, boiler._startup_target = now, False, None
+    calls.clear()
+    await boiler.async_refresh()
+    assert boiler.data.requested_target != 61.0
+    assert [d["value"] for kind, d in calls if kind == "number"] == [61.0]
+    assert any("start-up" in f for f in boiler.data.fallbacks)
+    assert boiler._hub.last_target_change == now - timedelta(minutes=30)
+    # After the hold the computed target applies, and at once: no minimum hold in the way.
+    freezer.tick(STARTUP_HOLD + timedelta(seconds=5))
+    calls.clear()
+    await boiler.async_refresh()
+    assert not any("start-up" in f for f in boiler.data.fallbacks)
+    assert [d["value"] for kind, d in calls if kind == "number"] != [61.0]
+
+
+async def test_boiler_start_up_hold_ignores_an_old_target(hass, controlled, sources):
+    entry, c, calls = await start(hass, controlled)
+    boiler = c.boiler
+    now = dt_util.utcnow()
+    memory = replace(
+        boiler._hub.write_memory(),
+        last_written_setpoint=61.0,
+        last_written_at=now - timedelta(hours=2),
+    )
+    boiler._started_at, boiler._startup_checked, boiler._startup_target = now, False, None
+    assert boiler._startup_hold(memory, now) is None

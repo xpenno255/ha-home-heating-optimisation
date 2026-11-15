@@ -165,6 +165,9 @@ from .hub import BoilerFlowHub
 from .store import BFCStore
 
 _LOGGER = logging.getLogger(__name__)
+# After a start, keep a flow target written this recently for this long (see _startup_hold).
+STARTUP_HOLD = timedelta(minutes=3)
+STARTUP_HOLD_MAX_AGE = timedelta(minutes=15)
 
 UNAVAILABLE = ("unknown", "unavailable", "", None)
 
@@ -314,6 +317,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._ac_state = "disabled"
         self._ac_reason = None
         self._ac_first = True
+        self._started_at = dt_util.utcnow()
+        self._startup_target: float | None = None
+        self._startup_checked = False
         self._ac_off_since: datetime | None = None
         self._ac_expected: float | None = None
         self._ac_written_at: datetime | None = None
@@ -704,6 +710,30 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 await store.async_save()
         d.dhw_anticycle_state = self._ac_state
         d.dhw_anticycle_normal = store.get("anticycle_normal")
+
+    def _startup_hold(self, memory, now) -> float | None:
+        """The flow target to keep for the first minutes after a start, if any.
+
+        Straight after a start the demand and relay readings have not arrived, so the
+        cycle sees no heat demand and would park the boiler at the bare curve value; the
+        minimum hold then keeps it there for ten minutes. A target written shortly before
+        the start is kept instead until the readings have had time to settle.
+        """
+        if not self._startup_checked:
+            self._startup_checked = True
+            written, at = memory.last_written_setpoint, memory.last_written_at
+            if (
+                written is not None
+                and at is not None
+                and timedelta(0) <= self._started_at - at <= STARTUP_HOLD_MAX_AGE
+            ):
+                self._startup_target = written
+        if self._startup_target is None:
+            return None
+        if now - self._started_at >= STARTUP_HOLD:
+            self._startup_target = None
+            return None
+        return self._startup_target
 
     def _dhw_params(self) -> DhwParams:
         return DhwParams(
@@ -1733,6 +1763,10 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         else:
             target = d.curve if physical_mode is Mode.IDLE else heating_value
         d.requested_target = target
+        held = self._startup_hold(memory, now)
+        if held is not None and target is not None:
+            target = held
+            d.fallbacks.append("start-up: holding the previous flow target while readings settle")
 
         constraints = self._setpoint_constraints(d.max_flow)
         if cfg.get(CONF_MAX_FLOW_ENTITY) and d.max_flow is None:
