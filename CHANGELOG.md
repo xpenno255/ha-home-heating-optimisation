@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.26.2 - a Home Assistant restart no longer sets the heating back
+
+- **Rooms.** Each room's overdrive is saved and carried over a restart (when the room last ran within 30 minutes). It is frozen, not recalculated, while the room is still starting up and while the air reading is a fallback from the thermostat's own sensor because the room sensor has not reported; a room sensor missing for more than 30 minutes is then accepted as before.
+- **Boiler.** For the first 3 minutes after a start, a flow target written within the 15 minutes before it is kept instead of the newly computed one (`fallbacks` says so while it applies).
+- Why: on 15 Nov Home Assistant was restarted five times. After each one the first room cycle read the air temperature from the radiator valve head (the room sensor was not back yet), which reads 1-2 K warm, so overdrive snapped to -0.5 and the raise then waited its 10-minute period: the Study and Spare Room, both short of target, were told target minus 0.5 for several minutes three times in two hours. On the boiler side the first cycle saw no demand yet, wrote the bare curve value (61 -> 52 C) and the 10-minute minimum hold kept it there.
+- Not covered: catch-up's 20-minute timers still start again after a restart.
+
 ## 0.26.1 - the write step no longer holds back a raise a room needs
 
 - While a room is at or below its air target (or is pre-heating), any raise of its zone target is sent to Evohome at once. The write step (default 0.3 K) still holds back lowerings, and raises while the room is over target.

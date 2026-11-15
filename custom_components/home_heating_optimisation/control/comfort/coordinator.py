@@ -146,6 +146,12 @@ ZONE_SETPOINT_MAX = 35.0
 # send.
 READBACK_TIMEOUT = timedelta(minutes=3)
 STARTUP_SETTLE_TIME = timedelta(minutes=2)
+# A restart carries the overdrive over when the room last ran this recently.
+OVERDRIVE_RESTORE_MAX_AGE = timedelta(minutes=30)
+OVERDRIVE_RESTORE_MAX_K = 3.0
+# How long a missing room sensor freezes the overdrive before the thermostat's own
+# reading is accepted in its place.
+AIR_FALLBACK_HOLD = timedelta(minutes=30)
 # After a restart RAMSES can re-emit a cached zone target with a fresh
 # last_reported stamp.  A post-settling value that contradicts persisted
 # ownership must be reported again at least this much later before policy may
@@ -312,7 +318,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._preheat_push_hint = preheat_push_hint or (lambda: 0.0)
         # ``() -> dict``: warm-up settings with the overdrive limit, strength and period.
         self._overdrive_settings = overdrive_settings or (lambda: {})
-        self._overdrive = OverdriveState()
+        self._overdrive = self._restored_overdrive(store)
+        self._air_fallback_since: datetime | None = None
         self.write_status = "not_attempted"
         # Command/readback state is intentionally not persisted.  Policy memory
         # remains persistent exactly as before, but it is not an acknowledgement
@@ -1060,11 +1067,51 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             return 0.0
         return k if math.isfinite(k) and k > 0 else 0.0
 
-    def _overdrive_now(self, d, now, preheating) -> float:
+    @staticmethod
+    def _restored_overdrive(store) -> OverdriveState:
+        """The overdrive in force when the room last ran, if that was recent.
+
+        A restart then carries on from the same push instead of starting from nothing.
+        """
+        raw = store.get("overdrive")
+        try:
+            seen = dt_util.parse_datetime(str(raw["seen_at"]))
+            if seen is None or dt_util.utcnow() - dt_util.as_utc(seen) > OVERDRIVE_RESTORE_MAX_AGE:
+                return OverdriveState()
+            changed = raw.get("changed_at")
+            changed = dt_util.parse_datetime(str(changed)) if changed else None
+            value = float(raw["value"])
+        except Exception:  # noqa: BLE001 - absent or malformed: start from nothing
+            return OverdriveState()
+        if not math.isfinite(value) or abs(value) > OVERDRIVE_RESTORE_MAX_K:
+            return OverdriveState()
+        return OverdriveState(value, dt_util.as_utc(changed) if changed else None)
+
+    def _hold_overdrive(self, d, now, preferred) -> bool:
+        """True while this cycle's readings are not fit to move the overdrive.
+
+        Just after a start the room sensor is often not back yet, so the air reading comes
+        from the thermostat's own sensor (in a radiator valve head that reads warm while
+        heating) and would cut the push. The same holds for a short drop-out of the room
+        sensor later. The overdrive is frozen, not reset, until real readings return.
+        """
+        fallback = bool(preferred) and d.air_temp_source != preferred
+        if not fallback:
+            self._air_fallback_since = None
+        elif self._air_fallback_since is None:
+            self._air_fallback_since = now
+        starting = not self._restore_complete or self._startup_reconciliation_pending
+        brief = fallback and now - self._air_fallback_since < AIR_FALLBACK_HOLD
+        return starting or brief
+
+    def _overdrive_now(self, d, now, preheating, hold=False) -> float:
         """Advance this room's overdrive (see ``core.overdrive``); returns it in K.
 
         Nothing outside the room's window, while it pre-heats or without both temperatures.
+        ``hold`` freezes it at its present value for this cycle.
         """
+        if hold:
+            return self._overdrive.value
         try:
             cfg = self._overdrive_settings() or {}
             limit = cfg.get("catchup_overdrive_k")
@@ -1709,7 +1756,22 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         window_ids = geometry.window_contacts if geometry else []
         preheat_mode, preheat_now = self._preheat_now(now, zone, preheat_goal)
         preheating = preheat_now and preheat_mode == "active"
-        d.overdrive_k = self._overdrive_now(d, now, preheating)
+        preferred = self._config.get("air_temp_sensor") or (
+            geometry.preferred_air_temperature_entity if geometry else None
+        )
+        d.overdrive_k = self._overdrive_now(
+            d, now, preheating, hold=self._hold_overdrive(d, now, preferred)
+        )
+        self._store.set(
+            "overdrive",
+            {
+                "value": self._overdrive.value,
+                "changed_at": self._overdrive.changed_at.isoformat()
+                if self._overdrive.changed_at
+                else None,
+                "seen_at": now.isoformat(),
+            },
+        )
         d.preheat_push_k = self._preheat_push() if preheating else 0.0
         computed = to_zone(d.air_setpoint, d.sensor_offset_k)
         if computed is not None and d.overdrive_k:

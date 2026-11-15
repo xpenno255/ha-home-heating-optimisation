@@ -4,6 +4,8 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+from homeassistant.util import dt as dt_util
+
 from custom_components.home_heating_optimisation.control.boiler.warmup_policy import (
     validation_error,
     warmup_config,
@@ -128,3 +130,72 @@ async def test_a_room_limit_replaces_the_house_limit(hass, controlled, sources):
     room._overdrive = OverdriveState()
     await c.refresh()
     assert room.data.overdrive_k == 1.0
+
+
+async def test_overdrive_is_frozen_while_the_room_sensor_is_missing(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    from custom_components.home_heating_optimisation.control.comfort.coordinator import (
+        AIR_FALLBACK_HOLD,
+    )
+    from custom_components.home_heating_optimisation.control.migration import handover
+
+    # The thermostat's own sensor reads far warmer than the room sensor.
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 22.0, "temperature": 20})
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    settings = {"catchup_overdrive_k": 1.0, "overdrive_strength": 1.0, "overdrive_period_min": 10}
+    room._overdrive_settings = lambda: settings
+    await c.refresh()
+    assert room.data.air_temp_source == "sensor.air" and room.data.overdrive_k == 1.0
+    assert room._store.get("overdrive")["value"] == 1.0
+    # The room sensor drops out: the air reading falls back, but the push is not cut.
+    hass.states.async_set("sensor.air", "unavailable")
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.air_temp_source != "sensor.air" and room.data.air_temp == 22.0
+    assert room.data.overdrive_k == 1.0
+    # Still missing after the hold: the thermostat's reading is accepted.
+    freezer.tick(AIR_FALLBACK_HOLD + timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.overdrive_k < 0
+    # Back again: the hold is rearmed for the next drop-out.
+    hass.states.async_set("sensor.air", 18, {"unit_of_measurement": "°C"})
+    freezer.tick(timedelta(minutes=11))
+    await c.refresh()
+    assert room.data.overdrive_k == 1.0 and room._air_fallback_since is None
+
+
+async def test_overdrive_carries_over_a_restart_and_waits_for_start_up(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    from custom_components.home_heating_optimisation.control.comfort.coordinator import (
+        OVERDRIVE_RESTORE_MAX_AGE,
+        OTCoordinator,
+    )
+
+    entry, c, calls = await start(hass, controlled)
+    room = c.rooms["study"]
+    now = dt_util.utcnow()
+    stamp = {"value": 0.6, "changed_at": now.isoformat(), "seen_at": now.isoformat()}
+    room._store.set("overdrive", stamp)
+    restored = OTCoordinator._restored_overdrive(room._store)
+    assert restored.value == 0.6 and restored.changed_at == now
+    # While the room is still starting up, nothing moves it.
+    room._overdrive = restored
+    room._restore_complete = False
+    assert room._hold_overdrive(room.data, now, "sensor.air") is True
+    assert room._overdrive_now(room.data, now, False, hold=True) == 0.6
+    room._restore_complete = True
+    room._startup_reconciliation_pending = True
+    assert room._hold_overdrive(room.data, now, "sensor.air") is True
+    room._startup_reconciliation_pending = False
+    assert room._hold_overdrive(room.data, now, "sensor.air") is False
+    # Too old, absent or nonsense: start from nothing.
+    freezer.tick(OVERDRIVE_RESTORE_MAX_AGE + timedelta(minutes=1))
+    assert OTCoordinator._restored_overdrive(room._store).value == 0.0
+    for bad in (None, {}, {"value": "x", "seen_at": now.isoformat()}, {"value": 99, "seen_at": 1}):
+        room._store.set("overdrive", bad)
+        assert OTCoordinator._restored_overdrive(room._store) == OverdriveState()
