@@ -178,7 +178,7 @@ READBACK_HINTS = {
         "keeps its normal bounded retry and does not clear manual holds."
     ),
 }
-COMFORT_MODEL_VERSION = "steady_state_ot_v3"
+COMFORT_MODEL_VERSION = "steady_state_ot_v4"
 
 
 @dataclass

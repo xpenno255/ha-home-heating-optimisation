@@ -91,7 +91,10 @@ class ModelParams:
     asymmetry_cap: float = 1.0
     loft_delta: float = 1.0  # loft air = t_out + loft_delta
     unheated_fraction: float = 0.5  # unheated space sits this far from t_out towards t_air
-    solar_cap_k: float = 2.0  # cap on the MRT rise from solar gain
+    # Cap on the MRT rise credited to solar gain. Kept small on purpose: a black globe in the
+    # Living room (Nov 2026) showed no warming of the room's surfaces on bright winter days
+    # while the model credited the full 2 K it then allowed and cut the correction by ~0.4 K.
+    solar_cap_k: float = 0.5
 
 
 @dataclass(frozen=True)

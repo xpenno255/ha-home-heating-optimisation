@@ -161,6 +161,20 @@ def test_solar_is_capped():
     assert steady_state_mrt(s, blazing, 20.0, p).solar_k == pytest.approx(0.7)
 
 
+def test_default_sun_credit_is_small():
+    # A bright low winter sun: the default credits at most 0.5 K of MRT rise, so the sun
+    # trims the air target by about a quarter of a degree at full trust, not a whole one.
+    s = living_room_surfaces()
+    env = Environment(t_out=3.0, ghi_wm2=250.0, sun_elevation_deg=15.0, sun_azimuth_deg=180.0)
+    dark = Environment(t_out=3.0, **NIGHT)
+    assert steady_state_mrt(s, env, 20.0).solar_k <= 0.5
+    cut = (
+        required_air_temperature(s, dark, 20.0, FULL_TRUST).offset_physical
+        - required_air_temperature(s, env, 20.0, FULL_TRUST).offset_physical
+    )
+    assert 0 <= cut <= 0.35
+
+
 def test_asymmetry_term_positive_and_capped():
     env = Environment(t_out=-5.0, **NIGHT)
     p = ModelParams(trust_k=1.0, asymmetry_a=0.5, asymmetry_cap=0.3, cap_up=5.0, step=0.01)
