@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.27.0 - fixes from the 13-20 Nov review
+
+- **Sun.** The comfort model now credits at most 0.5 K of mean radiant temperature rise to sun through the glazing (`solar_cap_k`, was 2.0). `model_version` is now `steady_state_ot_v4`. Why: on the bright days of 13, 14 and 16 Nov the Living room model was at the old cap and cut the window correction from about 0.6 K to 0.3 K, while the black globe by the windows showed the room needed 0.6 K; the room felt 0.1-0.3 K under target. With the new cap the same conditions give about 0.6 K.
+- **Catch-up over a restart.** The catch-up clocks (which rooms have been short, since when, and which are being pushed) are saved and carried over a restart when saved within 30 minutes of it. For 10 minutes after a start a room that has no readings yet keeps its clock. Before, every restart started the 20-minute wait again.
+
 ## 0.26.2 - a Home Assistant restart no longer sets the heating back
 
 - **Rooms.** Each room's overdrive is saved and carried over a restart (when the room last ran within 30 minutes). It is frozen, not recalculated, while the room is still starting up and while the air reading is a fallback from the thermostat's own sensor because the room sensor has not reported; a room sensor missing for more than 30 minutes is then accepted as before.

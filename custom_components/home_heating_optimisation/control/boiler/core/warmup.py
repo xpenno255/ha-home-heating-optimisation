@@ -322,6 +322,46 @@ def catchup_step(tracks, rooms, now: datetime) -> dict:
     return out
 
 
+def keep_unread(previous, tracks, rooms) -> dict:
+    """``tracks`` plus the ``previous`` track of every room that has no readings yet.
+
+    Straight after a start a room reports no air temperature, target or demand for a few
+    minutes. ``catchup_step`` drops such a room, which would restart its clock; this keeps
+    its track until the readings are back and ``catchup_step`` can judge it again.
+    """
+    unread = {name for name, air, target, demand, _ in rooms if None in (air, target, demand)}
+    read = {name for name, *_ in rooms} - unread
+    out = dict(tracks)
+    for name, track in previous.items():
+        if name not in out and name not in read:
+            out[name] = track
+    return out
+
+
+def dump_tracks(tracks) -> dict:
+    """Catch-up tracks as plain values for the store."""
+    return {
+        name: {"since": t.since.isoformat(), "air_since": t.air_since, "pushing": t.pushing}
+        for name, t in tracks.items()
+    }
+
+
+def load_tracks(raw) -> dict:
+    """Catch-up tracks from the store; anything unreadable is left out."""
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for name, row in raw.items():
+        try:
+            since = datetime.fromisoformat(row["since"])
+            if since.tzinfo is None:
+                continue
+            out[str(name)] = CatchupTrack(since, float(row["air_since"]), bool(row["pushing"]))
+        except KeyError, TypeError, ValueError:
+            continue
+    return out
+
+
 def handover_tracks(tracks, rooms, names, now: datetime) -> dict:
     """``tracks`` with each named room still ``CATCHUP_START_K`` short pushed at once.
 

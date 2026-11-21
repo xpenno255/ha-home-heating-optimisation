@@ -4,12 +4,16 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.home_heating_optimisation.control.boiler.core.warmup import (
     CatchupTrack,
     catchup_need,
     catchup_step,
+    dump_tracks,
     handover_tracks,
+    keep_unread,
+    load_tracks,
     overdrive_k,
 )
 from custom_components.home_heating_optimisation.control.boiler.dhw_policy import (
@@ -332,6 +336,55 @@ async def test_hot_water_pauses_catchup_without_resetting_it(hass, controlled, s
         await c.refresh()
     assert not boiler.data.dhw_active and boiler.data.catchup_uplift > 0
     assert boiler.data.catchup_room == "Living Room"
+
+
+# -- across a restart ----------------------------------------------------------
+
+
+def test_tracks_round_trip_through_the_store():
+    tracks = {"Living Room": CatchupTrack(T0, 19.3, True), "Kitchen": CatchupTrack(T0, 19.0)}
+    assert load_tracks(dump_tracks(tracks)) == tracks
+    assert load_tracks(None) == {} and load_tracks({"Kitchen": {"since": "nonsense"}}) == {}
+
+
+def test_a_room_without_readings_keeps_its_track():
+    previous = {"Living Room": CatchupTrack(T0, 19.3, True), "Kitchen": CatchupTrack(T0, 19.0)}
+    # Kitchen has readings and catchup_step dropped it; the Living Room has none yet.
+    rooms = [("Living Room", None, None, None, True), ("Kitchen", 19.6, 19.7, 0.3, True)]
+    assert keep_unread(previous, {}, rooms) == {"Living Room": previous["Living Room"]}
+    # A room that is not listed at all (nothing loaded yet) is kept too.
+    assert keep_unread(previous, {}, []) == previous
+
+
+async def test_a_restart_does_not_reset_the_catchup_clock(hass, controlled, sources, freezer):  # noqa: F811
+    entry, c = await run(hass, controlled, freezer, "active")
+    boiler = c.boiler
+    track = boiler._catchup_tracks["Living Room"]
+    assert track.pushing
+    assert load_tracks(boiler._store.get("catchup_tracks")) == {"Living Room": track}
+    # As if started a moment ago with nothing in memory and no room readings yet.
+    now = dt_util.utcnow()
+    boiler._started_at, boiler._catchup_restored, boiler._catchup_tracks = now, False, {}
+    boiler._warmup_rooms = lambda: [("climate.study", None, True, "Living Room", None, None, True)]
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert boiler._catchup_tracks == {"Living Room": track}
+    # Readings back: pushed straight away, without a new 20-minute wait.
+    boiler._warmup_rooms = lambda: [("climate.study", None, True, "Living Room", 19.3, 19.7, True)]
+    freezer.tick(timedelta(minutes=1))
+    calling(hass)
+    await c.refresh()
+    assert boiler.data.catchup_room == "Living Room" and boiler.data.catchup_uplift > 0
+
+
+async def test_old_saved_clocks_are_not_restored(hass, controlled, sources, freezer):  # noqa: F811
+    entry, c = await run(hass, controlled, freezer, "active")
+    boiler = c.boiler
+    now = dt_util.utcnow()
+    boiler._store.set("catchup_tracks_at", (now - timedelta(hours=2)).isoformat())
+    boiler._started_at, boiler._catchup_restored, boiler._catchup_tracks = now, False, {}
+    boiler._restore_catchup(now)
+    assert boiler._catchup_tracks == {}
 
 
 # -- pre-heat handover and push ------------------------------------------------

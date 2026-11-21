@@ -146,11 +146,14 @@ from .core.warmup import (
     boost_step,
     catchup_need,
     catchup_step,
+    dump_tracks,
     fullness,
     fullness_cap,
     fullness_step,
     handover_tracks,
     house_demand,
+    keep_unread,
+    load_tracks,
     need_uplift,
     overshoot,
     plan_floor,
@@ -168,6 +171,10 @@ _LOGGER = logging.getLogger(__name__)
 # After a start, keep a flow target written this recently for this long (see _startup_hold).
 STARTUP_HOLD = timedelta(minutes=3)
 STARTUP_HOLD_MAX_AGE = timedelta(minutes=15)
+# After a start, catch-up clocks saved this recently carry on (see _restore_catchup) ...
+CATCHUP_RESTORE_MAX_AGE = timedelta(minutes=30)
+# ... and survive this long without room readings, which take a few minutes to arrive.
+CATCHUP_RESTORE_GRACE = timedelta(minutes=10)
 
 UNAVAILABLE = ("unknown", "unavailable", "", None)
 
@@ -330,6 +337,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         self._preheat_state = WarmupBoostState()
         self._catchup_state = WarmupBoostState()
         self._catchup_tracks: dict = {}
+        self._catchup_saved: dict | None = None
+        self._catchup_restored = False
         # Rooms a running pre-heat has not yet brought to goal (handed to catch-up after).
         self._preheat_short: set = set()
         self._warmup_on = False
@@ -798,9 +807,12 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             )
             self._preheat_state = WarmupBoostState()
             self._catchup_state = WarmupBoostState()
-            if not d.dhw_active or catch_mode == "off":
-                # A hot water charge only pauses catch-up: a pushed room stays pushed.
+            self._restore_catchup(now)
+            if catch_mode == "off" or not (d.dhw_active or self._catchup_grace(now)):
+                # A hot water charge only pauses catch-up: a pushed room stays pushed. So
+                # does a start, until the demand readings are back.
                 self._catchup_tracks, self._preheat_short = {}, set()
+            self._save_catchup(now)
             self._warmup_baselines = {}
             self._warmup_hold = False
             if heating:
@@ -924,6 +936,29 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         """The configured overdrive limit in K (rooms' overdrive and pre-heat push), or None."""
         return self._warmup_config().get("catchup_overdrive_k")
 
+    def _catchup_grace(self, now) -> bool:
+        """Whether a start is recent enough that room readings may still be missing."""
+        return now - self._started_at < CATCHUP_RESTORE_GRACE
+
+    def _restore_catchup(self, now) -> None:
+        """Once after a start: carry on the catch-up clocks saved shortly before it."""
+        if self._catchup_restored:
+            return
+        self._catchup_restored = True
+        at = dt_util.parse_datetime(str(self._store.get("catchup_tracks_at") or ""))
+        if at is None or not timedelta(0) <= self._started_at - at <= CATCHUP_RESTORE_MAX_AGE:
+            return
+        self._catchup_tracks = load_tracks(self._store.get("catchup_tracks"))
+        self._catchup_saved = dump_tracks(self._catchup_tracks)
+
+    def _save_catchup(self, now) -> None:
+        """Keep the catch-up clocks in the store (written with the cycle's save)."""
+        tracks = dump_tracks(self._catchup_tracks)
+        if tracks != self._catchup_saved or tracks:
+            self._store.set("catchup_tracks", tracks)
+            self._store.set("catchup_tracks_at", now.isoformat())
+            self._catchup_saved = tracks
+
     def _catchup(self, d, now, rooms, planned, base, curve_params, params, trim):
         """Track rooms stuck below target and publish the catch-up; returns its state.
 
@@ -932,6 +967,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         fullness, faded by the overshoot trim and the return guard, and rises at most
         ``rise_k_per_min``.
         """
+        self._restore_catchup(now)
         if d.catchup_mode == "off":
             self._catchup_tracks, self._preheat_short = {}, set()
         elif planned:
@@ -944,7 +980,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             if self._preheat_short:
                 tracks = handover_tracks(tracks, rooms, self._preheat_short, now)
                 self._preheat_short = set()
-            self._catchup_tracks = catchup_step(tracks, rooms, now)
+            stepped = catchup_step(tracks, rooms, now)
+            if self._catchup_grace(now):
+                stepped = keep_unread(tracks, stepped, rooms)
+            self._catchup_tracks = stepped
+        self._save_catchup(now)
         ceiling = min(curve_params.flow_max, CATCHUP_MAX_FLOW)
         need, room, short = catchup_need(self._catchup_tracks, rooms, base, ceiling)
         guard = return_scale(self._return_filtered, self._return_params().return_ceiling, params)
