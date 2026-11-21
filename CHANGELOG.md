@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.28.0 - a steadier push, and the mapping no longer drops the globe setting
+
+- **Steadier overdrive.** Part of a room's push is now remembered as a *hold* (room data `overdrive_hold_k`, shown in the reason as `hold +0.2`). It builds while a room within 0.5 K of its target keeps needing a push (a 0.3 K push for an hour adds 0.2 K), shrinks while the room sits over target, is capped at 0.5 K and at the room's overdrive limit, and stays on when the room is on target. It is kept through a pre-heat and a restart and dropped outside the room's operating window. Why: every evening of 13-20 Nov the Living room swung 0.5-0.9 K over about two hours. The push came off entirely at target, Evohome closed the valve part-way, the room sagged for an hour or two, and the push came back at +0.7.
+- **Mapping.** Saving the observation mapping now keeps the scorecard section. Before, it dropped the black globe sensor and its room, so the scorecard stopped recording globe figures until the section was saved again (found on 21 Nov).
+
 ## 0.27.0 - fixes from the 13-20 Nov review
 
 - **Sun.** The comfort model now credits at most 0.5 K of mean radiant temperature rise to sun through the glazing (`solar_cap_k`, was 2.0). `model_version` is now `steady_state_ot_v4`. Why: on the bright days of 13, 14 and 16 Nov the Living room model was at the old cap and cut the window correction from about 0.6 K to 0.3 K, while the black globe by the windows showed the room needed 0.6 K; the room felt 0.1-0.3 K under target. With the new cap the same conditions give about 0.6 K.

@@ -127,6 +127,7 @@ async def test_saving_the_mapping_keeps_the_other_sections(hass, config, sources
     config["warmup_boost"] = {"mode": "active"}
     config["preheat"] = {"mode": "shadow", "plan_flow": 50.0}
     config["dhw_boiler"] = {"anticycle_enabled": True, "anticycle_entity": "number.burn"}
+    config["scorecard"] = {"globe_entity": "sensor.globe", "globe_room": "study"}
     entry = await setup(hass, config)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
@@ -147,6 +148,7 @@ async def test_saving_the_mapping_keeps_the_other_sections(hass, config, sources
         "warmup_boost",
         "preheat",
         "dhw_boiler",
+        "scorecard",
     ):
         assert saved[section] == config[section], section
 
