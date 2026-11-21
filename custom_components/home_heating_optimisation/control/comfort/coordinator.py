@@ -114,7 +114,14 @@ from .core.model import (
     sky_depression_k,
     steady_state_mrt,
 )
-from .core.overdrive import OverdriveState, overdrive_step, overdrive_wanted
+from .core.overdrive import (
+    HOLD_MAX_K,
+    OverdriveState,
+    hold_step,
+    overdrive_step,
+    overdrive_wanted,
+    with_hold,
+)
 from .core.policy import (
     Action,
     Decision,
@@ -239,6 +246,8 @@ class OTCoordinatorData:
     # Overdrive added to the written zone target (negative: taken off), and the pre-heat
     # push added to a pre-heat target while the room is behind its plan.
     overdrive_k: float = 0.0
+    # The part of the overdrive that stays on when the room is on target.
+    overdrive_hold_k: float = 0.0
     preheat_push_k: float = 0.0
     # Model
     mrt_steady_state: float | None = None
@@ -1085,7 +1094,12 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             return OverdriveState()
         if not math.isfinite(value) or abs(value) > OVERDRIVE_RESTORE_MAX_K:
             return OverdriveState()
-        return OverdriveState(value, dt_util.as_utc(changed) if changed else None)
+        try:
+            hold = float(raw.get("hold") or 0.0)
+        except TypeError, ValueError:
+            hold = 0.0
+        hold = hold if math.isfinite(hold) and 0 <= hold <= HOLD_MAX_K else 0.0
+        return OverdriveState(value, dt_util.as_utc(changed) if changed else None, hold)
 
     def _hold_overdrive(self, d, now, preferred) -> bool:
         """True while this cycle's readings are not fit to move the overdrive.
@@ -1124,17 +1138,21 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         except Exception:  # noqa: BLE001 - settings must never break the room cycle
             _LOGGER.debug("OT %s: overdrive settings failed", self.room_name, exc_info=True)
             limit = None
-        usable = (
-            limit
-            and d.time_window_active
-            and not preheating
-            and None not in (d.air_temp, d.air_setpoint)
-        )
+        usable = limit and d.time_window_active and None not in (d.air_temp, d.air_setpoint)
         if not usable:
             self._overdrive = OverdriveState()
             return 0.0
-        wanted = overdrive_wanted(d.air_setpoint - d.air_temp, strength, limit)
-        self._overdrive = overdrive_step(self._overdrive, wanted, now, period_s)
+        if preheating:
+            # The pre-heat push takes over; the hold waits for the room to be back.
+            self._overdrive = OverdriveState(hold=self._overdrive.hold)
+            return 0.0
+        state = self._overdrive
+        short = d.air_setpoint - d.air_temp
+        push = overdrive_wanted(short, strength, limit)
+        seconds = (now - state.hold_at).total_seconds() if state.hold_at else None
+        hold = hold_step(state.hold, short, push, seconds, limit)
+        state = replace(state, hold=hold, hold_at=now)
+        self._overdrive = overdrive_step(state, with_hold(push, hold, limit), now, period_s)
         return self._overdrive.value
 
     def _preheat_now(self, now, zone, goal):
@@ -1769,9 +1787,11 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                 "changed_at": self._overdrive.changed_at.isoformat()
                 if self._overdrive.changed_at
                 else None,
+                "hold": round(self._overdrive.hold, 3),
                 "seen_at": now.isoformat(),
             },
         )
+        d.overdrive_hold_k = round(self._overdrive.hold, 2)
         d.preheat_push_k = self._preheat_push() if preheating else 0.0
         computed = to_zone(d.air_setpoint, d.sensor_offset_k)
         if computed is not None and d.overdrive_k:
@@ -1835,6 +1855,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             d.reason += f"; pre-heat (shadow) would command {preheat_goal:.1f}"
         if d.overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
             d.reason += f"; overdrive {d.overdrive_k:+.1f}"
+            if d.overdrive_hold_k >= 0.05:
+                d.reason += f" (hold {d.overdrive_hold_k:+.1f})"
         elif d.preheat_push_k and decision.state is State.PREHEAT:
             d.reason += f"; pre-heat push +{d.preheat_push_k:.1f}"
         if self._journal_changed("decision", (d.state, d.action, d.reason, d.would_write)):
@@ -1851,6 +1873,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     "air_setpoint": d.air_setpoint,
                     "sensor_offset_k": d.sensor_offset_k,
                     "overdrive_k": d.overdrive_k,
+                    "overdrive_hold_k": d.overdrive_hold_k,
                     "preheat_push_k": d.preheat_push_k,
                     "target_ot": d.target_ot,
                     "air_temp": d.air_temp,

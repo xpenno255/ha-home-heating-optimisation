@@ -11,9 +11,13 @@ from custom_components.home_heating_optimisation.control.boiler.warmup_policy im
     warmup_config,
 )
 from custom_components.home_heating_optimisation.control.comfort.core.overdrive import (
+    HOLD_MAX_K,
+    HOLD_TAU_S,
     OverdriveState,
+    hold_step,
     overdrive_step,
     overdrive_wanted,
+    with_hold,
 )
 from tests.control.test_runtime import controlled as controlled  # noqa: F401 - fixture
 from tests.control.test_runtime import start
@@ -73,6 +77,44 @@ def test_changes_at_most_once_per_period_but_eases_back_at_once():
     assert overdrive_step(state, -0.3, soon, period) is state
 
 
+def test_the_hold_builds_near_target_and_fades_when_over():
+    # A 0.3 K push kept up for the whole time constant becomes 0.3 K of hold.
+    hold = 0.0
+    for _ in range(HOLD_TAU_S // 60):
+        hold = hold_step(hold, 0.2, 0.3, 60, 1.0)
+    assert round(hold, 2) == 0.3
+    # Never above its ceiling, nor above a smaller limit.
+    assert hold_step(HOLD_MAX_K, 0.2, 0.3, 600, 1.0) == HOLD_MAX_K
+    assert hold_step(0.2, 0.2, 0.3, 600, 0.2) == 0.2
+    # Over target the push is negative and the hold shrinks, never below nothing.
+    assert hold_step(0.3, -0.2, -0.2, 600, 1.0) < 0.3
+    assert hold_step(0.01, -0.3, -0.3, 600, 1.0) == 0.0
+
+
+def test_the_hold_only_learns_from_steady_running():
+    # Far below target the room is recovering, not holding.
+    assert hold_step(0.1, 0.8, 1.0, 60, 2.0) == 0.1
+    # A long gap (restart, sensor drop-out) or no limit teaches nothing.
+    assert hold_step(0.1, 0.2, 0.3, 3600, 1.0) == 0.1
+    assert hold_step(0.1, 0.2, 0.3, None, 1.0) == 0.1
+    assert hold_step(0.1, 0.2, 0.3, 60, None) == 0.1
+
+
+def test_the_hold_stays_on_at_target_and_respects_the_limits():
+    assert with_hold(0.0, 0.24, 1.0) == 0.2  # on target: the hold alone
+    assert with_hold(0.5, 0.2, 1.0) == 0.7
+    assert with_hold(0.9, 0.3, 1.0) == 1.0  # the room's limit
+    assert with_hold(-0.5, 0.0, 1.0) == -0.5
+    assert with_hold(-0.2, 0.3, 1.0) == 0.1  # slightly over: eased, not dropped
+    assert with_hold(0.5, 0.3, None) == 0.0
+
+
+def test_a_step_keeps_the_hold():
+    state = OverdriveState(0.5, T0, hold=0.2, hold_at=T0)
+    after = overdrive_step(state, 0.2, T0 + timedelta(minutes=1), 600)
+    assert (after.value, after.hold, after.hold_at) == (0.2, 0.2, T0)
+
+
 def test_settings_defaults_and_validation():
     cfg = warmup_config({})
     assert cfg["overdrive_strength"] == 1.0 and cfg["overdrive_period_min"] == 10
@@ -130,6 +172,41 @@ async def test_a_room_limit_replaces_the_house_limit(hass, controlled, sources):
     room._overdrive = OverdriveState()
     await c.refresh()
     assert room.data.overdrive_k == 1.0
+
+
+async def test_a_room_held_just_short_keeps_part_of_its_push_at_target(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    from custom_components.home_heating_optimisation.control.migration import handover
+
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 19.0, "temperature": 20})
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    settings = {"catchup_overdrive_k": 1.0, "overdrive_strength": 1.0, "overdrive_period_min": 10}
+    room._overdrive_settings = lambda: settings
+    await c.refresh()
+    target = room.data.air_setpoint
+    # An hour a couple of tenths short: the push is there and part of it is remembered.
+    for _ in range(60):
+        hass.states.async_set("sensor.air", round(target - 0.2, 2), {"unit_of_measurement": "°C"})
+        freezer.tick(timedelta(minutes=1))
+        await c.refresh()
+    hold = room.data.overdrive_hold_k
+    assert 0.1 <= hold <= 0.3 and room.data.overdrive_k >= 0.4
+    assert room._store.get("overdrive")["hold"] > 0
+    # On target: the remembered part stays on instead of the push dropping to nothing.
+    hass.states.async_set("sensor.air", target, {"unit_of_measurement": "°C"})
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.overdrive_k == round(hold, 1) > 0
+    # Sitting above target wears it away again.
+    for _ in range(120):
+        hass.states.async_set("sensor.air", round(target + 0.3, 2), {"unit_of_measurement": "°C"})
+        freezer.tick(timedelta(minutes=1))
+        await c.refresh()
+    assert room.data.overdrive_hold_k == 0.0 and room.data.overdrive_k == -0.3
 
 
 async def test_overdrive_is_frozen_while_the_room_sensor_is_missing(  # noqa: F811

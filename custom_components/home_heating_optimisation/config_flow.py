@@ -160,6 +160,7 @@ KEPT_SECTIONS = (
     "mqtt_sources",
     "gateways",
     "energy",
+    "scorecard",
     DHW_SECTION,
     CUTOFF_SECTION,
     OPTIMUM_SECTION,
