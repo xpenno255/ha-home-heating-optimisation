@@ -14,6 +14,12 @@ from .advisor.notify import EVENTS as NOTIFY_EVENTS
 from .advisor.profiles import profile_info
 from .analytics.observations import ROOM_INTENT
 from .const import DOMAIN, NAME, SYSTEM_SOURCES, effective_config
+from .control.away import DEFAULTS as AWAY_DEFAULTS
+from .control.away import INTEGERS as AWAY_INTEGERS
+from .control.away import LIMITS as AWAY_LIMITS
+from .control.away import SECTION as AWAY_SECTION
+from .control.away import away_config
+from .control.away import validation_error as away_validation_error
 from .control.boiler.core.efficiency import (
     CONF_EFFICIENCY_PROFILE,
     PROFILE_BG430I_NATURAL_GAS,
@@ -161,6 +167,7 @@ KEPT_SECTIONS = (
     "gateways",
     "energy",
     "scorecard",
+    AWAY_SECTION,
     DHW_SECTION,
     CUTOFF_SECTION,
     OPTIMUM_SECTION,
@@ -398,6 +405,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 "optimum",
                 "warmup_boost",
                 "preheat",
+                "away",
                 "dhw_boiler",
             ],
         )
@@ -1083,6 +1091,37 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
         return self.async_show_form(
             step_id="dhw_boiler", errors=errors, data_schema=vol.Schema(schema)
         )
+
+    async def async_step_away(self, user_input=None):
+        """Away setback: lower room targets a little while everyone is out."""
+        self.current = effective_config(self.config_entry)
+        old = away_config(self.current)
+        errors = {}
+        if user_input is not None:
+            values = {**AWAY_DEFAULTS, **user_input}
+            error = away_validation_error(values)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_create_entry(
+                    title=NAME,
+                    data={**self.current, AWAY_SECTION: away_config({AWAY_SECTION: values})},
+                )
+        schema = {
+            vol.Required("enabled", default=old["enabled"]): bool,
+            vol.Optional("people", default=old["people"]): entity_selector(
+                ("person",), multiple=True
+            ),
+            vol.Optional("work_zones", default=old["work_zones"]): entity_selector(
+                ("zone",), multiple=True
+            ),
+        }
+        for key, (low, high) in AWAY_LIMITS.items():
+            coerce = int if key in AWAY_INTEGERS else float
+            schema[vol.Required(key, default=old[key])] = vol.All(
+                vol.Coerce(coerce), vol.Range(min=low, max=high)
+            )
+        return self.async_show_form(step_id="away", errors=errors, data_schema=vol.Schema(schema))
 
     async def async_step_preheat(self, user_input=None):
         """Planned morning pre-heat from the optimum predictor; saved apart from control."""

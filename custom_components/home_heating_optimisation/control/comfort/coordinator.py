@@ -186,6 +186,8 @@ READBACK_HINTS = {
     ),
 }
 COMFORT_MODEL_VERSION = "steady_state_ot_v4"
+# The most an away setback may take off a room's target, whatever the settings say.
+AWAY_SETBACK_MAX_K = 2.0
 
 
 @dataclass
@@ -231,6 +233,9 @@ class OTCoordinatorData:
     adaptive_shift: float = 0.0
     occupancy_status: str = "no_sensor"
     occupancy_offset: float = 0.0
+    # Taken off the target while nobody is at home (see control.away).
+    away_setback_k: float = 0.0
+    away_status: str = "off"
     next_switchpoint_at: datetime | None = None
     next_switchpoint_setpoint: float | None = None
     # Room state
@@ -308,6 +313,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         preheat_hint=None,
         preheat_push_hint=None,
         overdrive_settings=None,
+        away_setback=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._entry = entry
@@ -327,6 +333,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._preheat_push_hint = preheat_push_hint or (lambda: 0.0)
         # ``() -> dict``: warm-up settings with the overdrive limit, strength and period.
         self._overdrive_settings = overdrive_settings or (lambda: {})
+        # (setback K, status) while nobody is at home; lowers the target, never raises it.
+        self._away_setback = away_setback or (lambda _now: (0.0, "off"))
         self._overdrive = self._restored_overdrive(store)
         self._air_fallback_since: datetime | None = None
         self.write_status = "not_attempted"
@@ -572,6 +580,18 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         if start <= end:
             return start <= cur < end
         return cur >= start or cur < end
+
+    def _away_now(self, d, now) -> tuple[float, str]:
+        """The away setback for this cycle: only inside the room's window, never negative."""
+        try:
+            k, status = self._away_setback(now)
+            k = float(k)
+        except Exception:  # noqa: BLE001 - the away tracker must never break the room cycle
+            _LOGGER.debug("OT %s: away setback failed", self.room_name, exc_info=True)
+            return 0.0, "off"
+        if not d.time_window_active or not math.isfinite(k) or k <= 0:
+            return 0.0, status
+        return round(min(k, AWAY_SETBACK_MAX_K), 1), status
 
     def _occupancy(self, now_local: datetime) -> tuple[str, float]:
         """Return (status, offset applied to the target)."""
@@ -1059,7 +1079,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         ):
             return None
         try:
-            target = zone.next_switchpoint_setpoint + d.occupancy_offset
+            target = zone.next_switchpoint_setpoint + d.occupancy_offset - d.away_setback_k
             air = required_air_temperature(
                 geometry.surfaces, env, target, self._model_params(geometry)
             ).air_setpoint
@@ -1685,6 +1705,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
         d.occupancy_status, d.occupancy_offset = self._occupancy(now_local)
         d.time_window_active = self._within_time_window(now_local)
+        d.away_setback_k, d.away_status = self._away_now(d, now)
 
         # --- environment and model -------------------------------------
         env, env_info = self._environment(geometry, fallbacks)
@@ -1715,7 +1736,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
 
         hub_cfg = self._hub_config()
         if zone.schedule_setpoint is not None:
-            target = zone.schedule_setpoint + d.occupancy_offset
+            target = zone.schedule_setpoint + d.occupancy_offset - d.away_setback_k
             # Existing entries may still store adaptive_enabled=True. Retire the
             # subtraction in the control path, not merely in defaults for new rooms.
             if hub_cfg.get(CONF_ADAPTIVE_ENABLED):
@@ -1853,6 +1874,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         elif preheat_now and preheat_mode == "shadow":
             d.preheat_status = "shadow"
             d.reason += f"; pre-heat (shadow) would command {preheat_goal:.1f}"
+        if d.away_setback_k and decision.state in (State.ACTIVE, State.SHADOW, State.PREHEAT):
+            d.reason += f"; away -{d.away_setback_k:.1f}"
         if d.overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
             d.reason += f"; overdrive {d.overdrive_k:+.1f}"
             if d.overdrive_hold_k >= 0.05:

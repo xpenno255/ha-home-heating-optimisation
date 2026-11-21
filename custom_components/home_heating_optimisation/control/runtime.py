@@ -14,6 +14,7 @@ from ..const import DOMAIN
 from ..dhw.policy import dhw_config, usable
 from ..optimum.preheat import PreheatRoom
 from ..optimum.preheat_policy import preheat_config
+from .away import AwayTracker, away_config
 from .boiler.coordinator import BFCCoordinator
 from .boiler.core.warmup import overdrive_k
 from .boiler.dhw_policy import dhw_boiler_config
@@ -66,6 +67,7 @@ class Controls:
         self.config = heating.config.get("control")
         self.rooms = {}
         self.boiler = None
+        self.away = None
         self.closed = False
         self.ready = False
         self.lock = asyncio.Lock()
@@ -127,6 +129,12 @@ class Controls:
             "hub": {"config": self.config["hub"], "data": self.hub},
             "rooms": {},
         }
+        self.away = AwayTracker(
+            self.hass,
+            await self.store("away"),
+            lambda: away_config(self.heating.config),
+            visitor=self._visitor_live,
+        )
         boiler_spec = self.config["boiler"]
         boiler_config = dict(boiler_spec["config"])
         dhw = dhw_config(self.heating.config)
@@ -174,6 +182,7 @@ class Controls:
                 preheat_hint=lambda now, rid=room_id: self.preheat_hint(rid, now),
                 preheat_push_hint=lambda rid=room_id: self.preheat_push(rid),
                 overdrive_settings=lambda: warmup_config(self.heating.config),
+                away_setback=self.away_setback,
             )
             c.mode = "shadow"
             c.journal_room_id = room_id
@@ -185,6 +194,20 @@ class Controls:
         for c in self.rooms.values():
             await c.async_config_entry_first_refresh()
         self.status = "shadow"
+
+    def _visitor_live(self, now):
+        dhw = getattr(self.heating, "dhw", None)
+        try:
+            return bool(dhw._visitor_live(now)) if dhw is not None else False
+        except Exception:  # noqa: BLE001 - visitor state must never break a room cycle
+            return False
+
+    def away_setback(self, now):
+        """``(setback K, status)`` from the away tracker, for the rooms."""
+        away = self.away
+        if away is None:
+            return 0.0, "off"
+        return away.step(now), away.status
 
     def conflicts(self):
         # A loaded legacy controller is a potential writer even if currently shadow.
@@ -490,6 +513,7 @@ class Controls:
             "dhw_cutoff": self.dhw_cutoff_report(),
             "optimum": self.optimum_report(),
             "warmup_boost": self.warmup_boost_report(),
+            "away": self.away.report() if self.away else None,
         }
 
     def dhw_report(self):

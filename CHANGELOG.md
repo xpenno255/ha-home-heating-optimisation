@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.29.0 - away setback
+
+- New options section **Away setback** (off until enabled). While every chosen person is away from home, each room's target comes down: nothing for the first 30 minutes, then 0.5 K, then 1.0 K once the house has been empty for 2 hours. It ends the moment anyone is home. A person whose location is unknown or unavailable counts as at home.
+- If someone leaves one of the chosen work zones the setback lifts at once, so the house starts recovering before they arrive; it returns if nobody is home 90 minutes later. Phones send too few location fixes on the way home for anything finer.
+- Visitor mode suppresses it. It applies only inside a room's operating window, and to a pre-heat target as well as the current one. The times and amounts are settings; a setback can never exceed 2 K.
+- Room data has `away_setback_k` and `away_status`, the reason shows `away -0.5`, the control report has an `away` block (`home`, `waiting`, `away`, `deep`, `heading_home`, `visitor`, `off`), and the daily scorecard has `away_hours` and `away_setback_k`. The end of a setback is a rise in the room's target, so the scorecard's arrivals record how long each room took to recover. The away clock is kept across a restart.
+
 ## 0.28.0 - a steadier push, and the mapping no longer drops the globe setting
 
 - **Steadier overdrive.** Part of a room's push is now remembered as a *hold* (room data `overdrive_hold_k`, shown in the reason as `hold +0.2`). It builds while a room within 0.5 K of its target keeps needing a push (a 0.3 K push for an hour adds 0.2 K), shrinks while the room sits over target, is capped at 0.5 K and at the room's overdrive limit, and stays on when the room is on target. It is kept through a pre-heat and a restart and dropped outside the room's operating window. Why: every evening of 13-20 Nov the Living room swung 0.5-0.9 K over about two hours. The push came off entirely at target, Evohome closed the valve part-way, the room sagged for an hour or two, and the push came back at +0.7.

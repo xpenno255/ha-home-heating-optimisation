@@ -90,6 +90,7 @@
           "optimum": "Optimum start predictor (shadow)",
           "warmup_boost": "Warm-up flow boost",
           "preheat": "Planned morning pre-heat",
+          "away": "Away setback",
           "dhw_boiler": "Boiler during hot water charges"
         }
       },
@@ -437,6 +438,20 @@
           "room_check_minutes": "How often each room's control runs: reads its temperatures, updates its overdrive and writes its zone target if it has changed. Shorter reacts faster as a room nears target; Evohome is only written when the target actually changes.",
           "room_write_step": "A room's zone target is only re-sent to Evohome once it differs from the last value sent by at least this much. 0.1 sends every change (about 100 a day per room); 0.3 sends about a quarter as many. Until then Evohome keeps the last value, so its target can sit up to just under this far from the ideal one. The exception: while a room is at or below its air target, any raise is sent at once, so a room that needs heat is never left waiting for it. Bigger moves, such as a schedule change of 0.5 K or a window-open setback, still go at once."
         }
+      },
+      "away": {
+        "title": "Away setback",
+        "description": "Lowers every room's target a little while everyone is out, and restores it the moment anyone is home. Nobody is at home when every person chosen here is somewhere else; a person whose location is unknown counts as at home. Nothing changes for the first minutes of an absence. If someone leaves one of the work zones the setback lifts at once so the house can recover, and returns if nobody has arrived after the resume time. Visitor mode suppresses it. Applies only inside each room's operating window.",
+        "data": {
+          "enabled": "Enabled",
+          "people": "People whose absence counts",
+          "work_zones": "Work zones (leaving one lifts the setback)",
+          "start_minutes": "Minutes everyone must be out before any setback",
+          "first_k": "First setback (\u00b0C)",
+          "deep_after_minutes": "Minutes out before the deeper setback",
+          "deep_k": "Deeper setback (\u00b0C)",
+          "resume_minutes": "Minutes after someone leaves work before the setback returns"
+        }
       }
     },
     "error": {
@@ -476,7 +491,9 @@
       "dhw_boiler_needs_entity": "Choose the minimum burn period entity to turn on the override.",
       "preheat_invalid": "Check the values: each must be in range and the upper fullness must be above the lower one.",
       "preheat_needs_optimum": "Enable the optimum start predictor before using active pre-heat.",
-      "warmup_boost_invalid": "Check the values: the full share must be above the start share, and each must be in range."
+      "warmup_boost_invalid": "Check the values: the full share must be above the start share, and each must be in range.",
+      "away_invalid": "Check the values: each must be in range, the deeper setback must not be smaller than the first and must start later, and only people and zones can be chosen.",
+      "away_needs_people": "Choose at least one person before enabling the away setback."
     },
     "abort": {
       "control_active": "Return every consolidated controller to shadow before editing configuration.",
