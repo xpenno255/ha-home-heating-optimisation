@@ -128,6 +128,7 @@ async def test_saving_the_mapping_keeps_the_other_sections(hass, config, sources
     config["preheat"] = {"mode": "shadow", "plan_flow": 50.0}
     config["dhw_boiler"] = {"anticycle_enabled": True, "anticycle_entity": "number.burn"}
     config["scorecard"] = {"globe_entity": "sensor.globe", "globe_room": "study"}
+    config["away"] = {"enabled": True, "people": ["person.a"], "first_k": 0.5}
     entry = await setup(hass, config)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
@@ -149,8 +150,42 @@ async def test_saving_the_mapping_keeps_the_other_sections(hass, config, sources
         "preheat",
         "dhw_boiler",
         "scorecard",
+        "away",
     ):
         assert saved[section] == config[section], section
+
+
+async def test_away_options_are_validated_and_saved(hass, config, sources):
+    entry = await setup(hass, config)
+
+    async def submit(values):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {"next_step_id": "away"}
+        )
+        assert result["step_id"] == "away"
+        return await hass.config_entries.options.async_configure(result["flow_id"], values)
+
+    values = {
+        "enabled": True,
+        "people": [],
+        "work_zones": [],
+        "start_minutes": 30,
+        "first_k": 0.5,
+        "deep_after_minutes": 120,
+        "deep_k": 1.0,
+        "resume_minutes": 90,
+    }
+    result = await submit(values)
+    assert result["type"] == "form" and result["errors"] == {"base": "away_needs_people"}
+    result = await submit({**values, "people": ["person.a"], "deep_k": 0.2})
+    assert result["errors"] == {"base": "away_invalid"}
+    result = await submit({**values, "people": ["person.a"], "work_zones": ["zone.office"]})
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    saved = effective_config(entry)["away"]
+    assert saved["enabled"] is True and saved["people"] == ["person.a"]
+    assert saved["work_zones"] == ["zone.office"] and saved["deep_k"] == 1.0
 
 
 async def test_unload_stops_updates_and_reload_preserves_ids(hass, config, sources):

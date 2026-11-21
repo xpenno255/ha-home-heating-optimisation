@@ -165,6 +165,15 @@ def add_write(day: dict, room_id: str, name=None) -> None:
     _room(day, room_id, name)["writes"] += 1
 
 
+def add_away(day: dict, minutes: float, setback_k) -> None:
+    """Count ``minutes`` with the away setback lowering targets by ``setback_k``."""
+    setback_k = _num(setback_k)
+    if setback_k is None or setback_k <= 0 or minutes <= 0:
+        return
+    day["away_minutes"] = day.get("away_minutes", 0.0) + minutes
+    day["away_k_minutes"] = day.get("away_k_minutes", 0.0) + minutes * setback_k
+
+
 def note_arrival(day: dict, room_id: str, name, *, at: str, ts: float, step_k, error_k) -> None:
     """A room's scheduled target just rose: record how far the room was from its new air
     target at that moment. Zero minutes when it was already there."""
@@ -368,6 +377,9 @@ def finalise(day: dict, burner: dict | None = None) -> dict:
         "short_degree_hours": round(total["short_dm"] / 60, 2),
         "over_degree_hours": round(total["over_dm"] / 60, 2),
         "writes": writes,
+        # Hours the away setback was lowering targets, and how much on average while it was.
+        "away_hours": round(day.get("away_minutes", 0.0) / 60, 1),
+        "away_setback_k": _ratio(day.get("away_k_minutes", 0.0), day.get("away_minutes", 0.0), 2),
         "globe": globe or None,
         "rooms": rooms,
     }

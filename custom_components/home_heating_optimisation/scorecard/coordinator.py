@@ -24,6 +24,7 @@ from .core import (
     METER_MAX_SILENCE_MINUTES,
     SHORT_K,
     TOLERANCE_K,
+    add_away,
     add_gas,
     add_globe,
     add_meter_gas,
@@ -193,6 +194,9 @@ class Scorecard:
             meter_live=meter_live,
         )
         self._globe(day, now, minutes, bdata)
+        away = getattr(controls, "away", None)
+        if away is not None:
+            add_away(day, minutes, away.setback_k)
         return rolled
 
     def _arrival(self, day, now, room_id, name, d):
