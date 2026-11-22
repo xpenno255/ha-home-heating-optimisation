@@ -1050,7 +1050,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
                 mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
-        for key in ("spread_capacity_kw", "spread_max_k"):
+        for key in ("spread_capacity_kw", "spread_max_k", "spread_floor_pct", "spread_flow_c"):
             schema[vol.Required(key, default=old[key])] = vol.All(
                 vol.Coerce(float), vol.Range(*OVERDRIVE_SETTINGS[key])
             )

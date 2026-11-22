@@ -2,6 +2,14 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.31.0 - a boiler-time floor, and spreading lifts every room together
+
+- **Boiler-time floor** (`spread_floor_pct`, default 35, 0 = off): the share of time Evohome should be calling the boiler at 5 C outside while rooms are on target, scaled with the weather (nothing at 15.5 C, at most 60). Spreading now also engages when Evohome's call is more than 5 points under the floor.
+- **One level for the whole house.** While spreading is engaged every room at, or up to `spread_max_k` over, its target is told its target plus a common *level* in place of its overdrive. At level 0 that only stops heat being taken off rooms that are slightly warm. The level rises 0.1 K every 10 minutes while the boiler call is under the floor, falls when the call is 15 points over it or the house is running 0.3 K warm (rooms weighted by radiator size), and never exceeds `spread_max_k`. This replaces 0.30.0's per-room lift to just above the room's own temperature, which would have walked each room up to the cap.
+- **Flow floor** (`spread_flow_c`, default 60, 0 = off): while spreading is engaged and acting, the flow target is kept at least this high (boiler data `spread_flow_floor`), unless the return is within 5 K of its ceiling.
+- Report block `spread` now has `level_k`, `boiler_floor`, `boiler_call`, `house_warmth_k` and the rooms taking part; one journal event `spread` per engage or level change, `spread_released` on letting go.
+- Why: Evohome calls the boiler according to the single most-open valve (13-20 Nov: 40-59 % open, called 18 % of the time; 60-79 %, 37 %; 80-99 %, 67 %; correlation 0.87, against 0.31 for the number of rooms open). With rooms on target the valves sit near 50 %, so the call collapses to a few one-minute burns an hour. While a room was being pushed the flow target was rarely the limit (flow averaged 45 C against a 60 C target; 82 % of burns ended with Evohome's call), except when it had been let fall to 50-56 C.
+
 ## 0.30.0 - heat spreading (off by default; shadow mode to watch it first)
 
 - New **heat spreading** in the warm-up options (`spread_mode` off / shadow / active, `spread_capacity_kw` 8, `spread_max_k` 0.5, `spread_exclude`). While Evohome is calling the boiler and less than 8 kW of radiator capacity is open (each room's valve opening times its rated output), rooms that are at, or only a little over, their target are lifted: their zone target is set 0.2 K above the room's own temperature, at most 0.5 K above its target, so the valve half-opens. A lift replaces the overdrive when it is the larger and never adds to a push. A room more than 0.8 K over target, a room that is short, a pre-heating room and an excluded room are left alone.

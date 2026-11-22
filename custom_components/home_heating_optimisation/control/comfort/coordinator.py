@@ -257,7 +257,7 @@ class OTCoordinatorData:
     overdrive_hold_k: float = 0.0
     # Heat spreading: the lift worked out for this room, and whether it was applied
     # ("active") or only reported ("shadow").
-    spread_k: float = 0.0
+    spread_k: float | None = None
     spread_mode: str = "off"
     preheat_push_k: float = 0.0
     # Model
@@ -343,7 +343,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         # (setback K, status) while nobody is at home; lowers the target, never raises it.
         self._away_setback = away_setback or (lambda _now: (0.0, "off"))
         # (lift K, mode) from the house's heat spreading (see control.spread).
-        self._spread_hint = spread_hint or (lambda _now: (0.0, "off"))
+        self._spread_hint = spread_hint or (lambda _now: (None, "off"))
         self._overdrive = self._restored_overdrive(store)
         self._air_fallback_since: datetime | None = None
         self.write_status = "not_attempted"
@@ -590,16 +590,20 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             return start <= cur < end
         return cur >= start or cur < end
 
-    def _spread_now(self, now, preheating) -> tuple[float, str]:
-        """This room's lift from heat spreading and its mode; nothing while it pre-heats."""
+    def _spread_now(self, now, preheating) -> tuple[float | None, str]:
+        """This room's lift from heat spreading (None when it has none) and the mode.
+
+        A lift of 0.0 is still a lift: it stands in for a take-off. Nothing while the room
+        pre-heats.
+        """
         try:
             k, mode = self._spread_hint(now)
-            k = float(k)
+            k = None if k is None else float(k)
         except Exception:  # noqa: BLE001 - spreading must never break the room cycle
             _LOGGER.debug("OT %s: heat spreading failed", self.room_name, exc_info=True)
-            return 0.0, "off"
-        if preheating or not math.isfinite(k) or k <= 0:
-            return 0.0, mode
+            return None, "off"
+        if preheating or k is None or not math.isfinite(k) or k < 0:
+            return None, mode
         return round(min(k, SPREAD_MAX_K), 1), mode
 
     def _away_now(self, d, now) -> tuple[float, str]:
@@ -1840,7 +1844,9 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.spread_k, d.spread_mode = self._spread_now(now, preheating)
         computed = to_zone(d.air_setpoint, d.sensor_offset_k)
         # A lift replaces the overdrive when it is the larger: it never adds to a push.
-        spreading = d.spread_mode == "active" and d.spread_k > max(0.0, d.overdrive_k)
+        spreading = (
+            d.spread_mode == "active" and d.spread_k is not None and d.spread_k > d.overdrive_k
+        )
         zone_push = d.spread_k if spreading else d.overdrive_k
         if computed is not None and zone_push:
             computed = round(computed + zone_push, 2)

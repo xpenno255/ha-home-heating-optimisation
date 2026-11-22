@@ -237,6 +237,8 @@ class BFCCoordinatorData:
     room_equivalents: float | None = None
     warmup_boost: float = 0.0
     boost_flow: float | None = None
+    # Flow target kept for heat spreading this cycle, when it raised the target.
+    spread_flow_floor: float | None = None
     boost_overshoot_k: float | None = None
     boost_overshoot_room: str | None = None
     boost_overshoot_baseline_k: float | None = None
@@ -305,6 +307,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         warmup_rooms=None,
         preheat_config=None,
         preheat_rooms=None,
+        flow_floor=None,
         dhw_boiler_config=None,
         dhw_elevated=None,
     ) -> None:
@@ -318,6 +321,8 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         # radiator fullness (held while the burner is off) with the shadow uplift ramp.
         self._preheat_config = preheat_config or (lambda: {"mode": "off"})
         self._preheat_rooms = preheat_rooms or (lambda _now: [])
+        # Flow target to keep while heat is being spread (see control.spread), or None.
+        self._flow_floor = flow_floor or (lambda: None)
         self._dhw_boiler_config = dhw_boiler_config or (lambda: dict(DHW_BOILER_DEFAULTS))
         self._dhw_elevated = dhw_elevated or (lambda: False)
         # DHW anti-cycle override (runtime; the remembered value is persisted in the store).
@@ -719,6 +724,24 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
                 await store.async_save()
         d.dhw_anticycle_state = self._ac_state
         d.dhw_anticycle_normal = store.get("anticycle_normal")
+
+    def _spread_floor(self, curve_params) -> float | None:
+        """The flow floor asked for by heat spreading, unless the return is already warm.
+
+        A burn that stops at a low flow target after a minute delivers almost nothing, so
+        the target is kept up while heat is being spread. Not once the return is within
+        5 K of its ceiling: the radiators are then full and condensing comes first.
+        """
+        try:
+            floor = self._flow_floor()
+        except Exception:  # noqa: BLE001 - spreading must never break the boiler cycle
+            return None
+        if floor is None:
+            return None
+        ceiling = self._return_params().return_ceiling
+        if self._return_filtered is not None and self._return_filtered >= ceiling - 5:
+            return None
+        return round(min(curve_params.flow_max, float(floor)), 1)
 
     def _startup_hold(self, memory, now) -> float | None:
         """The flow target to keep for the first minutes after a start, if any.
@@ -1778,6 +1801,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         uplift = self._warmup_boost(d, now, physical_mode, heating_value, curve_params, freshness)
         if uplift and heating_value is not None:
             heating_value = min(curve_params.flow_max, heating_value + uplift)
+        d.spread_flow_floor = None
+        if heating_value is not None and physical_mode is Mode.HEATING:
+            floor = self._spread_floor(curve_params)
+            if floor is not None and floor > heating_value:
+                heating_value = d.spread_flow_floor = floor
         if d.dhw_active:
             params = self._dhw_params()
             fallback = self._opt(CONF_DHW_FALLBACK_FLOW, params.dhw_flow_max)

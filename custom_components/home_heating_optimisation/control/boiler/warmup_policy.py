@@ -27,6 +27,11 @@ DEFAULTS = {
     "spread_capacity_kw": 8.0,
     "spread_max_k": 0.5,
     "spread_exclude": [],
+    # Boiler-time floor: the share of time (%) Evohome should be calling the boiler at 5 C
+    # outside while rooms are on target; 0 turns it off. And the flow target kept while
+    # spreading is engaged (C); 0 leaves the flow target alone.
+    "spread_floor_pct": 35.0,
+    "spread_flow_c": 60.0,
 }
 LIMITS = {"start": (0.05, 0.6), "full": (0.06, 1.0), "decay_k_per_min": (0.2, 5.0)}
 OVERDRIVE_LIMITS = (0.2, 2.0)
@@ -37,6 +42,8 @@ OVERDRIVE_SETTINGS = {
     "room_write_step": (0.1, 0.5),
     "spread_capacity_kw": (3.0, 20.0),
     "spread_max_k": (0.1, 1.0),
+    "spread_floor_pct": (0.0, 60.0),
+    "spread_flow_c": (0.0, 70.0),
 }
 INTEGERS = ("overdrive_period_min", "room_check_minutes")
 

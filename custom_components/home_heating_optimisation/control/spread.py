@@ -1,16 +1,26 @@
-"""Heat spreading: keep enough radiators open for the boiler to deliver into.
+"""Heat spreading and the boiler-time floor: run the boiler long enough, into enough radiators.
 
-With only a couple of valves open the boiler reaches its flow target in under a minute
-and stops, so the radiators go cold between calls (a burn starting with under 4 kW of
-radiator capacity open lasted a median 0.8 minutes in Nov 2026; with 8 kW or more open,
-4.5 minutes). Meanwhile half the house's radiators stay shut because their rooms sit a
-few tenths over target, kept warm by their neighbours.
+Two things starve the house while its rooms are on target.
 
-So while the house is calling for heat and too little capacity is open, the rooms that are
-at, or only a little over, their target are *lifted*: their written zone target is raised
-to just above the room's own temperature, which half-opens the valve. A lift is never more
-than ``max_k`` above the room's target, a room well over target is left alone, and a room
-that is short is left to its overdrive.
+*Too few radiators open.* With only a couple of valves open the boiler reaches its flow
+target in under a minute and stops (a burn starting with under 4 kW of radiator capacity
+open lasted a median 0.8 minutes in Nov 2026; with 8 kW or more open, 4.5 minutes). Half
+the house's radiators stay shut because their rooms sit a few tenths over target, and
+overdrive shuts them further by taking heat off any room that is over.
+
+*Too little boiler time.* Evohome calls the boiler according to the single most-open valve
+(40-59 % open: called 18 % of the time; 60-79 %: 37 %; 80-99 %: 67 %). Rooms on target sit
+near 50 %, so the call collapses to a few one-minute burns an hour, the radiators go cold
+and the rooms sag until one is cold enough to be pushed hard.
+
+So while spreading is engaged every room that is at, or a little over, its target is told
+its target plus a common *level* instead of its overdrive. At level 0 that only stops heat
+being taken off rooms that are slightly warm, so their valves stay part open. The level
+then rises a step at a time while Evohome's call is below the *floor* (the boiler time the
+weather needs) and falls again when the call is comfortably above it or the house is
+running warm. Every valve opens a little together, so the heat is shared and no one room
+is driven hard. A room more than ``max_k`` over target, a short room (overdrive has it)
+and a pre-heating room are left alone.
 
 ``shadow`` works everything out and reports it without changing a target.
 """
@@ -21,10 +31,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 MODES = ("off", "shadow", "active")
-# Told this much above the room's own temperature, a valve sits roughly half open.
-MARGIN_K = 0.2
-# A room this far past the most a lift may add is too warm to take part.
-OVER_K = 0.3
 # A room this far below target is short: overdrive has it.
 SHORT_K = 0.1
 # Open capacity (as a multiple of the engage level) at which spreading lets go again.
@@ -33,6 +39,23 @@ RELEASE_RATIO = 1.5
 HOLD_SECONDS = 20 * 60
 # The boiler relay demand (0-1) that counts as the house calling for heat.
 CALLING_DEMAND = 0.1
+# The level moves one step at most this often: Evohome re-works its call every 10 minutes.
+LEVEL_STEP_K = 0.1
+LEVEL_PERIOD_S = 10 * 60
+# The call must be this far (percentage points) under the floor to raise the level, and
+# this far over it to lower it.
+FLOOR_UNDER = 5.0
+FLOOR_OVER = 15.0
+# Error of the rooms taking part, weighted by radiator size: above the first the level
+# stops rising and spreading does not start; above the second the level falls; above the
+# third it lets go.
+WARM_HOLD_K = 0.2
+WARM_EASE_K = 0.3
+WARM_RELEASE_K = 0.4
+# The floor is given for 5 C outside and scales with how far below this it is, up to a cap.
+FLOOR_BASE_C = 15.5
+FLOOR_REFERENCE_C = 5.0
+FLOOR_MAX = 60.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +73,20 @@ class SpreadRoom:
 class SpreadState:
     engaged: bool = False
     changed_at: datetime | None = None
+    level: float = 0.0
+    level_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class SpreadInputs:
+    """What the house looks like this cycle."""
+
+    calling: bool
+    relay_demand: float | None  # Evohome's boiler call, 0-100
+    outdoor: float | None
+    capacity_kw: float  # engage below this much open capacity
+    max_k: float  # the level's ceiling, and how far over target a room may be to take part
+    floor_at_5c: float  # boiler-time floor at 5 C outside, 0-100; 0 turns the floor off
 
 
 def open_capacity(rooms) -> float:
@@ -57,41 +94,66 @@ def open_capacity(rooms) -> float:
     return round(sum((r.valve or 0.0) * r.rated_kw for r in rooms), 2)
 
 
-def room_lift(room: SpreadRoom, max_k: float) -> float:
-    """K to add to this room's zone target while spreading, or 0."""
+def boiler_floor(floor_at_5c, outdoor) -> float:
+    """The boiler call (0-100) the weather needs: ``floor_at_5c`` at 5 C, nothing at 15.5 C."""
+    if not floor_at_5c or floor_at_5c <= 0:
+        return 0.0
+    if outdoor is None:
+        return float(floor_at_5c)
+    scale = (FLOOR_BASE_C - outdoor) / (FLOOR_BASE_C - FLOOR_REFERENCE_C)
+    return round(min(FLOOR_MAX, max(0.0, floor_at_5c * scale)), 1)
+
+
+def taking_part(room: SpreadRoom, max_k: float) -> bool:
+    """Whether this room is lifted while spreading is engaged."""
     if not room.eligible or room.error is None or room.rated_kw <= 0:
-        return 0.0
-    if room.error < -SHORT_K or room.error > max_k + OVER_K:
-        return 0.0
-    return round(min(max_k, max(0.0, room.error + MARGIN_K)), 1)
+        return False
+    return -SHORT_K - 1e-9 <= room.error <= max_k + 1e-9
 
 
-def spread_step(state: SpreadState, rooms, calling: bool, now: datetime, capacity_kw, max_k):
-    """``(next state, {room_id: lift K}, open capacity kW)``.
-
-    Engages when the house is calling and less than ``capacity_kw`` is open; lets go when
-    the call ends or ``RELEASE_RATIO`` times that much is open. Either way it then stays
-    put for ``HOLD_SECONDS``, except that the end of the call releases at once.
-    """
+def spread_step(state: SpreadState, rooms, inputs: SpreadInputs, now: datetime):
+    """``(next state, {room_id: lift K}, info)``; a lift of 0.0 still replaces a take-off."""
     capacity = open_capacity(rooms)
+    floor = boiler_floor(inputs.floor_at_5c, inputs.outdoor)
+    relay = inputs.relay_demand
+    members = [r for r in rooms if taking_part(r, inputs.max_k)]
+    # How warm the house is running: the members' errors weighted by radiator size, so
+    # the big rooms count for most and a small warm room does not veto the rest.
+    weight = sum(r.rated_kw for r in members)
+    warmth = sum(r.error * r.rated_kw for r in members) / weight if members else None
+    below_floor = floor > 0 and relay is not None and relay < floor - FLOOR_UNDER
+    under_floor = floor > 0 and relay is not None and relay < floor + FLOOR_OVER
+    need = (inputs.calling and capacity < inputs.capacity_kw) or below_floor
+    keep = (inputs.calling and capacity < inputs.capacity_kw * RELEASE_RATIO) or under_floor
     held = state.changed_at is not None and (now - state.changed_at).total_seconds() < HOLD_SECONDS
     engaged = state.engaged
-    if not calling:
-        engaged = False
+    if not members:
+        engaged = False  # nobody to lift: outside comfort hours, or everyone short or hot
     elif not held:
-        if not engaged and capacity < capacity_kw:
-            engaged = True
-        elif engaged and capacity >= capacity_kw * RELEASE_RATIO:
-            engaged = False
-    if engaged != state.engaged:
-        state = SpreadState(engaged, now)
-    lifts = {}
-    if engaged:
-        for room in rooms:
-            lift = room_lift(room, max_k)
-            if lift > 0:
-                lifts[room.room_id] = lift
-    return state, lifts, capacity
+        if not engaged:
+            engaged = need and warmth <= WARM_HOLD_K
+        else:
+            engaged = keep and warmth <= WARM_RELEASE_K
+    level, level_at = state.level, state.level_at
+    if not engaged:
+        level, level_at = 0.0, None
+    elif level_at is None:
+        level_at = now  # just engaged: start at level 0, the first step after one period
+    elif (now - level_at).total_seconds() >= LEVEL_PERIOD_S:
+        if warmth > WARM_EASE_K or (relay is not None and relay > floor + FLOOR_OVER):
+            level, level_at = max(0.0, round(level - LEVEL_STEP_K, 1)), now
+        elif below_floor and warmth <= WARM_HOLD_K:
+            level, level_at = min(inputs.max_k, round(level + LEVEL_STEP_K, 1)), now
+    changed_at = now if engaged != state.engaged else state.changed_at
+    state = SpreadState(engaged, changed_at, level, level_at)
+    lifts = {r.room_id: level for r in members} if engaged else {}
+    info = {
+        "open_capacity_kw": capacity,
+        "boiler_floor": floor,
+        "boiler_call": relay,
+        "house_warmth_k": None if warmth is None else round(warmth, 2),
+    }
+    return state, lifts, info
 
 
 class Spread:
@@ -101,30 +163,32 @@ class Spread:
         self.state = SpreadState()
         self.mode = "off"
         self.lifts: dict = {}
-        self.capacity_kw: float | None = None
+        self.info: dict = {}
         self.calling = False
         self._stepped_at: datetime | None = None
 
     def due(self, now: datetime, seconds=30) -> bool:
         return self._stepped_at is None or abs((now - self._stepped_at).total_seconds()) >= seconds
 
-    def step(self, now: datetime, mode, rooms, calling, capacity_kw, max_k) -> bool:
-        """Advance to ``now``; True when spreading has just engaged or let go."""
+    def step(self, now: datetime, mode, rooms, inputs: SpreadInputs) -> bool:
+        """Advance to ``now``; True when spreading engaged, let go or changed its level."""
         self._stepped_at = now
         self.mode = mode
+        before = (self.state.engaged, self.state.level)
         if mode not in ("shadow", "active"):
-            changed = self.state.engaged
-            self.state, self.lifts, self.capacity_kw, self.calling = SpreadState(), {}, None, False
-            return changed
-        before = self.state.engaged
-        self.calling = bool(calling)
-        self.state, self.lifts, self.capacity_kw = spread_step(
-            self.state, rooms, self.calling, now, capacity_kw, max_k
-        )
-        return self.state.engaged != before
+            self.state, self.lifts, self.info, self.calling = SpreadState(), {}, {}, False
+        else:
+            self.calling = bool(inputs.calling)
+            self.state, self.lifts, self.info = spread_step(self.state, rooms, inputs, now)
+        return (self.state.engaged, self.state.level) != before
 
-    def lift(self, room_id) -> float:
-        return self.lifts.get(room_id, 0.0)
+    @property
+    def engaged_active(self) -> bool:
+        return self.mode == "active" and self.state.engaged
+
+    def lift(self, room_id):
+        """This room's lift in K, or None when it is not being lifted."""
+        return self.lifts.get(room_id)
 
     def report(self, names=None) -> dict:
         names = names or {}
@@ -132,7 +196,8 @@ class Spread:
             "mode": self.mode,
             "engaged": self.state.engaged,
             "since": self.state.changed_at.isoformat() if self.state.changed_at else None,
+            "level_k": self.state.level,
             "calling": self.calling,
-            "open_capacity_kw": self.capacity_kw,
-            "lifts": {names.get(k, k): v for k, v in self.lifts.items()},
+            **self.info,
+            "rooms": [names.get(k, k) for k in self.lifts],
         }

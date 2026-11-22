@@ -23,7 +23,7 @@ from .boiler.warmup_policy import warmup_config
 from .comfort.const import CONF_RUN_INTERVAL
 from .comfort.coordinator import OTCoordinator
 from .comfort.hub import OTHubData
-from .spread import CALLING_DEMAND, Spread, SpreadRoom
+from .spread import CALLING_DEMAND, Spread, SpreadInputs, SpreadRoom
 from .store import ControlStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -166,6 +166,7 @@ class Controls:
             ),
             preheat_config=lambda: preheat_config(self.heating.config),
             preheat_rooms=self.preheat_rooms,
+            flow_floor=self.spread_flow_floor,
         )
         # Do not act while configuration and all entities are still restoring.
         self.boiler.override = "shadow"
@@ -236,30 +237,34 @@ class Controls:
         return rooms
 
     def spread_lift(self, room_id, now):
-        """``(lift K, mode)`` for one room from the house's heat spreading."""
+        """``(lift K or None, mode)`` for one room from the house's heat spreading."""
         spread = self.spread
         if spread.due(now):
             cfg = warmup_config(self.heating.config)
             mode = cfg["spread_mode"]
             bd = self.boiler.data if self.boiler else None
-            demand = None
-            if bd is not None:
-                demand = bd.aggregate_heat_demand
-                demand = bd.heat_demand if demand is None else demand
-            calling = bool(
-                bd is not None
-                and bd.mode == "heating"
-                and not bd.dhw_active
-                and demand is not None
-                and demand >= CALLING_DEMAND * 100
+            relay = bd.aggregate_heat_demand if bd is not None else None
+            heating = bd is not None and bd.mode == "heating" and not bd.dhw_active
+            inputs = SpreadInputs(
+                calling=bool(heating and relay is not None and relay >= CALLING_DEMAND * 100),
+                # No floor while the boiler is busy with hot water or not heating at all.
+                relay_demand=relay if heating else None,
+                outdoor=bd.outdoor_temp if bd is not None else None,
+                capacity_kw=cfg["spread_capacity_kw"],
+                max_k=cfg["spread_max_k"],
+                floor_at_5c=cfg["spread_floor_pct"],
             )
             rooms = self._spread_rooms(set(cfg["spread_exclude"])) if mode != "off" else []
-            changed = spread.step(
-                now, mode, rooms, calling, cfg["spread_capacity_kw"], cfg["spread_max_k"]
-            )
-            if changed:
+            if spread.step(now, mode, rooms, inputs):
                 self._spread_journal()
         return spread.lift(room_id), spread.mode
+
+    def spread_flow_floor(self):
+        """The flow target to keep while spreading is engaged and acting, or None."""
+        if not self.spread.engaged_active:
+            return None
+        flow = warmup_config(self.heating.config)["spread_flow_c"]
+        return flow if flow and flow > 0 else None
 
     def _spread_journal(self):
         journal = getattr(self.heating, "journal", None)
@@ -270,10 +275,8 @@ class Controls:
             "warmup_boost",
             scope="system",
             data={
-                "event": "spread_engaged" if report["engaged"] else "spread_released",
-                "mode": report["mode"],
-                "open_capacity_kw": report["open_capacity_kw"],
-                "lifts": report["lifts"],
+                "event": "spread" if report["engaged"] else "spread_released",
+                **{k: v for k, v in report.items() if k not in ("since",)},
                 "outcome": report["mode"],
             },
         )

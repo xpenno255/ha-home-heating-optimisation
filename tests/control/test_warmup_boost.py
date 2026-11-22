@@ -181,6 +181,8 @@ def test_config_defaults_and_validation():
         "spread_capacity_kw": 8.0,
         "spread_max_k": 0.5,
         "spread_exclude": [],
+        "spread_floor_pct": 35.0,
+        "spread_flow_c": 60.0,
     }
     assert warmup_config({"warmup_boost": {"mode": "bogus", "start": 9}})["mode"] == "off"
     assert validation_error(cfg) is None
