@@ -21,6 +21,12 @@ DEFAULTS = {
     "room_check_minutes": 1,
     # Smallest change in a room's zone target worth sending to Evohome (K).
     "room_write_step": 0.3,
+    # Heat spreading (see control.spread): engage below this much open radiator capacity,
+    # lift a room at most this far above its target, leave these rooms out.
+    "spread_mode": "off",
+    "spread_capacity_kw": 8.0,
+    "spread_max_k": 0.5,
+    "spread_exclude": [],
 }
 LIMITS = {"start": (0.05, 0.6), "full": (0.06, 1.0), "decay_k_per_min": (0.2, 5.0)}
 OVERDRIVE_LIMITS = (0.2, 2.0)
@@ -29,6 +35,8 @@ OVERDRIVE_SETTINGS = {
     "overdrive_period_min": (1, 30),
     "room_check_minutes": (1, 10),
     "room_write_step": (0.1, 0.5),
+    "spread_capacity_kw": (3.0, 20.0),
+    "spread_max_k": (0.1, 1.0),
 }
 INTEGERS = ("overdrive_period_min", "room_check_minutes")
 
@@ -37,9 +45,15 @@ def warmup_config(config):
     raw = config.get(SECTION) if isinstance(config, dict) else None
     raw = raw if isinstance(raw, dict) else {}
     out = {**DEFAULTS, **{k: raw[k] for k in DEFAULTS if k in raw}}
-    for key in ("mode", "catchup_mode"):
+    for key in ("mode", "catchup_mode", "spread_mode"):
         if out[key] not in MODES:
             out[key] = DEFAULTS[key]
+    exclude = out["spread_exclude"]
+    out["spread_exclude"] = (
+        [str(r) for r in exclude if isinstance(r, str)]
+        if isinstance(exclude, (list, tuple))
+        else []
+    )
     for key, (low, high) in LIMITS.items():
         try:
             value = float(out[key])
@@ -60,6 +74,7 @@ def warmup_config(config):
             value = DEFAULTS[key]
         out[key] = int(round(value)) if key in INTEGERS else value
     out["room_write_step"] = round(out["room_write_step"], 1)
+    out["spread_max_k"] = round(out["spread_max_k"], 1)
     return out
 
 
@@ -74,6 +89,11 @@ def _overdrive(value):
 
 def validation_error(values):
     if values.get("mode") not in MODES or values.get("catchup_mode", "off") not in MODES:
+        return "warmup_boost_invalid"
+    if values.get("spread_mode", "off") not in MODES:
+        return "warmup_boost_invalid"
+    exclude = values.get("spread_exclude", [])
+    if not isinstance(exclude, (list, tuple)) or any(not isinstance(r, str) for r in exclude):
         return "warmup_boost_invalid"
     for key, (low, high) in LIMITS.items():
         value = values.get(key)

@@ -29,6 +29,7 @@ from .core import (
     add_globe,
     add_meter_gas,
     add_sample,
+    add_spread,
     add_write,
     burner_summary,
     day_part,
@@ -197,6 +198,9 @@ class Scorecard:
         away = getattr(controls, "away", None)
         if away is not None:
             add_away(day, minutes, away.setback_k)
+        spread = getattr(controls, "spread", None)
+        if spread is not None:
+            add_spread(day, minutes, spread.state.engaged, len(spread.lifts))
         return rolled
 
     def _arrival(self, day, now, room_id, name, d):

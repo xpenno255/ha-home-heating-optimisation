@@ -23,6 +23,7 @@ from .boiler.warmup_policy import warmup_config
 from .comfort.const import CONF_RUN_INTERVAL
 from .comfort.coordinator import OTCoordinator
 from .comfort.hub import OTHubData
+from .spread import CALLING_DEMAND, Spread, SpreadRoom
 from .store import ControlStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ class Controls:
         self.rooms = {}
         self.boiler = None
         self.away = None
+        self.spread = Spread()
         self.closed = False
         self.ready = False
         self.lock = asyncio.Lock()
@@ -183,6 +185,7 @@ class Controls:
                 preheat_push_hint=lambda rid=room_id: self.preheat_push(rid),
                 overdrive_settings=lambda: warmup_config(self.heating.config),
                 away_setback=self.away_setback,
+                spread_hint=lambda now, rid=room_id: self.spread_lift(rid, now),
             )
             c.mode = "shadow"
             c.journal_room_id = room_id
@@ -208,6 +211,75 @@ class Controls:
         if away is None:
             return 0.0, "off"
         return away.step(now), away.status
+
+    def _spread_rooms(self, exclude):
+        rooms = []
+        for room_id, c in self.rooms.items():
+            d = c.data
+            state = self.hass.states.get(c._config.get("primary_climate") or "")
+            valve = state.attributes.get("heat_demand") if state is not None else None
+            valve = float(valve) if isinstance(valve, (int, float)) and 0 <= valve <= 1 else None
+            rated = (d.installed_output_dt50_w or 0.0) / 1000 if d else 0.0
+            error = None
+            if d and None not in (d.air_temp, d.air_setpoint):
+                error = d.air_temp - d.air_setpoint
+            eligible = bool(
+                d
+                and c.enabled
+                and c.mode == "active"
+                and room_id not in exclude
+                and d.time_window_active
+                and d.state == "active"
+                and not d.preheating
+            )
+            rooms.append(SpreadRoom(room_id, error, valve, rated, eligible))
+        return rooms
+
+    def spread_lift(self, room_id, now):
+        """``(lift K, mode)`` for one room from the house's heat spreading."""
+        spread = self.spread
+        if spread.due(now):
+            cfg = warmup_config(self.heating.config)
+            mode = cfg["spread_mode"]
+            bd = self.boiler.data if self.boiler else None
+            demand = None
+            if bd is not None:
+                demand = bd.aggregate_heat_demand
+                demand = bd.heat_demand if demand is None else demand
+            calling = bool(
+                bd is not None
+                and bd.mode == "heating"
+                and not bd.dhw_active
+                and demand is not None
+                and demand >= CALLING_DEMAND * 100
+            )
+            rooms = self._spread_rooms(set(cfg["spread_exclude"])) if mode != "off" else []
+            changed = spread.step(
+                now, mode, rooms, calling, cfg["spread_capacity_kw"], cfg["spread_max_k"]
+            )
+            if changed:
+                self._spread_journal()
+        return spread.lift(room_id), spread.mode
+
+    def _spread_journal(self):
+        journal = getattr(self.heating, "journal", None)
+        if journal is None:
+            return
+        report = self.spread_report()
+        journal.record(
+            "warmup_boost",
+            scope="system",
+            data={
+                "event": "spread_engaged" if report["engaged"] else "spread_released",
+                "mode": report["mode"],
+                "open_capacity_kw": report["open_capacity_kw"],
+                "lifts": report["lifts"],
+                "outcome": report["mode"],
+            },
+        )
+
+    def spread_report(self):
+        return self.spread.report({rid: c.room_name for rid, c in self.rooms.items()})
 
     def conflicts(self):
         # A loaded legacy controller is a potential writer even if currently shadow.
@@ -514,6 +586,7 @@ class Controls:
             "optimum": self.optimum_report(),
             "warmup_boost": self.warmup_boost_report(),
             "away": self.away.report() if self.away else None,
+            "spread": self.spread_report(),
         }
 
     def dhw_report(self):

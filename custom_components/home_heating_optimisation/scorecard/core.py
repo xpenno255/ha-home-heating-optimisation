@@ -165,6 +165,14 @@ def add_write(day: dict, room_id: str, name=None) -> None:
     _room(day, room_id, name)["writes"] += 1
 
 
+def add_spread(day: dict, minutes: float, engaged, lifted_rooms) -> None:
+    """Count ``minutes`` with heat spreading engaged, and the rooms it lifted (or would)."""
+    if not engaged or minutes <= 0:
+        return
+    day["spread_minutes"] = day.get("spread_minutes", 0.0) + minutes
+    day["spread_room_minutes"] = day.get("spread_room_minutes", 0.0) + minutes * lifted_rooms
+
+
 def add_away(day: dict, minutes: float, setback_k) -> None:
     """Count ``minutes`` with the away setback lowering targets by ``setback_k``."""
     setback_k = _num(setback_k)
@@ -377,6 +385,12 @@ def finalise(day: dict, burner: dict | None = None) -> dict:
         "short_degree_hours": round(total["short_dm"] / 60, 2),
         "over_degree_hours": round(total["over_dm"] / 60, 2),
         "writes": writes,
+        # Hours heat spreading was engaged (in shadow: would have been) and the average
+        # number of rooms lifted while it was.
+        "spread_hours": round(day.get("spread_minutes", 0.0) / 60, 1),
+        "spread_rooms": _ratio(
+            day.get("spread_room_minutes", 0.0), day.get("spread_minutes", 0.0), 1
+        ),
         # Hours the away setback was lowering targets, and how much on average while it was.
         "away_hours": round(day.get("away_minutes", 0.0) / 60, 1),
         "away_setback_k": _ratio(day.get("away_k_minutes", 0.0), day.get("away_minutes", 0.0), 2),

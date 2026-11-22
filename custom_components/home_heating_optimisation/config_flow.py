@@ -1039,6 +1039,30 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             schema[vol.Required(key, default=old[key])] = vol.All(
                 vol.Coerce(float), vol.Range(min=low, max=high)
             )
+        rooms = {
+            room_id: (spec.get("config") or {}).get("name") or room_id
+            for room_id, spec in ((self.current.get("control") or {}).get("rooms") or {}).items()
+        }
+        schema[vol.Required("spread_mode", default=old["spread_mode"])] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=["off", "shadow", "active"],
+                translation_key="warmup_boost_mode",
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+        for key in ("spread_capacity_kw", "spread_max_k"):
+            schema[vol.Required(key, default=old[key])] = vol.All(
+                vol.Coerce(float), vol.Range(*OVERDRIVE_SETTINGS[key])
+            )
+        schema[
+            vol.Optional("spread_exclude", default=[r for r in old["spread_exclude"] if r in rooms])
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[{"value": k, "label": v} for k, v in rooms.items()],
+                multiple=True,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
         return self.async_show_form(
             step_id="warmup_boost", errors=errors, data_schema=vol.Schema(schema)
         )
