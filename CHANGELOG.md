@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.29.1 - the overdrive hold no longer adds to a push
+
+- The hold is now a floor, not an addition: at or a little below target a room gets the larger of its push and its hold, never their sum, and above target the hold fades to nothing at 0.2 K over. It is at most 0.3 K (was 0.5), builds only while the room is within 0.25 K below its target (was 0.5 K either side) and three times as slowly (a 0.3 K push for an hour adds 0.1 K); any time over target shrinks it.
+- The hold is kept while a room is outside its operating window (overnight) instead of being dropped; it takes hours to learn and describes the room, not the hour.
+- Why: on 21 Nov, the first evening of 0.28.0, the Living room's pushes came out about twice as large for the same shortfall (+0.6 K at 0.2 K short, where it had been +0.3), because the hold built up during ordinary recoveries and was then added on top. The room peaked 0.8 K over target (0.1-0.5 on the eight evenings before) and its evening range was 1.2 K (0.4-0.9 before). The hold reached its 0.5 K ceiling in six rooms within a day.
+
 ## 0.29.0 - away setback
 
 - New options section **Away setback** (off until enabled). While every chosen person is away from home, each room's target comes down: nothing for the first 30 minutes, then 0.5 K, then 1.0 K once the house has been empty for 2 hours. It ends the moment anyone is home. A person whose location is unknown or unavailable counts as at home.
