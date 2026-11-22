@@ -1158,12 +1158,14 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         except Exception:  # noqa: BLE001 - settings must never break the room cycle
             _LOGGER.debug("OT %s: overdrive settings failed", self.room_name, exc_info=True)
             limit = None
-        usable = limit and d.time_window_active and None not in (d.air_temp, d.air_setpoint)
-        if not usable:
+        if not limit:
             self._overdrive = OverdriveState()
             return 0.0
-        if preheating:
-            # The pre-heat push takes over; the hold waits for the room to be back.
+        usable = d.time_window_active and None not in (d.air_temp, d.air_setpoint)
+        if not usable or preheating:
+            # Outside the room's window, without readings, or while the pre-heat push has
+            # taken over: no overdrive, but the hold is kept for when the room is back. It
+            # describes the room, not the hour, and takes hours to learn.
             self._overdrive = OverdriveState(hold=self._overdrive.hold)
             return 0.0
         state = self._overdrive
@@ -1172,7 +1174,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         seconds = (now - state.hold_at).total_seconds() if state.hold_at else None
         hold = hold_step(state.hold, short, push, seconds, limit)
         state = replace(state, hold=hold, hold_at=now)
-        self._overdrive = overdrive_step(state, with_hold(push, hold, limit), now, period_s)
+        self._overdrive = overdrive_step(state, with_hold(push, hold, limit, short), now, period_s)
         return self._overdrive.value
 
     def _preheat_now(self, now, zone, goal):

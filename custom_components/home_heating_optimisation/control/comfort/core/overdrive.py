@@ -7,9 +7,14 @@ off when it is over), so the valve opens or closes harder.
 
 A push that only follows the shortfall is gone the moment the room is on target; the valve
 then closes part-way, the room sags over an hour or two and the push comes back hard. So a
-small part of it is remembered as a *hold*: it builds slowly while the room keeps needing a
-push near its target, shrinks while the room sits over it, and stays on when the room is
-on target. The room then settles with a small steady push instead of swinging.
+small *hold* is remembered and used as a floor: on target, and while a little short, the
+room keeps at least the hold. It never adds to a push, and it fades out over the first
+``HOLD_FADE_K`` above target. It is learnt slowly and only while the room is close to its
+target: it grows while the room keeps needing a push there and shrinks while it sits over.
+
+(0.28.0 added the hold to the push instead. On its first evening the Living room's pushes
+came out about twice as large for the same shortfall, the hold reached its 0.5 K ceiling
+in six rooms within a day, and the room peaked 0.8 K over target against 0.1-0.5 before.)
 """
 
 from __future__ import annotations
@@ -23,12 +28,14 @@ SCALE = ((0.0, 0.0), (0.1, 0.1), (0.2, 0.3), (0.3, 0.5), (0.5, 0.8), (0.6, 1.0))
 COOL_MAX_K = 0.5
 # Closer than this to the target counts as on target.
 DEADBAND_K = 0.05
-# The hold: at most this much, learnt only while the room is this close to its target (a
-# room far below is recovering, not holding), with this time constant: a push of 0.3 K
-# kept up for an hour adds 0.2 K of hold.
-HOLD_MAX_K = 0.5
-HOLD_BAND_K = 0.5
-HOLD_TAU_S = 90 * 60
+# The hold: at most this much, built only while the room is no further than this below its
+# target (a room further down is recovering, not holding), with this time constant: a
+# push of 0.3 K kept up for an hour adds 0.1 K of hold.
+HOLD_MAX_K = 0.3
+HOLD_BAND_K = 0.25
+HOLD_TAU_S = 180 * 60
+# Over target the hold fades out, to nothing at this much over.
+HOLD_FADE_K = 0.2
 # Longest gap between two cycles that still counts towards the hold.
 HOLD_MAX_GAP_S = 10 * 60
 
@@ -57,22 +64,31 @@ def hold_step(hold, short, push, seconds, limit) -> float:
     """The hold after ``seconds`` more of ``push`` (K, the part that follows the shortfall).
 
     Grows with a positive push and shrinks with a negative one, between nothing and
-    ``HOLD_MAX_K`` (or ``limit`` when that is lower). Unchanged while the room is more than
-    ``HOLD_BAND_K`` from its target, after a gap longer than ``HOLD_MAX_GAP_S`` or without
+    ``HOLD_MAX_K`` (or ``limit`` when that is lower). It does not grow while the room is
+    more than ``HOLD_BAND_K`` below its target (recovering, not holding); any time over
+    target shrinks it. Unchanged after a gap longer than ``HOLD_MAX_GAP_S`` or without
     readings.
     """
     if not limit or short is None or seconds is None:
         return hold
-    if abs(short) > HOLD_BAND_K or not 0 < seconds <= HOLD_MAX_GAP_S:
+    if short > HOLD_BAND_K or not 0 < seconds <= HOLD_MAX_GAP_S:
         return hold
     return min(max(hold + push * seconds / HOLD_TAU_S, 0.0), HOLD_MAX_K, float(limit))
 
 
-def with_hold(push, hold, limit) -> float:
-    """The overdrive to apply: the push plus the hold, inside the usual limits."""
-    if not limit:
+def with_hold(push, hold, limit, short) -> float:
+    """The overdrive to apply: the push, with the hold as a floor near the target.
+
+    At or below target the room gets the larger of the two, never their sum. Above target
+    the hold fades to nothing at ``HOLD_FADE_K`` over, so the easing-off is gradual.
+    """
+    if not limit or short is None:
         return 0.0
-    return round(min(float(limit), max(-COOL_MAX_K, push + hold)), 1)
+    if short >= 0:
+        value = max(push, hold)
+    else:
+        value = push + hold * max(0.0, 1 + short / HOLD_FADE_K)
+    return round(min(float(limit), max(-COOL_MAX_K, value)), 1)
 
 
 @dataclass(frozen=True)
