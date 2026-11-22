@@ -159,6 +159,11 @@ OVERDRIVE_RESTORE_MAX_K = 3.0
 # How long a missing room sensor freezes the overdrive before the thermostat's own
 # reading is accepted in its place.
 AIR_FALLBACK_HOLD = timedelta(minutes=30)
+# After a start a room sensor may come back with an old cached reading (see _unheard_air).
+# Until it is heard from again it is checked against the thermostat's own reading; it is
+# taken on trust after this long, or at once when the two agree this closely.
+AIR_UNHEARD_MAX = timedelta(minutes=25)
+AIR_UNHEARD_TOLERANCE_K = 0.3
 # After a restart RAMSES can re-emit a cached zone target with a fresh
 # last_reported stamp.  A post-settling value that contradicts persisted
 # ownership must be reported again at least this much later before policy may
@@ -346,6 +351,10 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._spread_hint = spread_hint or (lambda _now: (None, "off"))
         self._overdrive = self._restored_overdrive(store)
         self._air_fallback_since: datetime | None = None
+        # The room sensor's report stamp and value when first seen after this start, and
+        # when that was; _air_heard once it has reported again.
+        self._air_first: tuple | None = None
+        self._air_heard = False
         self.write_status = "not_attempted"
         # Command/readback state is intentionally not persisted.  Policy memory
         # remains persistent exactly as before, but it is not an acknowledgement
@@ -817,6 +826,50 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._store.set("sensor_gap", gap)
         self._store.set("sensor_gap_at", now.isoformat())
         return round(gap, 2)
+
+    def _unheard_air(self, d: OTCoordinatorData, now: datetime, fallbacks: list[str]) -> bool:
+        """Replace a room-sensor reading that predates this start and looks stale.
+
+        After a restart the radio integration can bring a thermostat's sensor back with a
+        cached reading tens of minutes old, and it stays there until the thermostat next
+        transmits (about 19 minutes for the wall thermostats), while the zone's own
+        temperature is right again within a minute. On 22 Nov 2026 the Living room came
+        back as 20.1 when it was 21.1 and was pushed a full degree for five minutes.
+
+        So until the sensor has been heard from again, its reading is checked against the
+        zone temperature plus the usual gap between the two. If they disagree, that
+        estimate is used instead and the source says so (which also freezes the overdrive,
+        as for any fallback reading). Only for a room whose usual gap is known. True when
+        the reading was replaced.
+        """
+        if self._air_heard or d.air_temp is None or d.air_temp_source.startswith("climate."):
+            return False
+        state = self._state(d.air_temp_source)
+        if state is None:
+            return False
+        stamp = getattr(state, "last_reported", None) or state.last_updated
+        if self._air_first is None:
+            self._air_first = (d.air_temp_source, stamp, state.state, now)
+        source, first_stamp, first_value, first_seen = self._air_first
+        if source != d.air_temp_source or stamp != first_stamp or state.state != first_value:
+            self._air_heard = True  # a new report, or a different sensor altogether
+            return False
+        if now - first_seen >= AIR_UNHEARD_MAX:
+            self._air_heard = True
+            return False
+        gap = self._store.get("sensor_gap")
+        if gap is None or d.zone_temp is None:
+            return False
+        estimate = round(d.zone_temp + float(gap), 1)
+        if abs(d.air_temp - estimate) <= AIR_UNHEARD_TOLERANCE_K:
+            return False
+        fallbacks.append(
+            f"room sensor not heard from since the start (reads {d.air_temp:.1f}); "
+            f"using {estimate:.1f} from the thermostat"
+        )
+        d.air_temp = estimate
+        d.air_temp_source = f"{source} (not heard from since the start)"
+        return True
 
     def _air_temperature(
         self, geometry: RoomGeometry | None, fallbacks: list[str]
@@ -1757,7 +1810,11 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.zone_temp = self._temperature_attr(
             self._config.get(CONF_PRIMARY_CLIMATE), "current_temperature"
         )
-        d.sensor_gap_k = self._sensor_gap(d, now)
+        if self._unheard_air(d, now, fallbacks):
+            # The stored gap stands: a made-up reading must not teach the filter anything.
+            d.sensor_gap_k = round(float(self._store.get("sensor_gap")), 2)
+        else:
+            d.sensor_gap_k = self._sensor_gap(d, now)
         d.sensor_match = self._sensor_match_enabled
         d.sensor_offset_k = zone_offset(d.sensor_gap_k) if d.sensor_match else 0.0
 

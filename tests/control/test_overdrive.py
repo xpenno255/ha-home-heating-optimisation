@@ -280,6 +280,65 @@ async def test_overdrive_is_frozen_while_the_room_sensor_is_missing(  # noqa: F8
     assert room.data.overdrive_k == 1.0 and room._air_fallback_since is None
 
 
+async def stale_room(hass, controlled):  # noqa: F811
+    """A room whose sensor came back from a restart reading a degree below the truth."""
+    from custom_components.home_heating_optimisation.control.migration import handover
+
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 21.0, "temperature": 20})
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    settings = {"catchup_overdrive_k": 1.0, "overdrive_strength": 1.0, "overdrive_period_min": 10}
+    room._overdrive_settings = lambda: settings
+    # The room knows its sensor and the thermostat normally agree.
+    room._store.set("sensor_gap", 0.0)
+    return c, room
+
+
+async def test_a_sensor_not_heard_from_since_the_start_is_checked_against_the_thermostat(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    c, room = await stale_room(hass, controlled)
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.air_temp == 21.0 and "not heard from" in room.data.air_temp_source
+    assert any("not heard from since the start" in f for f in room.data.fallbacks)
+    assert room.data.sensor_gap_k == 0.0 and room._store.get("sensor_gap") == 0.0
+    # No push on the strength of the old reading.
+    assert room.data.overdrive_k <= 0
+    # The sensor reports again: it is believed from then on, whatever it says.
+    hass.states.async_set("sensor.air", 20.2, {"unit_of_measurement": "°C"})
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.air_temp == 20.2 and room.data.air_temp_source == "sensor.air"
+    assert not any("not heard from" in f for f in room.data.fallbacks)
+
+
+async def test_an_unheard_sensor_that_agrees_or_stays_quiet_long_enough_is_accepted(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    from custom_components.home_heating_optimisation.control.comfort.coordinator import (
+        AIR_UNHEARD_MAX,
+    )
+
+    c, room = await stale_room(hass, controlled)
+    reading = float(hass.states.get("sensor.air").state)
+    # Agreeing with the thermostat (plus the usual gap) is enough.
+    room._store.set("sensor_gap", reading - 21.0)
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.air_temp == reading and room.data.air_temp_source == "sensor.air"
+    # Disagreeing, it is replaced, but only for so long.
+    room._store.set("sensor_gap", 0.0)
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.air_temp == 21.0
+    freezer.tick(AIR_UNHEARD_MAX)
+    await c.refresh()
+    assert room.data.air_temp == reading and room.data.air_temp_source == "sensor.air"
+
+
 async def test_overdrive_carries_over_a_restart_and_waits_for_start_up(  # noqa: F811
     hass, controlled, sources, freezer
 ):

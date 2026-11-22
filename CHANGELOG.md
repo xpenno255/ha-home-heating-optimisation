@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.31.1 - a stale room sensor after a restart is no longer believed
+
+- After a start, a room sensor that has not been heard from again is checked against the thermostat's own zone temperature plus the usual gap between the two. If they differ by more than 0.3 K, that estimate is used as the room's air temperature and the source says so (`... (not heard from since the start)`, with a line in `fallbacks`); the overdrive is frozen meanwhile, as for any fallback reading. The sensor is believed again as soon as it reports, or after 25 minutes. Only for rooms whose usual gap is known.
+- Why: after a Home Assistant restart the radio integration can bring a wall thermostat's sensor back with a cached reading tens of minutes old, and it stays there until the thermostat next transmits (about every 19 minutes), while the zone's own temperature is right within a minute. On 22 Nov the Living room came back as 20.1 C when it was 21.1 C, was pushed a full degree for five minutes, and peaked at 21.5 C.
+
 ## 0.31.0 - a boiler-time floor, and spreading lifts every room together
 
 - **Boiler-time floor** (`spread_floor_pct`, default 35, 0 = off): the share of time Evohome should be calling the boiler at 5 C outside while rooms are on target, scaled with the weather (nothing at 15.5 C, at most 60). Spreading now also engages when Evohome's call is more than 5 points under the floor.
