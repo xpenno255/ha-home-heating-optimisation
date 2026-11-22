@@ -415,7 +415,7 @@
       },
       "warmup_boost": {
         "title": "Warm-up flow boost",
-        "description": "While several rooms call for heat at once, raises the boiler flow target above the weather curve, up to the maximum flow, so each burn delivers more heat. The size of the boost follows how much of the house's radiator capacity is calling. Evohome still decides when the boiler fires. Shadow calculates and records the boost without changing the flow target; active applies it, and backs off as the return temperature nears its ceiling. Not applied while hot water is charging.",
+        "description": "While several rooms call for heat at once, raises the boiler flow target above the weather curve, up to the maximum flow, so each burn delivers more heat. The size of the boost follows how much of the house's radiator capacity is calling. Evohome still decides when the boiler fires. Shadow calculates and records the boost without changing the flow target; active applies it, and backs off as the return temperature nears its ceiling. Not applied while hot water is charging. Heat spreading: while the house is calling for heat with too few radiators open, rooms that are at or just over their target are lifted a little so their valves open and the boiler has somewhere to deliver; shadow only reports what it would do.",
         "data": {
           "mode": "Mode",
           "catchup_mode": "Catch-up for a room stuck below target",
@@ -426,7 +426,11 @@
           "room_write_step": "Smallest change sent to Evohome (K, 0.1-0.5)",
           "start": "Demand share where the boost starts (0-1)",
           "full": "Demand share for the full boost (0-1)",
-          "decay_k_per_min": "Slowest fall of the boost (K per minute)"
+          "decay_k_per_min": "Slowest fall of the boost (K per minute)",
+          "spread_mode": "Heat spreading",
+          "spread_capacity_kw": "Spread heat when less radiator capacity than this is open (kW)",
+          "spread_max_k": "Most a room may be lifted above its target to spread heat (\u00b0C)",
+          "spread_exclude": "Rooms left out of heat spreading"
         },
         "data_description": {
           "start": "For example 0.15 means 15% of the house's radiator capacity is calling.",

@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.30.0 - heat spreading (off by default; shadow mode to watch it first)
+
+- New **heat spreading** in the warm-up options (`spread_mode` off / shadow / active, `spread_capacity_kw` 8, `spread_max_k` 0.5, `spread_exclude`). While Evohome is calling the boiler and less than 8 kW of radiator capacity is open (each room's valve opening times its rated output), rooms that are at, or only a little over, their target are lifted: their zone target is set 0.2 K above the room's own temperature, at most 0.5 K above its target, so the valve half-opens. A lift replaces the overdrive when it is the larger and never adds to a push. A room more than 0.8 K over target, a room that is short, a pre-heating room and an excluded room are left alone.
+- It lets go when the call ends, or once 12 kW is open, and holds each state for 20 minutes because valves take minutes to move. `shadow` works everything out and reports it without changing any target.
+- Reporting: control report block `spread` (engaged, open capacity, the lift per room), room data `spread_k` / `spread_mode`, reason `spreading heat +0.4`, journal events `spread_engaged` / `spread_released`, and scorecard `spread_hours` / `spread_rooms`.
+- Why: of 725 heating burns on 12-21 Nov, those starting with under 4 kW open lasted a median 0.8 minutes (71 % under 2 minutes); with 8 kW or more open, 4.5 minutes (6 %). Half the house's radiator capacity is shut most of the day in rooms sitting 0.2-0.4 K over target, and overdrive was closing them further by taking heat off any room over target. On 22 Nov the Living room and Kitchen reached target together, the boiler ran six one-minute burns in an hour, and both rooms sagged 0.3-0.5 K.
+
 ## 0.29.1 - the overdrive hold no longer adds to a push
 
 - The hold is now a floor, not an addition: at or a little below target a room gets the larger of its push and its hold, never their sum, and above target the hold fades to nothing at 0.2 K over. It is at most 0.3 K (was 0.5), builds only while the room is within 0.25 K below its target (was 0.5 K either side) and three times as slowly (a 0.3 K push for an hour adds 0.1 K); any time over target shrinks it.

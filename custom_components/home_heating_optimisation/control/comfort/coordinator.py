@@ -188,6 +188,8 @@ READBACK_HINTS = {
 COMFORT_MODEL_VERSION = "steady_state_ot_v4"
 # The most an away setback may take off a room's target, whatever the settings say.
 AWAY_SETBACK_MAX_K = 2.0
+# The most heat spreading may lift a room's zone target, whatever the settings say.
+SPREAD_MAX_K = 1.0
 
 
 @dataclass
@@ -253,6 +255,10 @@ class OTCoordinatorData:
     overdrive_k: float = 0.0
     # The part of the overdrive that stays on when the room is on target.
     overdrive_hold_k: float = 0.0
+    # Heat spreading: the lift worked out for this room, and whether it was applied
+    # ("active") or only reported ("shadow").
+    spread_k: float = 0.0
+    spread_mode: str = "off"
     preheat_push_k: float = 0.0
     # Model
     mrt_steady_state: float | None = None
@@ -314,6 +320,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         preheat_push_hint=None,
         overdrive_settings=None,
         away_setback=None,
+        spread_hint=None,
     ) -> None:
         self._cycle_lock = asyncio.Lock()
         self._entry = entry
@@ -335,6 +342,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._overdrive_settings = overdrive_settings or (lambda: {})
         # (setback K, status) while nobody is at home; lowers the target, never raises it.
         self._away_setback = away_setback or (lambda _now: (0.0, "off"))
+        # (lift K, mode) from the house's heat spreading (see control.spread).
+        self._spread_hint = spread_hint or (lambda _now: (0.0, "off"))
         self._overdrive = self._restored_overdrive(store)
         self._air_fallback_since: datetime | None = None
         self.write_status = "not_attempted"
@@ -580,6 +589,18 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         if start <= end:
             return start <= cur < end
         return cur >= start or cur < end
+
+    def _spread_now(self, now, preheating) -> tuple[float, str]:
+        """This room's lift from heat spreading and its mode; nothing while it pre-heats."""
+        try:
+            k, mode = self._spread_hint(now)
+            k = float(k)
+        except Exception:  # noqa: BLE001 - spreading must never break the room cycle
+            _LOGGER.debug("OT %s: heat spreading failed", self.room_name, exc_info=True)
+            return 0.0, "off"
+        if preheating or not math.isfinite(k) or k <= 0:
+            return 0.0, mode
+        return round(min(k, SPREAD_MAX_K), 1), mode
 
     def _away_now(self, d, now) -> tuple[float, str]:
         """The away setback for this cycle: only inside the room's window, never negative."""
@@ -1816,9 +1837,13 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         )
         d.overdrive_hold_k = round(self._overdrive.hold, 2)
         d.preheat_push_k = self._preheat_push() if preheating else 0.0
+        d.spread_k, d.spread_mode = self._spread_now(now, preheating)
         computed = to_zone(d.air_setpoint, d.sensor_offset_k)
-        if computed is not None and d.overdrive_k:
-            computed = round(computed + d.overdrive_k, 2)
+        # A lift replaces the overdrive when it is the larger: it never adds to a push.
+        spreading = d.spread_mode == "active" and d.spread_k > max(0.0, d.overdrive_k)
+        zone_push = d.spread_k if spreading else d.overdrive_k
+        if computed is not None and zone_push:
+            computed = round(computed + zone_push, 2)
         preheat_zone = to_zone(preheat_goal, d.sensor_offset_k)
         if preheat_zone is not None and d.preheat_push_k:
             # The pre-heat push: a room behind its plan keeps its valve open.
@@ -1878,7 +1903,9 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             d.reason += f"; pre-heat (shadow) would command {preheat_goal:.1f}"
         if d.away_setback_k and decision.state in (State.ACTIVE, State.SHADOW, State.PREHEAT):
             d.reason += f"; away -{d.away_setback_k:.1f}"
-        if d.overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
+        if spreading and decision.state in (State.ACTIVE, State.SHADOW):
+            d.reason += f"; spreading heat {d.spread_k:+.1f}"
+        elif d.overdrive_k and decision.state in (State.ACTIVE, State.SHADOW):
             d.reason += f"; overdrive {d.overdrive_k:+.1f}"
             if d.overdrive_hold_k >= 0.05:
                 d.reason += f" (hold {d.overdrive_hold_k:+.1f})"
@@ -1899,6 +1926,8 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
                     "sensor_offset_k": d.sensor_offset_k,
                     "overdrive_k": d.overdrive_k,
                     "overdrive_hold_k": d.overdrive_hold_k,
+                    "spread_k": d.spread_k,
+                    "spread_mode": d.spread_mode,
                     "preheat_push_k": d.preheat_push_k,
                     "target_ot": d.target_ot,
                     "air_temp": d.air_temp,

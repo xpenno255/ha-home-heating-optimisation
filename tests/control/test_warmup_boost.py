@@ -177,6 +177,10 @@ def test_config_defaults_and_validation():
         "overdrive_period_min": 10,
         "room_check_minutes": 1,
         "room_write_step": 0.3,
+        "spread_mode": "off",
+        "spread_capacity_kw": 8.0,
+        "spread_max_k": 0.5,
+        "spread_exclude": [],
     }
     assert warmup_config({"warmup_boost": {"mode": "bogus", "start": 9}})["mode"] == "off"
     assert validation_error(cfg) is None
