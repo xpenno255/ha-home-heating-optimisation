@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.31.2 - the stale-sensor check is limited to the thermostats it was meant for
+
+- The check from 0.31.1 now applies only where a room's air sensor is the zone's own thermostat (their usual gap is 0.2 K or less). A room with a separate sensor is left alone: on the first restart with 0.31.1 the Hall and Spare Room sensors, which were right, were replaced by an estimate half a degree out, because their gap to the valve-head sensor moves by that much.
+- A reading counts as fresh only once its value has changed since the start (or after 25 minutes), not when its report time changes: the radio integration writes the same cached value more than once while it starts, and that ended the check early for the Living room. The tolerance is 0.2 K (was 0.3), so the Kitchen's 0.3 K error of 22 Nov would be caught as well.
+
 ## 0.31.1 - a stale room sensor after a restart is no longer believed
 
 - After a start, a room sensor that has not been heard from again is checked against the thermostat's own zone temperature plus the usual gap between the two. If they differ by more than 0.3 K, that estimate is used as the room's air temperature and the source says so (`... (not heard from since the start)`, with a line in `fallbacks`); the overdrive is frozen meanwhile, as for any fallback reading. The sensor is believed again as soon as it reports, or after 25 minutes. Only for rooms whose usual gap is known.

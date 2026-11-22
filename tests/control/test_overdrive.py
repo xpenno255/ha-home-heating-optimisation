@@ -296,26 +296,32 @@ async def stale_room(hass, controlled):  # noqa: F811
     return c, room
 
 
-async def test_a_sensor_not_heard_from_since_the_start_is_checked_against_the_thermostat(  # noqa: F811
+async def test_a_thermostat_reading_unchanged_since_the_start_is_checked_against_the_zone(  # noqa: F811
     hass, controlled, sources, freezer
 ):
     c, room = await stale_room(hass, controlled)
     freezer.tick(timedelta(minutes=1))
     await c.refresh()
-    assert room.data.air_temp == 21.0 and "not heard from" in room.data.air_temp_source
-    assert any("not heard from since the start" in f for f in room.data.fallbacks)
+    assert room.data.air_temp == 21.0 and "unchanged since" in room.data.air_temp_source
+    assert any("unchanged since the start" in f for f in room.data.fallbacks)
     assert room.data.sensor_gap_k == 0.0 and room._store.get("sensor_gap") == 0.0
     # No push on the strength of the old reading.
     assert room.data.overdrive_k <= 0
-    # The sensor reports again: it is believed from then on, whatever it says.
+    # The same value written again is not news: the integration does that as it starts.
+    old = hass.states.get("sensor.air")
+    hass.states.async_set("sensor.air", old.state, old.attributes, force_update=True)
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.air_temp == 21.0
+    # A new reading: it is believed from then on, whatever it says.
     hass.states.async_set("sensor.air", 20.2, {"unit_of_measurement": "°C"})
     freezer.tick(timedelta(minutes=1))
     await c.refresh()
     assert room.data.air_temp == 20.2 and room.data.air_temp_source == "sensor.air"
-    assert not any("not heard from" in f for f in room.data.fallbacks)
+    assert not any("unchanged since" in f for f in room.data.fallbacks)
 
 
-async def test_an_unheard_sensor_that_agrees_or_stays_quiet_long_enough_is_accepted(  # noqa: F811
+async def test_a_separate_sensor_is_left_alone_and_a_quiet_one_is_accepted_in_time(  # noqa: F811
     hass, controlled, sources, freezer
 ):
     from custom_components.home_heating_optimisation.control.comfort.coordinator import (
@@ -324,7 +330,8 @@ async def test_an_unheard_sensor_that_agrees_or_stays_quiet_long_enough_is_accep
 
     c, room = await stale_room(hass, controlled)
     reading = float(hass.states.get("sensor.air").state)
-    # Agreeing with the thermostat (plus the usual gap) is enough.
+    # A separate room sensor (its usual gap to the thermostat is large) is left alone.
+    assert abs(reading - 21.0) > 1.0
     room._store.set("sensor_gap", reading - 21.0)
     freezer.tick(timedelta(minutes=1))
     await c.refresh()
