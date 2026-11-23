@@ -253,6 +253,8 @@ class Controls:
                 capacity_kw=cfg["spread_capacity_kw"],
                 max_k=cfg["spread_max_k"],
                 floor_at_5c=cfg["spread_floor_pct"],
+                valve_pct=cfg["spread_valve_pct"],
+                steer_max_k=cfg["spread_steer_max_k"],
             )
             rooms = self._spread_rooms(set(cfg["spread_exclude"])) if mode != "off" else []
             if spread.step(now, mode, rooms, inputs):
@@ -260,10 +262,19 @@ class Controls:
         return spread.lift(room_id), spread.mode
 
     def spread_flow_floor(self):
-        """The flow target to keep while spreading is engaged and acting, or None."""
+        """The flow target to keep while heat is being spread into too few radiators.
+
+        Only while less than the engage level of capacity is open: that is when a burn
+        stops at a low flow target after a minute. Once the valves have opened, the
+        weather curve is left to set the flow.
+        """
         if not self.spread.engaged_active:
             return None
-        flow = warmup_config(self.heating.config)["spread_flow_c"]
+        cfg = warmup_config(self.heating.config)
+        capacity = self.spread.info.get("open_capacity_kw")
+        if capacity is None or capacity >= cfg["spread_capacity_kw"]:
+            return None
+        flow = cfg["spread_flow_c"]
         return flow if flow and flow > 0 else None
 
     def _spread_journal(self):

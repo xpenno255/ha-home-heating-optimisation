@@ -2,6 +2,15 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.32.0 - valve steering
+
+- While heat spreading is engaged, each room taking part is now *steered* to a valve opening: its told target is raised or lowered 0.3 K at a time, at most every 10 minutes, until the valve reports the opening wanted (more than 10 points under: one step up; more than 15 over: one step back). Every room taking part is steered to a common share (`spread_valve_pct`, default 40 %). When Evohome's boiler call is more than 5 points under the boiler-time floor, one *lead* room (the coolest against its target, the bigger radiator on a tie) is steered further, to the opening that earns that much boiler time (68 % for a 35 % call, never more than 85 %).
+- A steer only adds to the told target, at most `spread_steer_max_k` (default 1.0 K), and stands in for the room's overdrive. A room that stops taking part (more than `spread_max_k` over target, short, pre-heating) loses its steer at once.
+- This replaces 0.31.0's single house-wide level. Spreading also no longer lets go because enough capacity is open, since that is now its own doing; it lets go when the call ends and the boiler call is not under the floor, or when the house runs 0.4 K warm.
+- The flow floor (`spread_flow_c`) now applies only while less than `spread_capacity_kw` is open, which is when a burn stops at a low flow target; once the valves have opened the weather curve sets the flow again. Spreading is now engaged for most of a heating spell, and holding 60 C throughout would have overridden the curve in mild weather.
+- Report block `spread` now lists, per room taking part, its valve opening, the opening wanted and its steer, and names the lead; the journal records engaging, letting go and each change of lead.
+- Why: a valve cannot be set directly, and the same push opens valves very unevenly. Told 1 K above its own sensor (13-20 Nov), the Living room and Kitchen valves open about 31-32 points further, the Study 20, the Bedroom 17, Max's room 13 and the Hall 6, each with a scatter of 6-19 points; told 0.5 K above, the Kitchen valve was anywhere from 45 to 79 %. With spreading engaged on 23 Nov the small rooms still sat at 12-20 %. About half the burner's starts (33-46 of 81-88 a day) are burns the boiler ends itself for lack of water flow.
+
 ## 0.31.2 - the stale-sensor check is limited to the thermostats it was meant for
 
 - The check from 0.31.1 now applies only where a room's air sensor is the zone's own thermostat (their usual gap is 0.2 K or less). A room with a separate sensor is left alone: on the first restart with 0.31.1 the Hall and Spare Room sensors, which were right, were replaced by an estimate half a degree out, because their gap to the valve-head sensor moves by that much.

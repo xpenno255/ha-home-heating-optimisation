@@ -429,10 +429,12 @@
           "decay_k_per_min": "Slowest fall of the boost (K per minute)",
           "spread_mode": "Heat spreading",
           "spread_capacity_kw": "Spread heat when less radiator capacity than this is open (kW)",
-          "spread_max_k": "Most a room may be lifted above its target, and how far over it may be to take part (\u00b0C)",
+          "spread_max_k": "How far over its target a room may be and still take part in heat spreading (\u00b0C)",
           "spread_exclude": "Rooms left out of heat spreading",
           "spread_floor_pct": "Boiler-time floor: share of time the boiler should be called at 5 \u00b0C outside (%, 0 = off)",
-          "spread_flow_c": "Flow temperature kept while spreading heat (\u00b0C, 0 = leave alone)"
+          "spread_flow_c": "Flow temperature kept while spreading heat (\u00b0C, 0 = leave alone)",
+          "spread_valve_pct": "Valve opening each room taking part is steered to (%)",
+          "spread_steer_max_k": "Most that valve steering may add to a room's told target (\u00b0C)"
         },
         "data_description": {
           "start": "For example 0.15 means 15% of the house's radiator capacity is calling.",
