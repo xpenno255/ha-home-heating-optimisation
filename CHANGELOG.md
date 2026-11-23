@@ -2,6 +2,10 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.32.1 - the lead room is a radiator that can take the heat
+
+- The lead is now the biggest radiator among the rooms within 0.15 K of the coolest against target, and the present lead gives way only to a radiator half as big again. In 0.32.0 it was simply the coolest room: on its first run it chose Max's room (1.8 kW, a valve that opens 13 points per degree) because it was a tenth cooler than the Living room (7.5 kW), which could never have earned the boiler its running time.
+
 ## 0.32.0 - valve steering
 
 - While heat spreading is engaged, each room taking part is now *steered* to a valve opening: its told target is raised or lowered 0.3 K at a time, at most every 10 minutes, until the valve reports the opening wanted (more than 10 points under: one step up; more than 15 over: one step back). Every room taking part is steered to a common share (`spread_valve_pct`, default 40 %). When Evohome's boiler call is more than 5 points under the boiler-time floor, one *lead* room (the coolest against its target, the bigger radiator on a tie) is steered further, to the opening that earns that much boiler time (68 % for a 35 % call, never more than 85 %).

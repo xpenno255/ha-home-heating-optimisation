@@ -113,17 +113,20 @@ def test_a_steer_moves_a_step_at_a_time_towards_the_opening_wanted():
     assert steer_step(0.3, None, None, 40, T0, 1.0) == (0.3, None)
 
 
-def test_the_lead_is_the_coolest_room_and_is_not_swapped_lightly():
+def test_the_lead_is_the_biggest_radiator_among_the_rooms_with_room_to_take_heat():
     rooms = house()
     assert choose_lead(None, rooms) == "living"
-    # Kitchen is 0.1 warmer than the living room: it stays the lead if it already is.
-    assert choose_lead("kitchen", rooms) == "kitchen"
-    # Hall is 0.2 warmer: the living room takes over.
-    assert choose_lead("hall", rooms) == "living"
+    # A small room a tenth cooler does not beat the living room.
+    small = [*house(), SpreadRoom("max", -0.1, 0.16, 1.8)]
+    assert choose_lead(None, small) == "living" and choose_lead("max", small) == "living"
+    # But a room well over its target is no candidate, however big.
+    warm_living = [SpreadRoom("living", 0.2, 0.45, 7.5), SpreadRoom("study", 0.0, 0.2, 2.5)]
+    assert choose_lead(None, warm_living) == "study"
+    # The present lead is kept against a slightly bigger radiator, not a much bigger one.
+    pair = [SpreadRoom("study", 0.0, 0.2, 2.5), SpreadRoom("bedroom", 0.0, 0.2, 2.6)]
+    assert choose_lead("study", pair) == "study" and choose_lead(None, pair) == "bedroom"
+    assert choose_lead("kitchen", rooms) == "living"
     assert choose_lead("gone", rooms) == "living" and choose_lead(None, []) is None
-    # On a tie the bigger radiator.
-    tie = [SpreadRoom("small", 0.0, 0.1, 2.0), SpreadRoom("big", 0.0, 0.1, 7.0)]
-    assert choose_lead(None, tie) == "big"
 
 
 def test_engaged_every_room_is_steered_to_its_share_and_one_lead_further():

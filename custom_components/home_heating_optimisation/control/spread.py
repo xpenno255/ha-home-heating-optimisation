@@ -18,8 +18,8 @@ and another's by six. So while spreading is engaged each room taking part is *st
 told target is raised or lowered a step at a time until the valve reports the opening
 wanted. Every room taking part is steered to a common share (40 % by default), which keeps
 capacity open. When Evohome's call is under the *floor* (the boiler time the weather needs)
-one *lead* room, the one with most room to take heat, is steered further, to the opening
-that earns that much boiler time.
+one *lead* room, the biggest radiator among those with most room to take heat, is steered
+further, to the opening that earns that much boiler time.
 
 Taking part means being at, or no more than ``max_k`` over, target. A room further over,
 a short room (overdrive has it), a pre-heating room and an excluded room are left alone;
@@ -64,8 +64,10 @@ FLOOR_MAX = 60.0
 # Evohome's boiler call (%) against the most-open valve (%), measured 13-20 Nov 2026.
 CALL_TO_VALVE = ((18.0, 50.0), (37.0, 70.0), (67.0, 90.0))
 LEAD_VALVE_MAX = 85.0
-# A new lead is chosen only when another room is this much cooler against its target.
-LEAD_SWITCH_K = 0.1
+# Rooms within this much of the coolest (against target) are candidates for the lead; the
+# present lead gives way only to a radiator this many times its size.
+LEAD_NEAR_K = 0.15
+LEAD_BIGGER = 1.5
 
 
 @dataclass(frozen=True)
@@ -137,13 +139,21 @@ def taking_part(room: SpreadRoom, max_k: float) -> bool:
 
 
 def choose_lead(current, members):
-    """The room to open furthest: the coolest against its target, the bigger radiator on a
-    tie; the present lead is kept unless another is clearly cooler."""
+    """The room to open furthest: the biggest radiator among the rooms with most room to
+    take heat (within ``LEAD_NEAR_K`` of the coolest against its target).
+
+    The lead is what earns the boiler its running time, so it has to be a radiator that
+    can take the heat: a small room a tenth cooler is not a better choice than the living
+    room. The present lead is kept while it is still among those rooms, unless one of them
+    has a radiator half as big again.
+    """
     if not members:
         return None
-    best = min(members, key=lambda r: (round(r.error, 2), -r.rated_kw))
-    held = next((r for r in members if r.room_id == current), None)
-    if held is not None and held.error <= best.error + LEAD_SWITCH_K:
+    coolest = min(r.error for r in members)
+    near = [r for r in members if r.error <= coolest + LEAD_NEAR_K + 1e-9]
+    best = max(near, key=lambda r: (r.rated_kw, -r.error))
+    held = next((r for r in near if r.room_id == current), None)
+    if held is not None and held.rated_kw * LEAD_BIGGER >= best.rated_kw:
         return held.room_id
     return best.room_id
 
