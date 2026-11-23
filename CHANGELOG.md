@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.32.2 - spreading yields to a room that needs the heat
+
+- While rooms at least 0.3 K short of the target they are being driven to (their pre-heat goal while pre-heating) add up to 3 kW of radiator or more, nothing is steered: every room is back on its ordinary overdrive and the flow floor is off. Spreading resumes, from nothing, once the rooms still 0.15 K short add up to less than that. One small room that is always a little short does not stop it. Report block `spread` has `yielding` and `yielding_to`; the journal records `spread_yielding`; the scorecard's `spread_hours` no longer counts time spent yielding.
+- Why: the boiler's running time is Evohome's to give, so heat steered into rooms already on target is heat a short room does not get. On the evening of 23 Nov, the first with valve steering, the Living room sat 0.2-0.6 K under for nearly four hours after its 16:00 step, pushed with its valve at 69-100 %, while the Study, Max's room, the Hall, the Bedroom and the Utility ran 0.2-0.4 K warm; the burner fired for the same 40 % of the time as the evening before.
+
 ## 0.32.1 - the lead room is a radiator that can take the heat
 
 - The lead is now the biggest radiator among the rooms within 0.15 K of the coolest against target, and the present lead gives way only to a radiator half as big again. In 0.32.0 it was simply the coolest room: on its first run it chose Max's room (1.8 kW, a valve that opens 13 points per degree) because it was a tenth cooler than the Living room (7.5 kW), which could never have earned the boiler its running time.

@@ -26,6 +26,13 @@ a short room (overdrive has it), a pre-heating room and an excluded room are lef
 a room that leaves loses its steer at once. The steer only ever adds to the told target,
 never more than ``steer_max_k``, and stands in for the room's overdrive.
 
+Spreading *yields* to recovery. The boiler's running time is Evohome's to give, so heat
+steered into rooms already on target is heat a short room does not get: on 23 Nov 2026 the
+Living room sat 0.2-0.6 K under for four hours while five steered rooms ran 0.2-0.4 K
+warm. So while rooms that are well short (or behind a pre-heat) add up to a few kW of
+radiator, nothing is steered and every room is back on its ordinary overdrive, until they
+have recovered.
+
 ``shadow`` works everything out and reports it without changing a target.
 """
 
@@ -61,6 +68,12 @@ WARM_RELEASE_K = 0.4
 FLOOR_BASE_C = 15.5
 FLOOR_REFERENCE_C = 5.0
 FLOOR_MAX = 60.0
+# Spreading yields while rooms at least YIELD_K short add up to YIELD_KW of radiator, and
+# resumes once the rooms still YIELD_END_K short add up to less than that. One small room
+# that is always a little short does not stop the rest of the house being spread.
+YIELD_K = 0.3
+YIELD_END_K = 0.15
+YIELD_KW = 3.0
 # Evohome's boiler call (%) against the most-open valve (%), measured 13-20 Nov 2026.
 CALL_TO_VALVE = ((18.0, 50.0), (37.0, 70.0), (67.0, 90.0))
 LEAD_VALVE_MAX = 85.0
@@ -79,6 +92,9 @@ class SpreadRoom:
     valve: float | None
     rated_kw: float
     eligible: bool = True
+    # How far below the target it is being driven to (its pre-heat goal while pre-heating),
+    # for a room under control; None when that is unknown or the room does not count.
+    short_k: float | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +104,7 @@ class SpreadState:
     lead: str | None = None
     # room_id -> (steer K, when it last moved)
     steer: dict = field(default_factory=dict)
+    yielding: bool = False
 
 
 @dataclass(frozen=True)
@@ -129,6 +146,17 @@ def lead_valve(call) -> float:
             return round(min(LEAD_VALVE_MAX, v0 + (v1 - v0) * (call - c0) / (c1 - c0)), 0)
         c0, v0 = c1, v1
     return LEAD_VALVE_MAX
+
+
+def short_rooms(rooms, yielding: bool) -> list:
+    """The rooms spreading is yielding to, or would: those short enough to count."""
+    limit = YIELD_END_K if yielding else YIELD_K
+    return [r for r in rooms if r.short_k is not None and r.short_k >= limit - 1e-9]
+
+
+def should_yield(rooms, yielding: bool) -> bool:
+    """Whether the short rooms add up to enough radiator for spreading to stand aside."""
+    return sum(r.rated_kw for r in short_rooms(rooms, yielding)) >= YIELD_KW
 
 
 def taking_part(room: SpreadRoom, max_k: float) -> bool:
@@ -200,8 +228,9 @@ def spread_step(state: SpreadState, rooms, inputs: SpreadInputs, now: datetime):
             engaged = need and warmth <= WARM_HOLD_K
         else:
             engaged = keep and warmth <= WARM_RELEASE_K
+    yielding = engaged and should_yield(rooms, state.yielding)
     lead, steer, targets = None, {}, {}
-    if engaged:
+    if engaged and not yielding:
         if warmth > WARM_HOLD_K:
             lead = None  # the house is running warm: nobody is opened further
         elif below_floor:
@@ -216,9 +245,10 @@ def spread_step(state: SpreadState, rooms, inputs: SpreadInputs, now: datetime):
                 min(k, inputs.steer_max_k), at, room.valve, target, now, inputs.steer_max_k
             )
     changed_at = now if engaged != state.engaged else state.changed_at
-    state = SpreadState(engaged, changed_at, lead, steer)
+    state = SpreadState(engaged, changed_at, lead, steer, yielding)
     lifts = {room_id: k for room_id, (k, _at) in steer.items()}
     info = {
+        "yielding_to": [r.room_id for r in short_rooms(rooms, yielding)] if yielding else [],
         "open_capacity_kw": capacity,
         "boiler_floor": floor,
         "boiler_call": relay,
@@ -254,17 +284,17 @@ class Spread:
         """Advance to ``now``; True when spreading engaged, let go or changed its lead."""
         self._stepped_at = now
         self.mode = mode
-        before = (self.state.engaged, self.state.lead)
+        before = (self.state.engaged, self.state.lead, self.state.yielding)
         if mode not in ("shadow", "active"):
             self.state, self.lifts, self.info, self.calling = SpreadState(), {}, {}, False
         else:
             self.calling = bool(inputs.calling)
             self.state, self.lifts, self.info = spread_step(self.state, rooms, inputs, now)
-        return (self.state.engaged, self.state.lead) != before
+        return (self.state.engaged, self.state.lead, self.state.yielding) != before
 
     @property
     def engaged_active(self) -> bool:
-        return self.mode == "active" and self.state.engaged
+        return self.mode == "active" and self.state.engaged and not self.state.yielding
 
     def lift(self, room_id):
         """This room's steer in K, or None when it is not being steered."""
@@ -274,11 +304,14 @@ class Spread:
         names = names or {}
         info = dict(self.info)
         valves = info.pop("valves", {})
+        yielding_to = [names.get(k, k) for k in info.pop("yielding_to", [])]
         return {
             "mode": self.mode,
             "engaged": self.state.engaged,
             "since": self.state.changed_at.isoformat() if self.state.changed_at else None,
             "calling": self.calling,
+            "yielding": self.state.yielding,
+            "yielding_to": yielding_to,
             **info,
             "lead": names.get(self.state.lead, self.state.lead),
             "rooms": {names.get(k, k): v for k, v in valves.items()},
