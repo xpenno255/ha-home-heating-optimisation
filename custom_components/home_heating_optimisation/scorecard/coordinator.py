@@ -200,7 +200,12 @@ class Scorecard:
             add_away(day, minutes, away.setback_k)
         spread = getattr(controls, "spread", None)
         if spread is not None:
-            add_spread(day, minutes, spread.state.engaged, len(spread.lifts))
+            add_spread(
+                day,
+                minutes,
+                spread.state.engaged and not spread.state.yielding,
+                len(spread.lifts),
+            )
         return rolled
 
     def _arrival(self, day, now, room_id, name, d):

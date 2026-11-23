@@ -233,7 +233,20 @@ class Controls:
                 and d.state == "active"
                 and not d.preheating
             )
-            rooms.append(SpreadRoom(room_id, error, valve, rated, eligible))
+            # How far below the target it is being driven to, for a room under control:
+            # its pre-heat goal while it pre-heats, else its air target.
+            short = None
+            counts = bool(
+                d
+                and c.enabled
+                and c.mode == "active"
+                and room_id not in exclude
+                and d.state in ("active", "preheat")
+            )
+            if counts and d.air_temp is not None:
+                goal = d.preheat_setpoint if d.preheating else d.air_setpoint
+                short = None if goal is None else goal - d.air_temp
+            rooms.append(SpreadRoom(room_id, error, valve, rated, eligible, short))
         return rooms
 
     def spread_lift(self, room_id, now):
@@ -286,7 +299,11 @@ class Controls:
             "warmup_boost",
             scope="system",
             data={
-                "event": "spread" if report["engaged"] else "spread_released",
+                "event": (
+                    "spread_released"
+                    if not report["engaged"]
+                    else ("spread_yielding" if report["yielding"] else "spread")
+                ),
                 **{k: v for k, v in report.items() if k not in ("since",)},
                 "outcome": report["mode"],
             },

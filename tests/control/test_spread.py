@@ -18,6 +18,7 @@ from custom_components.home_heating_optimisation.control.spread import (
     choose_lead,
     lead_valve,
     open_capacity,
+    should_yield,
     spread_step,
     steer_step,
     taking_part,
@@ -166,6 +167,41 @@ def test_a_room_that_stops_taking_part_loses_its_steer():
     # Back within range it starts again from nothing.
     state, lifts, _ = spread_step(state, house(), inputs(), T0 + PERIOD * 4)
     assert lifts["hall"] == 0.3
+
+
+def short(room_id, short_k, rated_kw):
+    """A room that is short of its target: no member, but it counts for yielding."""
+    return SpreadRoom(room_id, -short_k, 0.9, rated_kw, short_k=short_k)
+
+
+def test_spreading_yields_to_a_big_room_that_is_short_and_resumes_when_it_recovers():
+    steered = run([(T0 + PERIOD * n, house(), inputs(relay=50.0)) for n in range(2)])[0]
+    assert steered.steer["hall"][0] == 0.6 and not steered.yielding
+    # The living room goes 0.4 short: nothing is steered any more.
+    rooms = [short("living", 0.4, 7.5), *house()[1:]]
+    state, lifts, info = spread_step(steered, rooms, inputs(relay=50.0), T0 + PERIOD * 2)
+    assert state.engaged and state.yielding and lifts == {} and state.steer == {}
+    assert state.lead is None and info["yielding_to"] == ["living"]
+    # Still 0.2 short: still yielding (it started at 0.3, it ends under 0.15).
+    rooms = [short("living", 0.2, 7.5), *house()[1:]]
+    state, lifts, _ = spread_step(state, rooms, inputs(relay=50.0), T0 + PERIOD * 3)
+    assert state.yielding and lifts == {}
+    # Recovered: steering starts again from nothing.
+    state, lifts, _ = spread_step(state, house(), inputs(relay=50.0), T0 + PERIOD * 4)
+    assert not state.yielding and lifts["hall"] == 0.3
+
+
+def test_one_small_room_that_is_short_does_not_stop_the_spreading():
+    assert not should_yield([short("spare", 0.8, 2.0)], False)
+    assert should_yield([short("spare", 0.8, 2.0), short("study", 0.3, 2.5)], False)
+    assert should_yield([short("kitchen", 0.3, 4.4)], False)
+    assert not should_yield([short("kitchen", 0.2, 4.4)], False)
+    assert should_yield([short("kitchen", 0.2, 4.4)], True)
+    # A room that does not count (no shortfall known) never does.
+    assert not should_yield([SpreadRoom("living", -0.5, 0.9, 7.5)], False)
+    rooms = [short("spare", 0.8, 2.0), *house()]
+    state, lifts, _ = spread_step(SpreadState(), rooms, inputs(relay=18.0), T0)
+    assert state.engaged and not state.yielding and lifts["hall"] == 0.3
 
 
 def test_a_warm_house_does_not_start_and_lets_go():
