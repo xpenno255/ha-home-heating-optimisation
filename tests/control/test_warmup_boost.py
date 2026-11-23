@@ -183,6 +183,8 @@ def test_config_defaults_and_validation():
         "spread_exclude": [],
         "spread_floor_pct": 35.0,
         "spread_flow_c": 60.0,
+        "spread_valve_pct": 40.0,
+        "spread_steer_max_k": 1.0,
     }
     assert warmup_config({"warmup_boost": {"mode": "bogus", "start": 9}})["mode"] == "off"
     assert validation_error(cfg) is None

@@ -197,7 +197,7 @@ COMFORT_MODEL_VERSION = "steady_state_ot_v4"
 # The most an away setback may take off a room's target, whatever the settings say.
 AWAY_SETBACK_MAX_K = 2.0
 # The most heat spreading may lift a room's zone target, whatever the settings say.
-SPREAD_MAX_K = 1.0
+SPREAD_MAX_K = 2.0
 
 
 @dataclass
