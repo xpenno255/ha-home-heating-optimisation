@@ -406,7 +406,8 @@
           "plan_flow": "Flow temperature to plan warm-ups at (\u00b0C)",
           "max_lead_minutes": "Longest pre-heat before the schedule time (minutes)",
           "fullness_low": "Radiator fullness where the flow cap starts (0-1)",
-          "fullness_high": "Radiator fullness where the flow cap reaches zero (0-1)"
+          "fullness_high": "Radiator fullness where the flow cap reaches zero (0-1)",
+          "arrival_gain": "How much of each morning's arrival error goes into the next start (0-1, 0 = off)"
         },
         "data_description": {
           "plan_flow": "A lower value means an earlier, gentler start.",
@@ -434,7 +435,8 @@
           "spread_floor_pct": "Boiler-time floor: share of time the boiler should be called at 5 \u00b0C outside (%, 0 = off)",
           "spread_flow_c": "Flow temperature kept while spreading heat (\u00b0C, 0 = leave alone)",
           "spread_valve_pct": "Valve opening each room taking part is steered to (%)",
-          "spread_steer_max_k": "Most that valve steering may add to a room's told target (\u00b0C)"
+          "spread_steer_max_k": "Most that valve steering may add to a room's told target (\u00b0C)",
+          "flow_say_full_kw": "Radiator size from which a room has full say over the flow temperature (kW, 0 = every room)"
         },
         "data_description": {
           "start": "For example 0.15 means 15% of the house's radiator capacity is calling.",

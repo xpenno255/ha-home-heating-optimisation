@@ -1057,6 +1057,7 @@ class HeatingOptionsFlow(MappingFlow, OptionsFlow):
             "spread_flow_c",
             "spread_valve_pct",
             "spread_steer_max_k",
+            "flow_say_full_kw",
         ):
             schema[vol.Required(key, default=old[key])] = vol.All(
                 vol.Coerce(float), vol.Range(*OVERDRIVE_SETTINGS[key])

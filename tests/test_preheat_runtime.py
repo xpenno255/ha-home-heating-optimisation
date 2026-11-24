@@ -125,6 +125,32 @@ async def test_active_writes_at_planned_start_and_hands_over_without_a_second_wr
     heating.analytics = None
 
 
+async def test_the_start_moves_with_what_earlier_arrivals_taught(hass, controlled, freezer):  # noqa: F811
+    heating, controls, calls = await ready(hass, controlled, freezer, "active")
+    optimum = heating.optimum
+    plan = optimum.plans["study"]
+    assert plan.lead_bias_minutes == 0.0
+    # The room was 0.6 short at the switchpoint: half of that, in minutes, is learnt.
+    finished = replace(plan, started=True, switch_temp=plan.goal - 0.6)
+    learnt = optimum._learn_lead("study", finished)
+    error, bias = learnt["lead_error_minutes"], learnt["lead_bias_minutes"]
+    assert error > 0 and bias == round(min(20.0, 0.5 * error), 1)
+    assert optimum.lead_bias[optimum._lead_key("study", plan.switch_at)] == bias
+    # The next plan for that time of day starts that much earlier, on a longer line.
+    del optimum.plans["study"]
+    await optimum.step()
+    again = optimum.plans["study"]
+    assert again.lead_bias_minutes == bias
+    assert abs((plan.start_at - again.start_at).total_seconds() - bias * 60) < 1
+    assert again.climb_minutes == plan.climb_minutes + bias
+    # Switched off, the start is where it was.
+    optimum.pcfg = {**optimum.pcfg, "arrival_gain": 0.0}
+    del optimum.plans["study"]
+    await optimum.step()
+    assert optimum.plans["study"].start_at == plan.start_at
+    heating.analytics = None
+
+
 async def test_hot_water_charge_delays_the_start(hass, controlled, freezer):  # noqa: F811
     heating, controls, calls = await ready(hass, controlled, freezer, "active")
     optimum = heating.optimum

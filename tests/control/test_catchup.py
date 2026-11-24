@@ -91,6 +91,24 @@ def test_need_follows_the_worst_pushed_room():
     assert catchup_need({}, rooms, 50.0, 60.0) == (0.0, None, None)
 
 
+def test_a_small_pushed_room_raises_the_flow_by_less():
+    rooms = room(18.5, name="Spare") + room(19.3)
+    tracks = {
+        "Spare": CatchupTrack(T0, 18.5, pushing=True),
+        "Living Room": CatchupTrack(T0, 19.3, pushing=True),
+    }
+    # Without sizes the furthest behind decides: the spare room, 1.2 short, asks for it all.
+    need, name, _ = catchup_need(tracks, rooms, 50.0, 60.0)
+    assert name == "Spare" and need == pytest.approx(10.0)
+    # With half the say it asks for half; the living room, 0.4 short, asks for 3/7.
+    says = {"Spare": 0.5, "Living Room": 1.0}
+    need, name, short = catchup_need(tracks, rooms, 50.0, 60.0, says)
+    assert name == "Spare" and short == pytest.approx(1.2) and need == pytest.approx(5.0)
+    says = {"Spare": 0.3, "Living Room": 1.0}
+    need, name, _ = catchup_need(tracks, rooms, 50.0, 60.0, says)
+    assert name == "Living Room" and need == pytest.approx(10.0 * 0.3 / 0.7)
+
+
 def test_config_default_off_and_validated():
     assert warmup_config({})["catchup_mode"] == "off"
     assert warmup_config({"warmup_boost": {"catchup_mode": "active"}})["catchup_mode"] == "active"

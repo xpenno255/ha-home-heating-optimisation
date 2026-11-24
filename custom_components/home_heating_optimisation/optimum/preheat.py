@@ -58,6 +58,10 @@ class PreheatPlan:
     latest_start: datetime | None = None
     dhw_wait_minutes: float = 0.0
     start_reason: str = ""
+    # The room's temperature at the switchpoint: what the next start learns from.
+    switch_temp: float | None = None
+    # Minutes of lead added (or, negative, taken off) from earlier arrivals at this time.
+    lead_bias_minutes: float = 0.0
 
     @property
     def begin(self):
@@ -101,6 +105,8 @@ class PreheatPlan:
             "latest_ts": self.latest_start.timestamp() if self.latest_start else None,
             "dhw_wait_minutes": self.dhw_wait_minutes,
             "start_reason": self.start_reason,
+            "switch_temp": self.switch_temp,
+            "lead_bias_minutes": self.lead_bias_minutes,
         }
 
     @classmethod
@@ -126,6 +132,8 @@ class PreheatPlan:
             latest_start=_at(raw.get("latest_ts")),
             dhw_wait_minutes=float(raw.get("dhw_wait_minutes") or 0.0),
             start_reason=str(raw.get("start_reason") or ""),
+            switch_temp=raw.get("switch_temp"),
+            lead_bias_minutes=float(raw.get("lead_bias_minutes") or 0.0),
         )
 
     def start(self, now, temp, reason="planned", margin_minutes=0):
@@ -149,6 +157,42 @@ class PreheatPlan:
         )
 
 
+# Learning the lead from how a pre-heat turned out. A room within this much of its goal at
+# the switchpoint was on time; otherwise the shortfall is turned into minutes at the pace
+# the plan climbed at. The extra lead stays within these limits, and one arrival never
+# moves it by more than LEAD_STEP_MAX.
+ARRIVAL_DEADBAND_K = 0.1
+LEAD_BIAS_MIN = -30.0
+LEAD_BIAS_MAX = 60.0
+LEAD_STEP_MAX = 20.0
+
+
+def lead_error_minutes(plan) -> float | None:
+    """Minutes the start was out by, from the room's temperature at the switchpoint.
+
+    Positive: it was short, so it should have started that much earlier. Negative: it was
+    over its goal. None when there is nothing fair to learn from: no reading, a plan that
+    never started or was held back by hot water, or a room that had no climb to make.
+    """
+    if not plan.started or plan.switch_temp is None or plan.dhw_wait_minutes > 0:
+        return None
+    rise = plan.goal - plan.start_temp
+    if rise <= 0 or plan.climb_minutes <= 0:
+        return None
+    short = plan.goal - plan.switch_temp
+    if abs(short) <= ARRIVAL_DEADBAND_K:
+        return 0.0
+    return round(short * plan.climb_minutes / rise, 1)
+
+
+def learn_lead(bias, error_minutes, gain) -> float:
+    """The extra lead after one more arrival: a share (``gain``) of the error is taken up."""
+    if error_minutes is None or not gain or gain <= 0:
+        return bias
+    step = max(-LEAD_STEP_MAX, min(LEAD_STEP_MAX, gain * error_minutes))
+    return round(max(LEAD_BIAS_MIN, min(LEAD_BIAS_MAX, bias + step)), 1)
+
+
 @dataclass(frozen=True)
 class PreheatRoom:
     """A room that is pre-heating now, as the boiler side needs to see it."""
@@ -168,6 +212,8 @@ class PreheatRoom:
     # radiators will carry it the rest of the way, so it asks for no more.
     done: bool = False
     coast_up_k: float = 0.3
+    # Rated radiator output, kW: its say over the flow temperature (None: full say).
+    output_kw: float | None = None
 
 
 def dhw_wait_deadline(plan, charge_end, grace_minutes=10):

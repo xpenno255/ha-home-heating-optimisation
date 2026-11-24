@@ -711,6 +711,11 @@ class Controls:
             planned_minutes=plan.planned_minutes,
             done=air is not None and air >= plan.goal - tolerance - coast,
             coast_up_k=coast,
+            output_kw=(
+                c.data.installed_output_dt50_w / 1000
+                if c.data and c.data.installed_output_dt50_w
+                else None
+            ),
         )
 
     def warmup_rooms(self):

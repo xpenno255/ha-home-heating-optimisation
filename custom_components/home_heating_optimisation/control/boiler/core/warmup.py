@@ -216,15 +216,36 @@ def fullness_cap(filtered, base, boost_max, low, high) -> float:
     return room * min(1.0, max(0.0, (high - filtered) / (high - low)))
 
 
-def need_uplift(rooms, base, boost_max, params: WarmupBoostParams) -> float:
+def size_say(output_kw, full_kw) -> float:
+    """How much say a room has over the flow temperature, 0-1, from its radiator size.
+
+    The whole house shares one flow temperature, so a small room should not set it for
+    everyone: a room with ``full_kw`` of radiator or more has full say, a smaller one in
+    proportion. Full say when ``full_kw`` is off (0 or None) or the output is unknown.
+    """
+    if not full_kw or full_kw <= 0 or output_kw is None or output_kw <= 0:
+        return 1.0
+    return min(1.0, output_kw / full_kw)
+
+
+def weighted_demand(rooms, full_kw):
+    """The demand (0-100) that steers the flow temperature: the most-open valve, each
+    room's opening counted in proportion to its say. ``rooms`` is ``[(demand 0-1,
+    output kW)]``; None when there is no reading at all."""
+    values = [d * 100 * size_say(kw, full_kw) for d, kw in rooms if d is not None]
+    return round(max(values), 1) if values else None
+
+
+def need_uplift(rooms, base, boost_max, params: WarmupBoostParams, full_kw=None) -> float:
     """Uplift (K) the rooms in pre-heat ask for: how far the worst is behind its plan.
 
     ``rooms`` carry ``behind_k`` (positive: behind plan) and ``done``. A room already
     done (at its goal less tolerance and coast-up) or on or ahead of plan asks for none;
-    ``need_full_k`` behind asks for everything up to ``boost_max``.
+    ``need_full_k`` behind asks for everything up to ``boost_max``. With ``full_kw`` a
+    room's lag counts in proportion to its say (see ``size_say``).
     """
     behind = [
-        r.behind_k
+        r.behind_k * size_say(getattr(r, "output_kw", None), full_kw)
         for r in rooms
         if not getattr(r, "done", False) and r.behind_k is not None and r.behind_k > 0
     ]
@@ -388,21 +409,24 @@ def overdrive_k(limit, short):
     return round(min(float(limit), short), 1) if short >= OVERDRIVE_END_K else 0.0
 
 
-def catchup_need(tracks, rooms, base, ceiling):
-    """``(uplift K, room, shortfall K)`` for the pushed room furthest below target.
+def catchup_need(tracks, rooms, base, ceiling, says=None):
+    """``(uplift K, room, shortfall K)`` for the pushed room that asks for most.
 
-    The uplift runs from nothing at ``CATCHUP_END_K`` short to ``ceiling - base`` at
-    ``CATCHUP_FULL_K``. ``(0.0, None, None)`` when no room is pushed.
+    A room's uplift runs from nothing at ``CATCHUP_END_K`` short to ``ceiling - base`` at
+    ``CATCHUP_FULL_K``, times its say over the flow temperature (``says``: name -> 0-1,
+    full say when absent). ``(0.0, None, None)`` when no room is pushed.
     """
+    says = says or {}
+    span = CATCHUP_FULL_K - CATCHUP_END_K
     worst = None
     for name, air, target, *_ in rooms:
         track = tracks.get(name)
         if track is None or not track.pushing or None in (air, target):
             continue
-        if worst is None or target - air > worst[1]:
-            worst = (name, target - air)
+        short = target - air
+        share = min(1.0, max(0.0, (short - CATCHUP_END_K) / span)) * says.get(name, 1.0)
+        if worst is None or (share, short) > (worst[0], worst[2]):
+            worst = (share, name, short)
     if worst is None:
         return 0.0, None, None
-    span = CATCHUP_FULL_K - CATCHUP_END_K
-    share = min(1.0, max(0.0, (worst[1] - CATCHUP_END_K) / span))
-    return max(0.0, ceiling - base) * share, worst[0], worst[1]
+    return max(0.0, ceiling - base) * worst[0], worst[1], worst[2]

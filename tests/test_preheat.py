@@ -22,6 +22,8 @@ from custom_components.home_heating_optimisation.optimum.preheat import (
     PreheatPlan,
     avoid_charge,
     charge_length,
+    lead_error_minutes,
+    learn_lead,
     next_dhw_on,
 )
 from custom_components.home_heating_optimisation.optimum.preheat_policy import (
@@ -46,6 +48,8 @@ def start(plan_flow=None, **kw):
 def test_config_defaults_and_bad_values_fall_back():
     cfg = preheat_config({})
     assert cfg["mode"] == "off" and cfg["plan_flow"] == 55.0 and cfg["max_lead_minutes"] == 240
+    assert cfg["arrival_gain"] == 0.5
+    assert preheat_config({"preheat": {"arrival_gain": 3}})["arrival_gain"] == 0.5
     bad = preheat_config({"preheat": {"mode": "x", "plan_flow": 5, "fullness_low": 0.9}})
     assert bad["mode"] == "off" and bad["plan_flow"] == 55.0
     assert bad["fullness_low"] < bad["fullness_high"]  # 0.9 is not below the default 0.65
@@ -118,6 +122,32 @@ def test_expected_trajectory_flat_then_straight_line():
     assert p.expected_at(T0 + timedelta(minutes=100)) == 21.0
     assert p.on_plan_k(T0 + timedelta(minutes=40), 19.2) == -0.3
     assert plan(started=False).on_plan_k(T0, 18.0) is None
+
+
+def test_the_lead_error_is_the_shortfall_at_the_switchpoint_in_minutes():
+    # 3 K to climb in 60 minutes: 20 minutes per degree.
+    assert lead_error_minutes(plan(switch_temp=20.4)) == 12.0  # 0.6 short
+    assert lead_error_minutes(plan(switch_temp=21.5)) == -10.0  # half a degree over
+    assert lead_error_minutes(plan(switch_temp=20.95)) == 0.0  # near enough on time
+    # Nothing fair to learn from.
+    assert lead_error_minutes(plan(switch_temp=None)) is None
+    assert lead_error_minutes(plan(switch_temp=20.0, started=False)) is None
+    assert lead_error_minutes(plan(switch_temp=20.0, dhw_wait_minutes=12.0)) is None
+    assert lead_error_minutes(plan(switch_temp=20.0, start_temp=21.0)) is None
+
+
+def test_a_share_of_each_arrival_goes_into_the_next_start_within_limits():
+    assert learn_lead(0.0, 12.0, 0.5) == 6.0  # short: start earlier
+    assert learn_lead(6.0, -10.0, 0.5) == 1.0  # over: start later
+    assert learn_lead(0.0, 100.0, 0.5) == 20.0  # one morning moves it 20 minutes at most
+    assert learn_lead(55.0, 100.0, 0.5) == 60.0 and learn_lead(-25.0, -100.0, 0.5) == -30.0
+    assert learn_lead(4.0, None, 0.5) == 4.0 and learn_lead(4.0, 12.0, 0) == 4.0
+
+
+def test_the_learnt_lead_and_the_switch_temperature_round_trip():
+    p = plan(switch_temp=20.4, lead_bias_minutes=6.0)
+    again = PreheatPlan.from_dict(p.to_dict())
+    assert again.switch_temp == 20.4 and again.lead_bias_minutes == 6.0
 
 
 def test_held_back_plan_runs_from_when_it_began_and_round_trips():

@@ -159,8 +159,10 @@ from .core.warmup import (
     plan_floor,
     preheat_step,
     return_scale,
+    size_say,
     trim_factor,
     update_baselines,
+    weighted_demand,
 )
 from .dhw_policy import DEFAULTS as DHW_BOILER_DEFAULTS
 from .dhw_policy import hot_cylinder_flow
@@ -201,6 +203,8 @@ class BFCCoordinatorData:
     return_correction: float = 0.0
     cycling_correction: float = 0.0
     demand_filtered: float | None = None
+    # Most-open valve with each room counted by its say over the flow temperature (0-100).
+    weighted_demand: float | None = None
     cycles_10min: int = 0
     return_temperature_used: float | None = None
     return_fresh: bool = False
@@ -725,6 +729,33 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         d.dhw_anticycle_state = self._ac_state
         d.dhw_anticycle_normal = store.get("anticycle_normal")
 
+    def _say_full_kw(self) -> float | None:
+        """Radiator size (kW) that gives a room full say over the flow temperature."""
+        try:
+            value = float(self._warmup_config().get("flow_say_full_kw") or 0.0)
+        except TypeError, ValueError:
+            return None
+        return value if value > 0 else None
+
+    def _room_says(self) -> dict:
+        """Room name -> say over the flow temperature (0-1), from its radiator size."""
+        full_kw = self._say_full_kw()
+        says = {}
+        for _entity, output, _enabled, name, *_ in self._warmup_rooms():
+            says[name] = size_say(output / 1000 if output else None, full_kw)
+        return says
+
+    def _weighted_demand(self, freshness, now) -> float | None:
+        """The most-open valve (0-100) with each room counted by its say, or None."""
+        rooms = []
+        for entity, output, enabled, *_ in self._warmup_rooms():
+            if not enabled:
+                continue
+            value = self._float_state(entity, freshness=freshness, now=now, attribute="heat_demand")
+            if value is not None and 0 <= value <= 1:
+                rooms.append((value, output / 1000 if output else None))
+        return weighted_demand(rooms, self._say_full_kw())
+
     def _spread_floor(self, curve_params) -> float | None:
         """The flow floor asked for by heat spreading, unless the return is already warm.
 
@@ -878,7 +909,7 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             guard = return_scale(
                 self._return_filtered, self._return_params().return_ceiling, params
             )
-            need = need_uplift(planned, base, params.boost_max, params)
+            need = need_uplift(planned, base, params.boost_max, params, self._say_full_kw())
             cap = fullness_cap(
                 filtered, base, params.boost_max, params.fullness_low, params.fullness_high
             )
@@ -1009,7 +1040,9 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
             self._catchup_tracks = stepped
         self._save_catchup(now)
         ceiling = min(curve_params.flow_max, CATCHUP_MAX_FLOW)
-        need, room, short = catchup_need(self._catchup_tracks, rooms, base, ceiling)
+        need, room, short = catchup_need(
+            self._catchup_tracks, rooms, base, ceiling, self._room_says()
+        )
         guard = return_scale(self._return_filtered, self._return_params().return_ceiling, params)
         cap = fullness_cap(
             self._fullness.value, base, params.boost_max, params.fullness_low, params.fullness_high
@@ -1598,7 +1631,11 @@ class BFCCoordinator(DataUpdateCoordinator[BFCCoordinatorData]):
         demand_valid = all_zones_valid if zones else d.heat_demand is not None
         if not demand_valid:
             disabled.append("demand adaptation disabled (incomplete or stale demand inputs)")
-        d.demand_filtered = self._hub.sample_demand(d.heat_demand if demand_valid else None, now)
+        # The flow temperature is steered by the most-open valve, each room counted in
+        # proportion to its radiator's say; the plain zone maximum when rooms are unknown.
+        d.weighted_demand = self._weighted_demand(freshness, now)
+        steering = d.weighted_demand if d.weighted_demand is not None else d.heat_demand
+        d.demand_filtered = self._hub.sample_demand(steering if demand_valid else None, now)
         d.hw_relay_demand = demand(cfg.get(CONF_HW_RELAY_DEMAND_ENTITY))
         relay = d.hw_relay_demand > 0 if d.hw_relay_demand is not None else None
         inferred = infer_dhw_demand(
