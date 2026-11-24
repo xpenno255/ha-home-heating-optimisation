@@ -36,6 +36,9 @@ DEFAULTS = {
     # steer may add to a room's told target (K).
     "spread_valve_pct": 40.0,
     "spread_steer_max_k": 1.0,
+    # Radiator size (kW) from which a room has full say over the flow temperature; a
+    # smaller room counts in proportion. 0 gives every room full say.
+    "flow_say_full_kw": 4.0,
 }
 LIMITS = {"start": (0.05, 0.6), "full": (0.06, 1.0), "decay_k_per_min": (0.2, 5.0)}
 OVERDRIVE_LIMITS = (0.2, 2.0)
@@ -50,6 +53,7 @@ OVERDRIVE_SETTINGS = {
     "spread_flow_c": (0.0, 70.0),
     "spread_valve_pct": (20.0, 80.0),
     "spread_steer_max_k": (0.3, 2.0),
+    "flow_say_full_kw": (0.0, 10.0),
 }
 INTEGERS = ("overdrive_period_min", "room_check_minutes")
 

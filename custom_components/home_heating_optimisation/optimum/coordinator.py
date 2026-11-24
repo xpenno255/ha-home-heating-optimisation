@@ -40,6 +40,8 @@ from .preheat import (
     avoid_charge,
     charge_length,
     dhw_wait_deadline,
+    lead_error_minutes,
+    learn_lead,
     next_dhw_on,
 )
 from .preheat_policy import preheat_config
@@ -79,6 +81,8 @@ class Optimum:
         self.pcfg = preheat_config(heating.config)
         self.plans = {}  # room id -> PreheatPlan for the next upward switchpoint
         self.preheat_last = {}  # room id -> summary of its last scored pre-heat
+        # "room id|HH:MM" (local switch time) -> extra lead in minutes learnt from arrivals
+        self.lead_bias = {}
         self.finishing = {}  # room id -> started plan past its switchpoint, awaiting its score
         self.dhw_charges = []  # minutes of recent DHW charges, oldest first
         self._dhw_since = None
@@ -143,6 +147,11 @@ class Optimum:
         self.preheat_last = {
             k: v for k, v in (data.get("preheat_last") or {}).items() if isinstance(v, dict)
         }
+        self.lead_bias = {
+            str(k): float(v)
+            for k, v in (data.get("lead_bias") or {}).items()
+            if isinstance(v, (int, float))
+        }
 
     def start(self):
         if not self.cfg["enabled"]:
@@ -176,6 +185,7 @@ class Optimum:
                     "plans": {k: v.to_dict() for k, v in self.plans.items()},
                     "dhw_charges": self.dhw_charges,
                     "preheat_last": self.preheat_last,
+                    "lead_bias": self.lead_bias,
                 }
             )
         except Exception:  # noqa: BLE001
@@ -585,8 +595,15 @@ class Optimum:
                 del self.plans[room_id]
                 self._dirty = True
             return
+        # Earlier arrivals at this time of day move the start: earlier for a room that
+        # was short at the switchpoint, later for one that was over. Never past the
+        # longest lead, never later than a minute before the switchpoint.
+        bias = self._lead_bias(room_id, switch_at)
+        biased = pred.start_at - timedelta(minutes=bias)
+        biased = max(biased, switch_at - timedelta(minutes=self.max_lead_minutes))
+        biased = min(biased, switch_at - timedelta(minutes=1))
         start_at, late = avoid_charge(
-            pred.start_at,
+            biased,
             switch_at,
             pred.lead_minutes,
             self._dhw_on(),
@@ -603,7 +620,10 @@ class Optimum:
             goal=goal,
             start_temp=temp,
             delay_minutes=pred.delay_minutes,
-            climb_minutes=max(0.0, pred.heating_minutes - pred.delay_minutes),
+            # The planned line still ends where it did, so it stretches or shrinks with
+            # the start.
+            climb_minutes=max(0.0, pred.heating_minutes - pred.delay_minutes + bias),
+            lead_bias_minutes=bias,
             planned_minutes=max(0, round((switch_at - start_at).total_seconds() / 60)),
             late_risk_minutes=late,
             plan_factor=pred.plan_factor,
@@ -640,6 +660,8 @@ class Optimum:
                 fields["peak_temp"] = temp
             if plan.arrived_at is None and temp >= plan.goal - tol:
                 fields["arrived_at"] = now
+            if plan.switch_temp is None and now >= plan.switch_at:
+                fields["switch_temp"] = temp
             if fields:
                 updated = replace(plan, **fields)
                 store = self.plans if self.plans.get(room_id) is plan else self.finishing
@@ -659,6 +681,7 @@ class Optimum:
         if done is not None and now >= done.switch_at + PREHEAT_SCORE_AFTER:
             del self.finishing[room_id]
             data = self._arrival_data(done, temp)
+            data.update(self._learn_lead(room_id, done))
             self.preheat_last[room_id] = data
             self._preheat_event("scored", room_id, data)
             changed = True
@@ -693,6 +716,32 @@ class Optimum:
             self._preheat_event("started", room_id, self._plan_data(plan))
         return plan
 
+    @staticmethod
+    def _lead_key(room_id, switch_at):
+        return f"{room_id}|{dt_util.as_local(switch_at).strftime('%H:%M')}"
+
+    def _lead_bias(self, room_id, switch_at) -> float:
+        """Extra lead (minutes) learnt for this room at this time of day; 0 when off."""
+        if not self.pcfg.get("arrival_gain"):
+            return 0.0
+        return float(self.lead_bias.get(self._lead_key(room_id, switch_at), 0.0))
+
+    def _learn_lead(self, room_id, plan) -> dict:
+        """Take a share of this arrival's error into the next start; what was learnt."""
+        gain = self.pcfg.get("arrival_gain") or 0.0
+        error = lead_error_minutes(plan)
+        key = self._lead_key(room_id, plan.switch_at)
+        before = float(self.lead_bias.get(key, 0.0))
+        after = learn_lead(before, error, gain) if self.preheat_mode == "active" else before
+        if after != before:
+            self.lead_bias[key] = after
+            self._dirty = True
+        return {
+            "switch_temperature": plan.switch_temp,
+            "lead_error_minutes": error,
+            "lead_bias_minutes": after,
+        }
+
     def _plan_data(self, plan):
         return {
             "mode": self.preheat_mode,
@@ -710,6 +759,7 @@ class Optimum:
             "late_risk_minutes": plan.late_risk_minutes,
             "plan_flow": self.pcfg["plan_flow"],
             "plan_factor": plan.plan_factor,
+            "lead_bias_minutes": plan.lead_bias_minutes,
             "outcome": "planned" if not plan.started else "started",
         }
 

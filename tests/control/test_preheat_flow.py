@@ -16,6 +16,8 @@ from custom_components.home_heating_optimisation.control.boiler.core.warmup impo
     need_uplift,
     plan_floor,
     preheat_step,
+    size_say,
+    weighted_demand,
 )
 from custom_components.home_heating_optimisation.control.migration import handover
 from tests.control.test_runtime import controlled as controlled  # noqa: F401 - fixture
@@ -82,6 +84,36 @@ def test_need_follows_the_worst_room_behind_plan_and_ignores_done_rooms():
     assert need([room(2.0)]) == 20.0
     assert need([room(0.5, done=True), room(0.1)]) == pytest.approx(4.0)
     assert need([room(None)]) == 0.0
+
+
+def test_a_rooms_say_over_the_flow_temperature_follows_its_radiator_size():
+    assert size_say(7.5, 4.0) == 1.0 and size_say(4.0, 4.0) == 1.0
+    assert size_say(2.0, 4.0) == 0.5
+    # Off, or a room whose radiator is not known: full say.
+    assert size_say(2.0, 0) == 1.0 and size_say(2.0, None) == 1.0
+    assert size_say(None, 4.0) == 1.0 and size_say(0, 4.0) == 1.0
+
+
+def test_the_demand_that_steers_the_flow_counts_each_valve_by_its_say():
+    # A 2 kW room wide open counts for 50, not 100.
+    assert weighted_demand([(1.0, 2.0)], 4.0) == 50.0
+    # The big rooms half open still set it when they are the most open by that measure.
+    assert weighted_demand([(1.0, 2.0), (0.55, 7.5), (0.5, 4.4)], 4.0) == 55.0
+    assert weighted_demand([(0.9, 7.5), (1.0, 2.0)], 4.0) == 90.0
+    # Off: the plain most-open valve. No readings: nothing.
+    assert weighted_demand([(1.0, 2.0), (0.5, 7.5)], 0) == 100.0
+    assert weighted_demand([(None, 2.0)], 4.0) is None and weighted_demand([], 4.0) is None
+
+
+def test_a_small_room_behind_its_plan_asks_for_less_flow():
+    from types import SimpleNamespace as Room
+
+    small = Room(behind_k=0.5, done=False, output_kw=2.0)
+    big = Room(behind_k=0.5, done=False, output_kw=7.5)
+    assert need_uplift([big], 45.0, 65.0, PARAMS, 4.0) == 20.0
+    assert need_uplift([small], 45.0, 65.0, PARAMS, 4.0) == pytest.approx(10.0)
+    assert need_uplift([small], 45.0, 65.0, PARAMS, None) == 20.0  # off: as before
+    assert need_uplift([small, big], 45.0, 65.0, PARAMS, 4.0) == 20.0
 
 
 def test_plan_floor_holds_the_plan_flow_until_every_room_is_done():

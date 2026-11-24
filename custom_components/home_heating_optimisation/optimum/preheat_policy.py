@@ -21,12 +21,16 @@ DEFAULTS = {
     # and where it reaches zero. Read by the boiler side.
     "fullness_low": 0.45,
     "fullness_high": 0.65,
+    # Share of each arrival's error taken into the next start at that time of day (the
+    # room short at the warm-by time starts earlier, one over its goal later). 0 = off.
+    "arrival_gain": 0.5,
 }
 LIMITS = {
     "plan_flow": (40.0, 80.0),
     "max_lead_minutes": (30, 360),
     "fullness_low": (0.1, 0.95),
     "fullness_high": (0.15, 1.0),
+    "arrival_gain": (0.0, 1.0),
 }
 INTEGERS = ("max_lead_minutes",)
 
