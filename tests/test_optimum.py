@@ -39,6 +39,8 @@ async def test_disabled_by_default(hass, controlled):  # noqa: F811
 
 
 def climate(hass, temp, setpoint):
+    """The room at ``temp``: its own sensor, which the planner reads, and its thermostat."""
+    hass.states.async_set("sensor.air", temp, {"unit_of_measurement": "°C"})
     hass.states.async_set(
         "climate.study", "auto", {"current_temperature": temp, "temperature": setpoint}
     )

@@ -8,6 +8,7 @@ are kept in the integration's store (newest 60 per room) so learning outlasts th
 analytics window. Cool-downs are demand-off stretches, used only for the stop estimate.
 """
 
+import json
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,6 +29,10 @@ HOLD_SECONDS = 600
 RESPONSE_K = 0.1
 MAX_EVENT_SECONDS = 4 * 3600
 KEEP_EVENTS = 60
+# Records of one warm-up: starts this close, deficit and temperatures this alike.
+DEDUP_SECONDS = 120
+DEDUP_DEFICIT_K = 0.1
+DEDUP_TEMP_K = 0.1
 # Radiators keep giving heat for a while after demand ends; those minutes are skipped.
 AFTERHEAT_SECONDS = 20 * 60
 MIN_COOLDOWN_SECONDS = 45 * 60
@@ -166,10 +171,59 @@ def warmup_events(observations, zone, tolerance=0.3, tz="UTC"):
     return events
 
 
+def _same_episode(anchor, other) -> bool:
+    """Whether ``other`` is another record of the warm-up ``anchor`` describes.
+
+    The same physical warm-up is derived again whenever the observations are rebuilt, with
+    a start a few milliseconds off, so an exact start time cannot identify it. Two records
+    are one episode when they start within ``DEDUP_SECONDS``, their deficits agree within
+    ``DEDUP_DEFICIT_K`` and, where both carry them, so do their goal and start temperature.
+    Two schedule steps to different targets a minute apart stay two.
+    """
+    if abs(other["start"] - anchor["start"]) > DEDUP_SECONDS:
+        return False
+    checks = (("deficit", DEDUP_DEFICIT_K), ("goal", DEDUP_TEMP_K), ("t0", DEDUP_TEMP_K))
+    for key, limit in checks:
+        a, b = anchor.get(key), other.get(key)
+        if (
+            isinstance(a, (int, float))
+            and isinstance(b, (int, float))
+            and abs(a - b) > limit + 1e-9
+        ):
+            return False
+    return True
+
+
+def dedup_events(events):
+    """Distinct warm-ups, oldest first: one record per physical episode.
+
+    Each record is compared with the episodes already kept, never with a record that was
+    itself dropped, so records 0, 100 and 200 seconds apart are not chained into one. The
+    earliest record of an episode is the one kept. The result does not depend on the order
+    of ``events`` and running it twice changes nothing.
+    """
+    valid = [e for e in events if isinstance(e, dict) and isinstance(e.get("start"), (int, float))]
+    ordered = sorted(valid, key=lambda e: (e["start"], json.dumps(e, sort_keys=True, default=str)))
+    kept = []
+    for event in ordered:
+        duplicate = False
+        for anchor in reversed(kept):
+            if event["start"] - anchor["start"] > DEDUP_SECONDS:
+                break
+            if _same_episode(anchor, event):
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(event)
+    return kept
+
+
 def merge_events(stored, new):
-    """Union by start time, newest ``KEEP_EVENTS``, oldest first."""
-    merged = {e["start"]: e for e in [*stored, *new] if isinstance(e, dict) and "start" in e}
-    return [merged[k] for k in sorted(merged)][-KEEP_EVENTS:]
+    """Distinct warm-ups from both lists, newest ``KEEP_EVENTS``, oldest first.
+
+    Duplicates go before the cap, so the cap keeps ``KEEP_EVENTS`` real warm-ups.
+    """
+    return dedup_events([*stored, *new])[-KEEP_EVENTS:]
 
 
 def _finish(points, zone):

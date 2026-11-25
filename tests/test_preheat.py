@@ -1,5 +1,6 @@
 """Planned pre-heat, pure parts: options, plan pace, trajectory, hot water, policy, scoring."""
 
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -22,9 +23,11 @@ from custom_components.home_heating_optimisation.optimum.preheat import (
     PreheatPlan,
     avoid_charge,
     charge_length,
+    finalise_capture,
     lead_error_minutes,
     learn_lead,
     next_dhw_on,
+    note_report,
 )
 from custom_components.home_heating_optimisation.optimum.preheat_policy import (
     preheat_config,
@@ -124,16 +127,108 @@ def test_expected_trajectory_flat_then_straight_line():
     assert plan(started=False).on_plan_k(T0, 18.0) is None
 
 
+def captured(value, **kw):
+    """A started plan whose temperature at the switchpoint was captured as ``value``."""
+    return plan(switch_temp=value, capture={"method": "nearest", "value": value}, **kw)
+
+
 def test_the_lead_error_is_the_shortfall_at_the_switchpoint_in_minutes():
     # 3 K to climb in 60 minutes: 20 minutes per degree.
-    assert lead_error_minutes(plan(switch_temp=20.4)) == 12.0  # 0.6 short
-    assert lead_error_minutes(plan(switch_temp=21.5)) == -10.0  # half a degree over
-    assert lead_error_minutes(plan(switch_temp=20.95)) == 0.0  # near enough on time
+    assert lead_error_minutes(captured(20.4)) == 12.0  # 0.6 short
+    assert lead_error_minutes(captured(21.5)) == -10.0  # half a degree over
+    # Within 0.2 K either way is on time: a 0.1 K sensor step and a reading some minutes
+    # from the switchpoint cannot tell it apart.
+    assert lead_error_minutes(captured(20.85)) == 0.0
+    assert lead_error_minutes(captured(20.8)) == 0.0
+    assert lead_error_minutes(captured(21.2)) == 0.0
+    assert lead_error_minutes(captured(20.7)) == 6.0
     # Nothing fair to learn from.
     assert lead_error_minutes(plan(switch_temp=None)) is None
-    assert lead_error_minutes(plan(switch_temp=20.0, started=False)) is None
-    assert lead_error_minutes(plan(switch_temp=20.0, dhw_wait_minutes=12.0)) is None
-    assert lead_error_minutes(plan(switch_temp=20.0, start_temp=21.0)) is None
+    assert lead_error_minutes(plan(switch_temp=20.0)) is None  # a number nobody captured
+    assert lead_error_minutes(captured(20.0, started=False)) is None
+    # Held back by hot water: it waited for a charge, or began during one.
+    assert lead_error_minutes(captured(20.0, dhw_wait_minutes=12.0)) is None
+    assert lead_error_minutes(captured(20.0, dhw_wait_minutes=2.3)) is None
+    assert lead_error_minutes(captured(20.0, start_reason="dhw_grace")) is None
+    assert lead_error_minutes(captured(20.0, start_reason="latest_start")) is None
+    # Beginning on the control cycle after the planned minute is not a wait.
+    assert lead_error_minutes(captured(20.4, dhw_wait_minutes=0.7, start_reason="planned")) == 12.0
+    assert lead_error_minutes(captured(20.0, start_temp=21.0)) is None
+    assert lead_error_minutes(captured(20.0, interrupted=True)) is None
+    failed = plan(switch_temp=20.0, capture={"method": None, "value": None, "reason": "x"})
+    assert lead_error_minutes(failed) is None
+
+
+def reports(*pairs, base=None):
+    """A started plan with ``(minutes from the switchpoint, value)`` reports filed."""
+    p = base or plan()
+    for minutes, value in pairs:
+        p = note_report(p, SWITCH + timedelta(minutes=minutes), value)
+    return finalise_capture(p)
+
+
+def test_the_switchpoint_temperature_is_interpolated_between_two_reports_around_it():
+    p = reports((-8, 20.0), (11, 20.95))
+    assert p.capture["method"] == "interpolated" and p.capture["gap_minutes"] == 19.0
+    assert p.switch_temp == p.capture["value"] == 20.4  # 8/19 of the way from 20.0 to 20.95
+    assert p.capture["before"] == [(SWITCH - timedelta(minutes=8)).isoformat(), 20.0]
+    assert p.capture["after"] == [(SWITCH + timedelta(minutes=11)).isoformat(), 20.95]
+    assert lead_error_minutes(p) == 12.0
+    # The order they arrive in does not matter, and a report exactly on the switchpoint
+    # is the reading itself.
+    assert reports((11, 20.95), (-8, 20.0)).capture == p.capture
+    assert reports((0, 20.6), (9, 21.0)).switch_temp == 20.6
+    # Up to 25 minutes apart; 15 before and 10 after is the widest pair there is.
+    assert reports((-15, 20.0), (10, 21.0)).capture["method"] == "interpolated"
+
+
+def test_one_report_within_ten_minutes_is_taken_as_it_is_and_never_projected():
+    p = reports((-9, 20.3))
+    assert p.capture["method"] == "nearest" and p.switch_temp == 20.3
+    assert p.capture["gap_minutes"] == 9.0 and p.capture["after"] is None
+    assert reports((10, 20.9)).switch_temp == 20.9
+    # Two reports on the same side: the one nearest the switchpoint, not a line through
+    # them carried on to it.
+    assert reports((-14, 19.0), (-6, 20.0)).switch_temp == 20.0
+    assert reports((4, 20.5), (9, 21.0)).switch_temp == 20.5
+    # A pair too far apart to interpolate: the nearer one, if it is near enough.
+    wide = reports((-14, 20.0), (12, 21.0))
+    assert wide.capture["method"] is None  # 26 minutes apart, neither within 10
+    assert reports((-15, 20.0), (11, 21.0)).capture["method"] is None
+    near = reports((-3, 20.2), (14, 21.0))  # 17 apart: interpolated
+    assert near.capture["method"] == "interpolated"
+
+
+def test_without_a_report_near_the_switchpoint_nothing_is_captured_or_learnt():
+    for case in ([(-12, 20.3)], [(45, 21.4)], [(-180, 18.0)], [], [(11, 21.0)]):
+        p = reports(*case)
+        assert p.capture["method"] is None and p.capture["value"] is None
+        assert p.switch_temp is None
+        assert "no qualified report" in p.capture["reason"]
+        error = lead_error_minutes(p)
+        assert error is None and learn_lead(4.0, error, 0.5) == 4.0  # the lead stands
+    # A report outside the quarter hour either side is not even kept.
+    assert note_report(plan(), SWITCH + timedelta(minutes=45), 21.4) == plan()
+    assert note_report(plan(), SWITCH - timedelta(minutes=16), 20.0) == plan()
+
+
+def test_one_report_is_one_piece_of_evidence_however_often_it_is_seen():
+    at = SWITCH - timedelta(minutes=9)
+    once = note_report(plan(), at, 20.3)
+    assert note_report(note_report(once, at, 20.3), at, 20.3) == once
+    # The latest before the switchpoint and the earliest after it are the two kept.
+    p = reports((-12, 20.0), (-9, 20.3), (-11, 20.1), (6, 20.8), (3, 20.6), (9, 21.0))
+    assert p.capture["before"][1] == 20.3 and p.capture["after"][1] == 20.6
+    # Once settled a capture does not move, whatever is reported afterwards.
+    assert note_report(p, SWITCH + timedelta(minutes=1), 25.0) == p
+    assert finalise_capture(p) == p
+
+
+def test_an_interrupted_pre_heat_keeps_its_outcome_but_teaches_nothing():
+    p = reports((-8, 20.0), (11, 20.95), base=plan(interrupted=True))
+    assert p.obs_before is None and p.obs_after is None  # nothing is filed after a restart
+    assert p.capture["method"] is None and "restart" in p.capture["reason"]
+    assert lead_error_minutes(p) is None
 
 
 def test_a_share_of_each_arrival_goes_into_the_next_start_within_limits():
@@ -148,6 +243,17 @@ def test_the_learnt_lead_and_the_switch_temperature_round_trip():
     p = plan(switch_temp=20.4, lead_bias_minutes=6.0)
     again = PreheatPlan.from_dict(p.to_dict())
     assert again.switch_temp == 20.4 and again.lead_bias_minutes == 6.0
+    # So do the reports around the switchpoint, the capture and an interruption, through
+    # the JSON the store keeps.
+    part = note_report(plan(lead_bias_minutes=6.0), SWITCH - timedelta(minutes=8), 20.0)
+    again = PreheatPlan.from_dict(json.loads(json.dumps(part.to_dict())))
+    assert again == part and again.capture is None
+    done = reports((11, 20.95), base=again)
+    stored = PreheatPlan.from_dict(json.loads(json.dumps(done.to_dict())))
+    assert stored.capture == done.capture and stored.switch_temp == 20.4
+    assert lead_error_minutes(stored) == 12.0
+    cut = PreheatPlan.from_dict(json.loads(json.dumps(plan(interrupted=True).to_dict())))
+    assert cut.interrupted and not PreheatPlan.from_dict(plan().to_dict()).interrupted
 
 
 def test_held_back_plan_runs_from_when_it_began_and_round_trips():

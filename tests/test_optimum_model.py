@@ -10,7 +10,9 @@ from custom_components.home_heating_optimisation.optimum.forecast import (
     parse_forecast,
 )
 from custom_components.home_heating_optimisation.optimum.learning import (
+    build_fit,
     cooldowns,
+    dedup_events,
     fit_room,
     merge_events,
     warmup_events,
@@ -161,6 +163,77 @@ def test_two_warmups_and_merge_dedupes():
     assert len(found) == 2
     assert len(merge_events(found, found)) == 2
     assert len(merge_events([event(d, 2.0, 60) for d in range(80)], [])) == 60
+
+
+# -- one record per warm-up ----------------------------------------------------
+
+
+def twin(e, seconds=0.003, **changes):
+    """Another record of the same warm-up, as a rebuilt history derives it again."""
+    return {**e, "start": e["start"] + seconds, **changes}
+
+
+def test_records_of_one_warmup_become_one_and_separate_warmups_stay_separate():
+    seven = event(0, 2.0, 60)
+    # The same deficit three milliseconds apart: one warm-up, the earliest record kept.
+    assert dedup_events([twin(seven), seven]) == [seven]
+    # 07:00 and 08:00 the same morning are two.
+    eight = twin(seven, 3600)
+    assert dedup_events([seven, eight]) == [seven, eight]
+    # Two steps a minute apart to different targets are two, though the climb is the same.
+    other = twin(seven, 60, goal=20.0, t0=18.0)
+    assert dedup_events([seven, other]) == [seven, other]
+    # So are two with different climbs.
+    assert len(dedup_events([seven, twin(seven, 60, deficit=2.4, t0=18.6)])) == 2
+    # An old record without the temperatures is matched on start and deficit alone.
+    bare = {"start": seven["start"] + 1, "deficit": 2.0, "minutes": 60}
+    assert dedup_events([seven, bare]) == [seven]
+    # Rounding leaves a twin's deficit a hundredth out; still the same warm-up.
+    assert len(dedup_events([seven, twin(seven, deficit=2.01, t0=18.99)])) == 1
+    assert dedup_events([{"minutes": 5}, "x", seven]) == [seven]  # unusable records go
+
+
+def test_duplicates_go_before_the_cap_and_are_not_chained():
+    # Each of 80 warm-ups stored twice: the cap keeps the newest 60 warm-ups, not 30.
+    distinct = [event(d, 2.0, 60) for d in range(80)]
+    doubled = [r for e in distinct for r in (e, twin(e))]
+    assert merge_events(doubled, []) == distinct[-60:]
+    assert merge_events(doubled[:40], doubled[40:]) == distinct[-60:]
+    # Starts 0, 100 and 200 seconds apart: the second belongs to the first, the third is
+    # 200 seconds from it and so its own warm-up. It is not carried in by the second.
+    first = event(0, 2.0, 60)
+    second, third = twin(first, 100), twin(first, 200)
+    assert dedup_events([first, second, third]) == [first, third]
+    # Any order in gives the same result, and a second pass changes nothing.
+    mixed = [*doubled, first, second, third]
+    once = dedup_events(mixed)
+    assert dedup_events(list(reversed(mixed))) == once
+    assert dedup_events(mixed[1::2] + mixed[::2]) == once
+    assert dedup_events(once) == once
+    assert len(once) == 81  # the 80, with ``first`` among them, and ``third``
+
+
+def test_a_duplicate_cannot_vouch_for_its_own_twin():
+    now = (BASE + timedelta(days=12)).timestamp()
+    # Paces that really vary from morning to morning.
+    distinct = [event(d, 2.0, m) for d, m in enumerate([40, 70, 50, 90, 60, 100, 45, 80])]
+    doubled = [r for e in distinct for r in (e, twin(e))]
+    honest = fit_model(distinct, now)
+    # Fitted as stored, each held-out event is predicted by its twin: the error looks
+    # smaller than it is (the fault this guards against).
+    assert fit_model(doubled, now).loo_error_min < honest.loo_error_min
+    # Through the fit that the runtime uses, the twins are gone first.
+    fit, kept = fit_room([], "z", PARAMS, doubled, now)
+    assert kept == distinct and fit.events == 8 == fit.model.events
+    assert fit.model.loo_error_min == honest.loo_error_min
+    # Storing everything twice does not move the pace, the delay or the confidence.
+    single, _ = fit_room([], "z", PARAMS, distinct, now)
+    assert fit.model.minutes_per_k == single.model.minutes_per_k
+    assert fit.model.delay_minutes == single.model.delay_minutes
+    assert fit.confidence == single.confidence
+    # Eight warm-ups stored four times over are still eight, not thirty-two.
+    four = [twin(e, k * 0.003) for e in distinct for k in range(4)]
+    assert build_fit(dedup_events(four), [], PARAMS, now).events == 8
 
 
 # -- model -------------------------------------------------------------------

@@ -12,13 +12,14 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
@@ -163,6 +164,11 @@ AIR_FALLBACK_HOLD = timedelta(minutes=30)
 # Until it is heard from again it is checked against the thermostat's own reading; it is
 # taken on trust after this long, or at once when the two agree this closely.
 AIR_UNHEARD_MAX = timedelta(minutes=25)
+# Measurements a room sensor makes besides temperature. A changed value of one on the
+# same device is the device reporting, and so stands behind its unchanged temperature.
+EVIDENCE_CLASSES = frozenset(
+    {"humidity", "temperature", "atmospheric_pressure", "illuminance", "carbon_dioxide"}
+)
 AIR_UNHEARD_TOLERANCE_K = 0.2
 # Only where the room sensor and the zone's sensor are one device: their usual gap is no
 # more than this. A separate room sensor's gap moves too much to judge it by.
@@ -251,6 +257,22 @@ class OTCoordinatorData:
     # Room state
     air_temp: float | None = None
     air_temp_source: str = ""
+    # The accepted air reading as an observation: when its source was last written, when
+    # its value last changed, and whether it is a new report from the room's own sensor ("ok") or something lesser
+    # ("fallback", "unchanged since the start", "not heard since the start", "no
+    # reading"). For the planner and the trial record; the room's own control does not
+    # depend on these.
+    air_reported_at: datetime | None = None
+    # When the value last changed: the one time a reading is certainly a new measurement
+    # (a radio integration can re-write an unchanged cached value at any time).
+    air_changed_at: datetime | None = None
+    air_qualified: bool = False
+    air_quality: str = "no reading"
+    # The latest sign that the sensor itself was physically heard from, and what it was
+    # ("value change", "device measurement change", "radio last seen"); None and "none" when
+    # there is none since the last restart. The planner's age limit applies to this.
+    air_evidence_at: datetime | None = None
+    air_evidence: str = "none"
     zone_setpoint: float | None = None
     # The zone's own reading (what Evohome drives the valve from), the filtered gap
     # air_temp - zone_temp, and the offset taken off written targets when matching is on.
@@ -358,6 +380,18 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         # _air_heard once it has changed.
         self._air_first: tuple | None = None
         self._air_heard = False
+        # The same question for the published observation record (any source): the first
+        # (source, value) seen since this start, and whether its value has changed since.
+        self._obs_first: tuple | None = None
+        self._obs_new = False
+        self._obs_seen: tuple | None = None  # (source, value, cycle that first saw it)
+        # Evidence older than this proves nothing. Coming up with Home Assistant, every
+        # state has just been put back from a cache, so only what arrives once it is
+        # running counts; set up on its own (an options save), the states around it are
+        # the real ones and all of it counts.
+        self.air_observed: OTCoordinatorData | None = None
+        self._evidence_restart = hass.state is not CoreState.running
+        self._evidence_floor: datetime | None = None
         self.write_status = "not_attempted"
         # Command/readback state is intentionally not persisted.  Policy memory
         # remains persistent exactly as before, but it is not an acknowledgement
@@ -829,6 +863,149 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         self._store.set("sensor_gap", gap)
         self._store.set("sensor_gap_at", now.isoformat())
         return round(gap, 2)
+
+    def _air_observation(self, d, geometry, source_read, unheard, now):
+        """Describe this cycle's air reading for the pre-heat planner and the record.
+
+        Sets ``air_reported_at``, ``air_changed_at``, ``air_qualified``, ``air_quality``,
+        ``air_evidence_at`` and ``air_evidence`` on ``d``. Nothing in the room's own
+        control reads them.
+
+        Qualified means a reading from the room's own sensor (or the zone's, where the
+        room has no other) that is known to be newer than this start. Not qualified, with
+        the reason as the quality:
+
+        - ``fallback``: the room's own sensor gave nothing and another reading stood in;
+        - ``unchanged since the start``: the reading was replaced (see ``_unheard_air``);
+        - ``not heard since the start``: the value is still the one found at the start,
+          or when the sensor came back, which may be a cached one put back by its
+          integration. Only a changed value shows a new measurement has arrived.
+
+        ``reported at`` is the source entity's last write. It is no measurement time: the
+        radio integration writes all its sensors again every minute, changed or not (seen
+        live 24 Nov 2026). ``changed at`` is when the value last changed, which only a
+        new measurement does: that is the time a reading is filed under as evidence of
+        the temperature. It is change-based sampling: a report that repeats the value is
+        not seen. For a zone's temperature, an attribute, it is the cycle that first saw
+        the value. The evidence fields are ``_air_evidence``'s.
+        """
+        # The planner is asked for this room's pre-heat later in this same cycle: it reads
+        # the observation from here, not from the previous cycle's finished record.
+        self.air_observed = d
+        d.air_reported_at = d.air_changed_at = d.air_evidence_at = None
+        d.air_qualified, d.air_quality, d.air_evidence = False, "no reading", "none"
+        if d.air_temp is None or not source_read:
+            # Whatever comes back after a gap has to show it is new, like at a start.
+            self._obs_first, self._obs_new = None, False
+            return
+        attribute = source_read.endswith(".current_temperature")
+        entity_id = source_read.removesuffix(".current_temperature")
+        state = self._state(entity_id)
+        if state is None:
+            return
+        d.air_reported_at = getattr(state, "last_reported", None) or state.last_updated
+        value = str(state.attributes.get("current_temperature")) if attribute else state.state
+        if self._obs_seen is None or self._obs_seen[:2] != (source_read, value):
+            self._obs_seen = (source_read, value, now)
+        d.air_changed_at = self._obs_seen[2] if attribute else state.last_changed
+        if self._obs_first is None or self._obs_first[0] != source_read:
+            # A different source from the one first seen starts its own count.
+            self._obs_first, self._obs_new = (source_read, value), False
+        if value != self._obs_first[1]:
+            self._obs_new = True
+        d.air_evidence_at, d.air_evidence = self._air_evidence(entity_id, d.air_changed_at, now)
+        preferred = self._config.get("air_temp_sensor") or (
+            geometry.preferred_air_temperature_entity if geometry else None
+        )
+        primary = f"{self._config.get(CONF_PRIMARY_CLIMATE)}.current_temperature"
+        if unheard:
+            d.air_quality = "unchanged since the start"
+        elif not (source_read == preferred or (not preferred and source_read == primary)):
+            d.air_quality = "fallback"
+        elif not self._obs_new:
+            d.air_quality = "not heard since the start"
+        else:
+            d.air_qualified, d.air_quality = True, "ok"
+
+    def _air_evidence(self, entity_id, changed, now):
+        """``(time, kind)`` of the latest sign the sensor was physically heard from.
+
+        A write to the state machine is not one: an integration may write an unchanged
+        cached value at any time. Nor is any other state change on the device: its
+        connectivity sensor going off is the opposite of hearing from it. What counts,
+        newest first wins:
+
+        - ``value change``: the reading itself changed;
+        - ``device measurement change``: another measurement the same device makes
+          (``EVIDENCE_CLASSES``: humidity and the like) changed value. A room sensor's
+          humidity moves while its temperature holds steady for an hour or two. This
+          shows the device is reporting; it is not a new temperature;
+        - ``radio last seen``: an entity on the device publishes the time its radio last
+          heard the device, as the Evohome integration does for a wall thermostat, whose
+          reading is unchanged for two or three hours on a quiet night while it still
+          transmits every twenty minutes or so. Only that time is used, never when the
+          entity carrying it changed.
+
+        Nothing stamped at or before a restart of Home Assistant counts (those states were
+        put back from a cache), nor anything later than now. ``(None, "none")`` when there
+        is no such sign: the reading's freshness is then not established.
+        """
+        if self._evidence_floor is None:
+            if not self._evidence_restart:
+                self._evidence_floor = datetime.min.replace(tzinfo=timezone.utc)
+            elif self.hass.state is CoreState.running:
+                self._evidence_floor = now
+            else:
+                return None, "none"
+        best = (None, "none")
+
+        def offer(at, kind):
+            nonlocal best
+            if at is None or not self._evidence_floor < at <= now:
+                return
+            if best[0] is None or at > best[0]:
+                best = (at, kind)
+
+        if self._obs_new or not self._evidence_restart:
+            offer(changed, "value change")
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(entity_id)
+        siblings = []
+        if entry is not None and entry.device_id is not None:
+            siblings = [
+                sibling
+                for sibling in er.async_entries_for_device(registry, entry.device_id)
+                if sibling.entity_id != entity_id and sibling.domain in ("sensor", "binary_sensor")
+            ]
+        for eid, sibling in [(entity_id, None), *((s.entity_id, s) for s in siblings)]:
+            state = self._state(eid)
+            if state is None or state.state in ("unavailable", "unknown"):
+                continue
+            if sibling is not None and self._is_measurement(sibling, state):
+                offer(state.last_changed, "device measurement change")
+            seen = state.attributes.get("last_seen")
+            if isinstance(seen, str):
+                seen = dt_util.parse_datetime(seen)
+            if isinstance(seen, datetime) and seen.tzinfo is not None:
+                offer(dt_util.as_utc(seen), "radio last seen")
+        return best
+
+    @staticmethod
+    def _is_measurement(entry, state) -> bool:
+        """A physical quantity the device itself measures, with a number for a state:
+        not a diagnostic (battery, signal), a status or a counter."""
+        if entry.domain != "sensor" or entry.entity_category is not None:
+            return False
+        kind = (
+            state.attributes.get("device_class")
+            or entry.device_class
+            or entry.original_device_class
+        )
+        try:
+            float(state.state)
+        except TypeError, ValueError:
+            return False
+        return kind in EVIDENCE_CLASSES
 
     def _unheard_air(self, d: OTCoordinatorData, now: datetime, fallbacks: list[str]) -> bool:
         """Replace a thermostat reading that predates this start and looks stale.
@@ -1816,7 +1993,10 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
         d.zone_temp = self._temperature_attr(
             self._config.get(CONF_PRIMARY_CLIMATE), "current_temperature"
         )
-        if self._unheard_air(d, now, fallbacks):
+        source_read = d.air_temp_source
+        unheard = self._unheard_air(d, now, fallbacks)
+        self._air_observation(d, geometry, source_read, unheard, now)
+        if unheard:
             # The stored gap stands: a made-up reading must not teach the filter anything.
             d.sensor_gap_k = round(float(self._store.get("sensor_gap")), 2)
         else:
