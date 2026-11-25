@@ -239,7 +239,10 @@ class RoomsOverviewSensor(SensorEntity, RestoreEntity):
                 self._cooling[room_id] = room["cooling"]
 
     def _cooling_now(self, room_id, c):
-        if c.data is None:
+        # While a room is still starting up its readings are not yet the room's own (a
+        # thermostat's restored value, a target worked out before the sensor is heard):
+        # they neither end a mark nor start one.
+        if c.data is None or c.data.state == "no_data":
             return self._cooling.get(room_id)
         mark, last = cooling_step(self._cooling.get(room_id), self._comfort.get(room_id), c.data)
         if last is not None:
