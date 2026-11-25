@@ -11,6 +11,7 @@ Remaining commissioning and roadmap work is tracked in the [GitHub backlog index
 - **A pre-heat needs a current room reading to begin.** A reading counts as current when there is physical evidence from the sensor's device within 45 minutes: the value changed, another measurement on the same device changed (humidity, temperature, pressure, illuminance, CO2), or the device reports when it was last heard on the radio. A state merely written again, and anything stamped at or before a restart, does not count. Without one the pre-heat waits (journal `waiting`), and is reported `not_started` if nothing arrives before the switchpoint. Rooms publish `air_evidence_at` and `air_evidence`; the room control path is unchanged.
 - Within 0.2 K of the goal now counts as on time (was 0.1 K).
 - Why: the planner added in 0.33.0 hardly ever learnt, and when it did it could learn from a stale reading or from the same morning twice.
+- **Rooms card: two rooms side by side on a phone.** The card now shows two columns from a width of 340 px (was 430 px), with less padding and slightly smaller figures in the narrowest tiles. Measured on the live dashboard, a sections view gives the card 500 px on a wide window (two columns before and after), 336 px on a 1024 px window and about 396 px on a phone, where it showed one room per row. `columns: 1` in the card's settings keeps the single column.
 
 ## 0.34.1 - a cooling mark is not lost while a room sensor is silent
 
