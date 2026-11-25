@@ -138,7 +138,7 @@ system sources are excluded. Their individual sensors remain unknown with qualit
 
 ## Rooms card
 
-The integration serves a dashboard card showing every room at once: room temperature against target (with how far off, coloured blue when cold and orange when too warm), the target sent to Evohome and the overdrive in it, valve demand, and any planned or running pre-heat, plus outside, flow, return and burner along the top. It loads automatically on every dashboard; add it with:
+The integration serves a dashboard card showing every room at once: room temperature against target (with how far off, coloured blue when cold and orange when the heating has overshot; grey when the room is only cooling to a target that was just lowered, or is held over it by heat spreading), the target sent to Evohome and the overdrive or heat-spreading lift in it, valve demand, and any planned or running pre-heat, plus outside, flow, return, burner and the away setback along the top. It loads automatically on every dashboard; add it with:
 
 ```yaml
 type: custom:hho-rooms-card
