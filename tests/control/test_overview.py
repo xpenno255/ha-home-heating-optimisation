@@ -89,6 +89,12 @@ def test_an_overshoot_stays_an_overshoot():
     assert cool([reading(19.2, 20.4, 19.8)])[0] is None
     assert cool([reading(18.2, 19.4, 18.6, away=1.0)])[0] == "away"
     assert cool([reading(18.2, 18.7, 18.6, away=1.0)])[0] is None
+    # A cycle without a room reading (a sensor not yet heard after a restart) keeps the mark.
+    silent = [reading(18.2, None, 18.6, away=1.0), reading(18.2, 19.4, 18.6, away=1.0)]
+    assert cool(silent[:1])[0] == "away" and cool(silent)[0] == "away"
+    late = [reading(20.0, 20.7, 20.6), reading(18.0, 20.7, 18.5), reading(18.0, None, 18.5)]
+    assert cool(late)[0] == "schedule"
+    assert cool([*late, reading(18.0, 18.6, 18.5)])[0] is None
     # No comfort target this cycle: nothing is learnt and nothing forgotten.
     assert cool([reading(None, 20.4, None)], "schedule", (20.0, 0.0)) == ("schedule", (20.0, 0.0))
 
