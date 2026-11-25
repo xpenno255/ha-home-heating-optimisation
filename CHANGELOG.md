@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.34.3 - a cooling mark is not ended by a room's start-up readings
+
+- Rooms card: while a room is still starting up after a restart (state `no_data`), its readings neither end a cooling mark nor start one.
+- Why: on the restart into 0.34.2 the Study's first cycle read 17.7 against a target of 17.6, a start-up value, before its real 18.3 against 17.7 a minute later. That looked like a room that had cooled, so its mark was dropped and the tile read "0.6° above" in orange.
+
 ## 0.34.2 - arrival learning learns when it should, and only from readings it can trust
 
 - **Hot water no longer cancels nearly every lesson.** In 0.33.0 a pre-heat taught nothing whenever any hot-water wait was recorded, and a start latched on the control cycle after its planned minute records a wait of 0.1-0.7 minutes. Sixteen of the 21 starts journalled on 18-21 Nov carried such a wait; the three really held by hot water waited 2.3, 7.3 and 16.1 minutes. A start now counts as held back only when a hot water charge was running when it was due (`dhw_held`, recorded at the time) or it began more than 2 minutes late.

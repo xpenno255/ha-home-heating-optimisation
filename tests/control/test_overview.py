@@ -47,8 +47,9 @@ async def test_overview_carries_each_room_and_the_boiler(hass, controlled, sourc
     assert state.attributes["house"]["away_setback"] == 0.0
 
 
-def reading(comfort, air, target, away=0.0, preheating=False):
+def reading(comfort, air, target, away=0.0, preheating=False, state="active"):
     return SimpleNamespace(
+        state=state,
         target_ot=comfort,
         air_temp=air,
         air_setpoint=target,
@@ -123,6 +124,11 @@ def test_cooling_marks_survive_a_restart():
     sensor._restore(State(ENTITY_ID, "0", {"rooms": rooms}))
     assert sensor._cooling == {"living": "schedule"}
     assert sensor._comfort == {"living": (18.0, 0.0), "hall": (18.0, 1.0)}
+    # Readings taken while the room is still starting up end nothing: on 25 Nov the Study's
+    # first cycle after a restart read 17.7 against 17.6 before its real 18.3 against 17.7.
+    starting = SimpleNamespace(data=reading(18.0, 18.6, 18.5, state="no_data"))
+    assert sensor._cooling_now("living", starting) == "schedule"
+    assert sensor._comfort["living"] == (18.0, 0.0)
     # Still warm after the restart: still cooling. A room without data keeps its mark.
     living = SimpleNamespace(data=reading(18.0, 19.4, 18.5))
     assert sensor._cooling_now("living", living) == "schedule"
