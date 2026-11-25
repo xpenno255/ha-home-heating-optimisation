@@ -38,7 +38,8 @@ def cooling_step(mark, last, d):
     ``mark`` is why the room's comfort target came down while the room was warmer than it
     (``away`` or ``schedule``), or None; ``last`` is the comfort target and away setback
     seen on the cycle before. The mark goes when the room has cooled, when the target
-    goes back up, and when a pre-heat takes the room over. A room first seen with the
+    goes back up, and when a pre-heat takes the room over; a cycle without a room
+    reading (a sensor not yet heard after a restart) leaves it alone. A room first seen with the
     away setback already on (nothing remembered from before a restart) is taken to be
     cooling to it.
     """
@@ -55,7 +56,9 @@ def cooling_step(mark, last, d):
         elif change >= COOLING_DROP_K:
             mark = None
     air, target = d.air_temp, d.air_setpoint
-    if mark and (d.preheating or air is None or target is None or air - target < COOLING_DONE_K):
+    # Only a reading can show the room has cooled: without one the mark stands.
+    cooled = air is not None and target is not None and air - target < COOLING_DONE_K
+    if mark and (d.preheating or cooled):
         mark = None
     return mark, (comfort, away)
 

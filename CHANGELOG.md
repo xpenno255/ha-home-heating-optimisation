@@ -2,6 +2,11 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.34.1 - a cooling mark is not lost while a room sensor is silent
+
+- Rooms card: a room marked as cooling to a lowered target keeps the mark through a cycle without a room reading. Only a reading within 0.15 K of the target, the target going back up or a pre-heat ends it.
+- Why: on the restart into 0.34.0 the Bedroom, whose room sensor is a Zigbee one that is heard a little after Home Assistant starts, lost its mark on the first cycle and read "0.8° above" in orange for the rest of the away spell, while the seven other warm rooms correctly read "to cool".
+
 ## 0.34.0 - the rooms card tells cooling and spreading from an overshoot; back at work brings the away setback back
 
 - **Rooms card: over the target is not always an overshoot.** A room is shown orange ("above") only when the heating put it there. Two other cases are now grey:
