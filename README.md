@@ -144,7 +144,7 @@ The integration serves a dashboard card showing every room at once: room tempera
 type: custom:hho-rooms-card
 # optional:
 # title: Heating
-# columns: 3        # otherwise follows the card width: 2 from 340 px, 3 from 760 px
+# columns: 3        # otherwise follows the card width: 2 from 300 px, 3 from 760 px
 # tolerance: 0.15   # °C either side of target that counts as on target
 # order: [Kitchen, Living Room, Hall]   # display order; others follow
 # hot_water: false   # hide the hot water tile

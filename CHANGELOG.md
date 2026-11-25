@@ -2,6 +2,12 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.34.4 - the rooms card says "above · cooling", and two columns on narrower phones
+
+- Rooms card: the grey chip for a room cooling to a lowered target now reads "0.9° above · cooling" instead of "0.9° to cool", and the one for heat spreading "0.4° above · spreading". "To cool" was read as "too cool", as if the room were cold.
+- Two columns now start at a card width of 300 px (was 340 px). The dashboard that prompted 0.34.2's change gives the card a little under 340 px on the phone it is viewed on, so it still showed one room per row.
+- Card only: no restart is needed for it, a reload of the dashboard is enough.
+
 ## 0.34.3 - a cooling mark is not ended by a room's start-up readings
 
 - Rooms card: while a room is still starting up after a restart (state `no_data`), its readings neither end a cooling mark nor start one.
