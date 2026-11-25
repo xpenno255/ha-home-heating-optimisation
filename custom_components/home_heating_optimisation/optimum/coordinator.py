@@ -23,7 +23,7 @@ from homeassistant.util import dt as dt_util
 
 from ..analytics.const import DEFAULT_TOLERANCE
 from .forecast import REFRESH, Forecast, parse_forecast
-from .learning import RoomFit, fit_all
+from .learning import KEEP_EVENTS, RoomFit, dedup_events, fit_all
 from .model import (
     RoomModel,
     StartParams,
@@ -34,15 +34,18 @@ from .model import (
 )
 from .policy import optimum_config
 from .preheat import (
+    CAPTURE_WINDOW,
     CHARGE_RANGE,
     MAX_CHARGES,
     PreheatPlan,
     avoid_charge,
     charge_length,
     dhw_wait_deadline,
+    finalise_capture,
     lead_error_minutes,
     learn_lead,
     next_dhw_on,
+    note_report,
 )
 from .preheat_policy import preheat_config
 from .scoring import rolling, score_start
@@ -63,6 +66,13 @@ MIN_STEP_K = 0.25
 OFFSET_MIN, OFFSET_MAX = -1.0, 2.0
 # A pre-heat is scored this long after its switchpoint, so overshoot after arrival counts.
 PREHEAT_SCORE_AFTER = timedelta(minutes=60)
+# A room reading is not planned from unless its sensor was physically heard from within
+# this long: its value changed, another value on its device changed, or its radio
+# reports having heard it (see the room controller's ``_air_evidence``). A state merely
+# written again proves nothing. Without that evidence no pre-heat is planned or begun.
+MAX_SOURCE_AGE = timedelta(minutes=45)
+# How many scored pre-heats are remembered, so that none is learnt from twice.
+MAX_SCORED_KEYS = 100
 MAX_SAMPLES = 400
 MAX_SCORES = 30
 CALL_TIMEOUT = 30.0
@@ -83,7 +93,17 @@ class Optimum:
         self.preheat_last = {}  # room id -> summary of its last scored pre-heat
         # "room id|HH:MM" (local switch time) -> extra lead in minutes learnt from arrivals
         self.lead_bias = {}
+        # "room id|plan key" of every pre-heat already scored
+        self.scored_keys = []
+        # Stored events held duplicates when loaded: the fits shown predate the clean-up
+        # until the next learning pass has rebuilt them.
+        self.refit_pending = False
+        # room id -> (plan key, reason) while a due pre-heat waits for a usable reading
+        self.waiting_plans = {}
         self.finishing = {}  # room id -> started plan past its switchpoint, awaiting its score
+        # room id -> older ones still awaiting theirs, oldest first: a room with warm-ups
+        # less than an hour apart has more than one waiting at a time.
+        self.earlier = {}
         self.dhw_charges = []  # minutes of recent DHW charges, oldest first
         self._dhw_since = None
         self._dirty = False
@@ -125,11 +145,17 @@ class Optimum:
                     self.fits[room_id] = RoomFit(
                         **{**raw, "model": RoomModel(**model) if model else None}
                     )
-                self.events = {
+                stored = {
                     k: [e for e in v if isinstance(e, dict)]
                     for k, v in (data.get("events") or {}).items()
                     if isinstance(v, list)
                 }
+                self.events = {k: dedup_events(v)[-KEEP_EVENTS:] for k, v in stored.items()}
+                self.refit_pending = any(len(self.events[k]) != len(v) for k, v in stored.items())
+                if self.refit_pending:
+                    # The stored fits were built with the duplicates in: rebuild them at
+                    # the next step rather than when the hourly pass comes round.
+                    self.learned_at = None
                 self._load_preheat(data)
         except Exception:  # noqa: BLE001 - a bad store only costs the learned models
             LOGGER.warning("Optimum store unreadable; learning again", exc_info=True)
@@ -152,6 +178,32 @@ class Optimum:
             for k, v in (data.get("lead_bias") or {}).items()
             if isinstance(v, (int, float))
         }
+        for room_id, raw in (data.get("finishing") or {}).items():
+            try:
+                self.finishing[room_id] = PreheatPlan.from_dict(raw)
+            except Exception:  # noqa: BLE001 - one bad plan only costs that room's score
+                LOGGER.debug("Optimum finishing plan for %s unreadable", room_id)
+        for room_id, raws in (data.get("earlier") or {}).items():
+            for raw in raws if isinstance(raws, list) else ():
+                try:
+                    self.earlier.setdefault(room_id, []).append(PreheatPlan.from_dict(raw))
+                except Exception:  # noqa: BLE001
+                    LOGGER.debug("Optimum earlier plan for %s unreadable", room_id)
+        self.scored_keys = [str(k) for k in (data.get("scored_keys") or [])][-MAX_SCORED_KEYS:]
+        # A pre-heat that was running when this start happened, and whose switchpoint
+        # temperature had not yet been captured, was interrupted: it is still reported,
+        # but it teaches nothing. One captured before the start keeps its capture.
+        # So was one whose planned start had already passed: it may have begun just
+        # before the restart, in the moments before that was saved.
+        now = dt_util.utcnow()
+
+        def restored(plan):
+            cut = plan.capture is None if plan.started else plan.start_at <= now
+            return replace(plan, interrupted=True) if cut and not plan.interrupted else plan
+
+        self.plans = {k: restored(v) for k, v in self.plans.items()}
+        self.finishing = {k: restored(v) for k, v in self.finishing.items()}
+        self.earlier = {k: [restored(v) for v in plans] for k, plans in self.earlier.items()}
 
     def start(self):
         if not self.cfg["enabled"]:
@@ -174,22 +226,34 @@ class Optimum:
         if self._task is None or self._task.done():
             self._task = self.hass.async_create_task(self.step(), "hho_optimum")
 
+    def _document(self):
+        return {
+            "schema": SCHEMA,
+            "scores": self.scores,
+            "fits": {k: asdict(v) for k, v in self.fits.items()},
+            "events": self.events,
+            "plans": {k: v.to_dict() for k, v in self.plans.items()},
+            "dhw_charges": self.dhw_charges,
+            "preheat_last": self.preheat_last,
+            # What arrivals have taught and which pre-heats it came from go in one
+            # document, so neither can be saved without the other.
+            "lead_bias": self.lead_bias,
+            "finishing": {k: v.to_dict() for k, v in self.finishing.items()},
+            "earlier": {k: [v.to_dict() for v in plans] for k, plans in self.earlier.items()},
+            "scored_keys": self.scored_keys[-MAX_SCORED_KEYS:],
+        }
+
     async def _save(self):
         try:
-            await self._store.async_save(
-                {
-                    "schema": SCHEMA,
-                    "scores": self.scores,
-                    "fits": {k: asdict(v) for k, v in self.fits.items()},
-                    "events": self.events,
-                    "plans": {k: v.to_dict() for k, v in self.plans.items()},
-                    "dhw_charges": self.dhw_charges,
-                    "preheat_last": self.preheat_last,
-                    "lead_bias": self.lead_bias,
-                }
-            )
+            await self._store.async_save(self._document())
         except Exception:  # noqa: BLE001
             LOGGER.warning("Optimum store save failed", exc_info=True)
+
+    def _save_soon(self):
+        """Save without waiting for the next step: a pre-heat's start or hold must not be
+        lost to a restart in the minutes before it."""
+        self._dirty = False
+        self.hass.async_create_task(self._save(), "home_heating_optimisation optimum save")
 
     # -- inputs ------------------------------------------------------------
 
@@ -201,19 +265,80 @@ class Optimum:
         rooms = self.heating.config.get("rooms") or []
         return next((r for r in rooms if r.get("id") == room_id), None)
 
-    def _read(self, room_id):
-        """(zone temperature, zone setpoint) as the analytics observe them."""
+    def _observation(self, room_id, now=None):
+        """The room's air reading as an observation, or None when there is none to use.
+
+        For a controlled room this is the reading its controller accepted this cycle, with
+        the controller's own judgement of it, so the planner never re-reads a sensor the
+        controller has set aside (a stale value restored after a restart, say). A room
+        without a controller is read from its mapped sensor, or its thermostat.
+
+        ``value`` and ``source``; ``qualified`` and ``quality`` (whether it may teach
+        anything, and if not why); ``changed_at`` (when the value last changed: the time
+        it counts as evidence of the temperature from); ``evidence``, ``evidence_at`` and
+        ``evidence_minutes`` (the latest sign the sensor was physically heard from, what
+        it was and how long ago; None when there is none), which the planning limit
+        applies to; ``reported_at`` (the source's last write, which proves nothing).
+        """
+        now = now or dt_util.utcnow()
+        controls = getattr(self.heating, "controls", None)
+        c = (getattr(controls, "rooms", None) or {}).get(room_id)
+        d = getattr(c, "air_observed", None) or getattr(c, "data", None)
+        if d is not None and getattr(d, "air_quality", None) is not None:
+            value, source = d.air_temp, d.air_temp_source
+            reported, changed = d.air_reported_at, d.air_changed_at
+            qualified, quality = d.air_qualified, d.air_quality
+            evidence_at, evidence = d.air_evidence_at, d.air_evidence
+        else:
+            room = self._room_config(room_id)
+            if room is None:
+                return None
+            source = room.get("air_sensor") or room["climate"]
+            state = self.hass.states.get(source)
+            if state is None:
+                return None
+            own = bool(room.get("air_sensor"))
+            value = _number(state.state if own else state.attributes.get("current_temperature"))
+            reported = getattr(state, "last_reported", None) or state.last_updated
+            changed = state.last_changed if own else None
+            qualified, quality = value is not None and own, "ok" if own else "fallback"
+            evidence_at, evidence = changed, "value change" if own else "none"
+        if value is None or reported is None:
+            return None
+        return {
+            "value": value,
+            "source": source,
+            "qualified": bool(qualified),
+            "quality": quality,
+            "reported_at": reported,
+            "changed_at": changed,
+            "evidence": evidence,
+            "evidence_at": evidence_at,
+            # The controller has already refused evidence dated after its own cycle; a
+            # cycle that ran since ``now`` was taken is zero minutes old, not negative.
+            "evidence_minutes": None
+            if evidence_at is None
+            else max(0.0, round((now - evidence_at).total_seconds() / 60, 1)),
+        }
+
+    def _read(self, room_id, now=None):
+        """(room temperature, zone setpoint) for planning.
+
+        The temperature is None when the room has no reading, or its sensor has not been
+        physically heard from within ``MAX_SOURCE_AGE``: a number from a sensor that may
+        have gone quiet is not where the room is now. With no temperature no pre-heat is
+        planned, moved or begun, and the room follows its ordinary schedule.
+        """
         room = self._room_config(room_id)
         if room is None:
             return None, None
         climate = self.hass.states.get(room["climate"])
         setpoint = _number(climate.attributes.get("temperature")) if climate else None
-        if room.get("air_sensor"):
-            state = self.hass.states.get(room["air_sensor"])
-            temp = _number(state.state) if state else None
-        else:
-            temp = _number(climate.attributes.get("current_temperature")) if climate else None
-        return temp, setpoint
+        obs = self._observation(room_id, now)
+        age = obs["evidence_minutes"] if obs else None
+        if age is None or age > MAX_SOURCE_AGE.total_seconds() / 60:
+            return None, setpoint
+        return obs["value"], setpoint
 
     def _outdoor_now(self, controls):
         for c in controls.rooms.values():
@@ -354,11 +479,12 @@ class Optimum:
         self.fits, self.events = await self.hass.async_add_executor_job(
             fit_all, observations, zones, params, self.events, now.timestamp()
         )
+        self.refit_pending = False
         await self._save()
 
     def _room(self, now, room_id, c, outdoor_at, source, current):
         ts = now.timestamp()
-        temp, setpoint = self._read(room_id)
+        temp, setpoint = self._read(room_id, now)
         sample = [ts, temp, setpoint, current]
         records = self.records.setdefault(room_id, [])
         changed = False
@@ -371,7 +497,7 @@ class Optimum:
         fit = self.fits.get(room_id)
         view = {"start": None, "stop": None}
         self.latest[room_id] = view
-        self._retire_plan(now, room_id)
+        changed |= self._retire_plan(now, room_id, temp)
         switch = self._next_switch(c, now)
         view["warmup"] = self._next_warmup(c, now, switch)
         if fit is not None and temp is not None and switch is not None:
@@ -630,6 +756,9 @@ class Optimum:
             latest_start=switch_at
             - timedelta(minutes=pred.boost_lead_minutes or pred.lead_minutes),
             planned_journaled=same.planned_journaled if same else False,
+            # What has already happened to this pre-heat stays with it as its plan moves.
+            dhw_held=same.dhw_held if same else False,
+            interrupted=same.interrupted if same else False,
         )
         if not plan.planned_journaled:
             plan = replace(plan, planned_journaled=True)
@@ -638,37 +767,92 @@ class Optimum:
             self._dirty = True
         self.plans[room_id] = plan
 
-    def _retire_plan(self, now, room_id):
-        """Past its switchpoint a started plan waits for its score; others are dropped."""
+    def _retire_plan(self, now, room_id, temp=None):
+        """Past its switchpoint a started plan waits for its score; others are dropped.
+
+        The room may still have an earlier pre-heat waiting for its own score (warm-ups
+        an hour or less apart): that one is not displaced. It is scored now if its hour
+        is up, and otherwise kept alongside until it is. True when anything was scored.
+        """
         plan = self.plans.get(room_id)
         if plan is None or now < plan.switch_at:
-            return
+            return False
         del self.plans[room_id]
         self._dirty = True
+        waited = self.waiting_plans.pop(room_id, None)
         if plan.started:
+            older = self.finishing.get(room_id)
+            if older is not None and older.key != plan.key:
+                self.earlier.setdefault(room_id, []).append(older)
             self.finishing[room_id] = plan
+            return self._score_due(now, room_id, temp)
+        if waited is not None and waited[0] == plan.key:
+            # It was due and never began: say so, rather than leave no trace of it.
+            data = {**self._plan_data(plan), "outcome": "not_started", "reason": waited[1]}
+            self.preheat_last[room_id] = data
+            self._preheat_event("not_started", room_id, data)
+        return False
+
+    def _track(self, now, room_id, plan, temp, obs):
+        """``plan`` with this cycle's arrival, peak and switchpoint capture taken in."""
+        updated = plan
+        if temp is not None:
+            if plan.peak_temp is None or temp > plan.peak_temp:
+                updated = replace(updated, peak_temp=temp)
+            if plan.arrived_at is None and temp >= plan.goal - self._tolerance():
+                updated = replace(updated, arrived_at=now)
+        # Only a qualified reading is filed, and under the time its value changed: the
+        # same value seen on a later tick, or written again by its integration, is the
+        # same evidence, not more of it.
+        if obs is not None and obs["qualified"] and obs["changed_at"] is not None:
+            updated = note_report(updated, obs["changed_at"], obs["value"])
+        if updated.capture is None and now >= plan.switch_at + CAPTURE_WINDOW:
+            updated = finalise_capture(updated)
+        if updated.arrived_at is not None and plan.arrived_at is None:
+            self._preheat_event("arrived", room_id, self._arrival_data(updated, temp))
+        return updated
+
+    def _score_due(self, now, room_id, temp):
+        """Score every finished pre-heat of the room whose hour is up, oldest first."""
+        scored = False
+        waiting = [*self.earlier.get(room_id, []), self.finishing.get(room_id)]
+        for done in waiting:
+            if done is None or now < done.switch_at + PREHEAT_SCORE_AFTER:
+                continue
+            if self.finishing.get(room_id) is done:
+                del self.finishing[room_id]
+            else:
+                self.earlier[room_id] = [p for p in self.earlier[room_id] if p is not done]
+            scored = True
+            # Scored once: a copy of a pre-heat already scored (an older save, say) is
+            # dropped without a second score, a second lesson or a second journal entry.
+            if f"{room_id}|{done.key}" not in self.scored_keys:
+                data = self._arrival_data(done, temp)
+                data.update(self._learn_lead(room_id, done))
+                self.preheat_last[room_id] = data
+                self._preheat_event("scored", room_id, data)
+        if not self.earlier.get(room_id):
+            self.earlier.pop(room_id, None)
+        return scored
 
     def _advance_plan(self, now, room_id, c, temp, records, view):
-        """Track arrival and peak of a started plan, flag HHO's command, score old ones."""
-        tol = self._tolerance()
+        """Track arrival, peak and the switchpoint capture of every started plan, flag
+        HHO's command, score the ones whose hour is up."""
         changed = False
-        for plan in (self.finishing.get(room_id), self.plans.get(room_id)):
-            if plan is None or not plan.started or temp is None:
+        obs = self._observation(room_id, now)
+        older = self.earlier.get(room_id)
+        if older:
+            tracked = [self._track(now, room_id, plan, temp, obs) for plan in older]
+            changed |= tracked != older
+            self.earlier[room_id] = tracked
+        for store in (self.finishing, self.plans):
+            plan = store.get(room_id)
+            if plan is None or not plan.started:
                 continue
-            fields = {}
-            if plan.peak_temp is None or temp > plan.peak_temp:
-                fields["peak_temp"] = temp
-            if plan.arrived_at is None and temp >= plan.goal - tol:
-                fields["arrived_at"] = now
-            if plan.switch_temp is None and now >= plan.switch_at:
-                fields["switch_temp"] = temp
-            if fields:
-                updated = replace(plan, **fields)
-                store = self.plans if self.plans.get(room_id) is plan else self.finishing
+            updated = self._track(now, room_id, plan, temp, obs)
+            if updated != plan:
                 store[room_id] = updated
                 changed = True
-                if "arrived_at" in fields:
-                    self._preheat_event("arrived", room_id, self._arrival_data(updated, temp))
         live = self.plans.get(room_id)
         if live is not None:
             view["plan"] = live
@@ -677,14 +861,7 @@ class Optimum:
                 for rec in records:
                     if rec["key"] == live.key and not rec.get("hho_commanded"):
                         rec["hho_commanded"] = live.begin.timestamp()
-        done = self.finishing.get(room_id)
-        if done is not None and now >= done.switch_at + PREHEAT_SCORE_AFTER:
-            del self.finishing[room_id]
-            data = self._arrival_data(done, temp)
-            data.update(self._learn_lead(room_id, done))
-            self.preheat_last[room_id] = data
-            self._preheat_event("scored", room_id, data)
-            changed = True
+        changed |= self._score_due(now, room_id, temp)
         return changed
 
     def preheat(self, room_id, now=None):
@@ -703,6 +880,11 @@ class Optimum:
         if not plan.started and now >= plan.start_at:
             reason = "planned"
             if self._dhw_blocking():
+                if not plan.dhw_held:
+                    # Remembered from now on: the charge may be over within the minute.
+                    plan = replace(plan, dhw_held=True)
+                    self.plans[room_id] = plan
+                    self._save_soon()
                 # A charge is running: wait for it, but not past the grace after its expected
                 # end, nor past the latest start that still reaches the goal at boost flow.
                 since = self._dhw_since or now
@@ -710,10 +892,23 @@ class Optimum:
                 deadline, reason = dhw_wait_deadline(plan, end)
                 if now < deadline:
                     return plan
-            plan = plan.start(now, self._read(room_id)[0], reason, self.cfg["margin_minutes"])
+            temp = self._read(room_id, now)[0]
+            if temp is None:
+                # The plan was made from a reading that can no longer be vouched for:
+                # it waits, and begins only if the sensor is heard from before the
+                # switchpoint. Otherwise the room follows its schedule.
+                why = "no current reading from the room's sensor"
+                if self.waiting_plans.get(room_id) != (plan.key, why):
+                    self.waiting_plans[room_id] = (plan.key, why)
+                    self._preheat_event(
+                        "waiting", room_id, {**self._plan_data(plan), "reason": why}
+                    )
+                return plan
+            self.waiting_plans.pop(room_id, None)
+            plan = plan.start(now, temp, reason, self.cfg["margin_minutes"])
             self.plans[room_id] = plan
-            self._dirty = True
             self._preheat_event("started", room_id, self._plan_data(plan))
+            self._save_soon()
         return plan
 
     @staticmethod
@@ -727,17 +922,29 @@ class Optimum:
         return float(self.lead_bias.get(self._lead_key(room_id, switch_at), 0.0))
 
     def _learn_lead(self, room_id, plan) -> dict:
-        """Take a share of this arrival's error into the next start; what was learnt."""
+        """Take a share of this arrival's error into the next start; what was learnt.
+
+        Once per pre-heat: its key is remembered with the bias, in the same save, so a
+        restart can neither apply it twice nor lose one that was applied.
+        """
         gain = self.pcfg.get("arrival_gain") or 0.0
-        error = lead_error_minutes(plan)
+        finished = finalise_capture(plan)
+        error = lead_error_minutes(finished)
         key = self._lead_key(room_id, plan.switch_at)
+        scored = f"{room_id}|{plan.key}"
         before = float(self.lead_bias.get(key, 0.0))
-        after = learn_lead(before, error, gain) if self.preheat_mode == "active" else before
+        after = before
+        if scored not in self.scored_keys:
+            if self.preheat_mode == "active":
+                after = learn_lead(before, error, gain)
+            self.scored_keys = [*self.scored_keys, scored][-MAX_SCORED_KEYS:]
+            self._dirty = True
         if after != before:
             self.lead_bias[key] = after
-            self._dirty = True
         return {
-            "switch_temperature": plan.switch_temp,
+            "switch_temperature": finished.switch_temp,
+            "capture": finished.capture,
+            "interrupted": plan.interrupted,
             "lead_error_minutes": error,
             "lead_bias_minutes": after,
         }
@@ -760,6 +967,8 @@ class Optimum:
             "plan_flow": self.pcfg["plan_flow"],
             "plan_factor": plan.plan_factor,
             "lead_bias_minutes": plan.lead_bias_minutes,
+            "interrupted": plan.interrupted,
+            "dhw_held": plan.dhw_held,
             "outcome": "planned" if not plan.started else "started",
         }
 
@@ -776,7 +985,11 @@ class Optimum:
             if plan.peak_temp is None
             else round(max(0.0, plan.peak_temp - plan.goal), 2),
             "temperature": temp,
-            "outcome": "arrived" if arrived is not None else "not_arrived",
+            "outcome": (
+                "interrupted"
+                if plan.interrupted
+                else ("arrived" if arrived is not None else "not_arrived")
+            ),
         }
 
     def _preheat_event(self, event, room_id, data):
@@ -790,7 +1003,8 @@ class Optimum:
         for room_id, c in controls.rooms.items() if controls else ():
             plan = self.plans.get(room_id)
             view = self.latest.get(room_id) or {}
-            temp = self._read(room_id)[0]
+            temp = self._read(room_id, now)[0]
+            obs = self._observation(room_id, now) or {}
             last = self.preheat_last.get(room_id) or {}
             rooms[room_id] = {
                 "name": c.room_name,
@@ -804,7 +1018,24 @@ class Optimum:
                 "expected_temperature": round(plan.expected_at(now), 2)
                 if plan and plan.started
                 else None,
+                # What is planned from (None when the sensor has gone quiet), and the
+                # reading behind it: where it came from, whether it may teach anything,
+                # and how old it is.
                 "temperature": temp,
+                "reading": obs.get("value"),
+                "reading_source": obs.get("source"),
+                "reading_qualified": obs.get("qualified", False),
+                "reading_quality": obs.get("quality", "no reading"),
+                "reading_changed_at": _iso(obs.get("changed_at")),
+                "reading_evidence": obs.get("evidence", "none"),
+                "reading_evidence_minutes": obs.get("evidence_minutes"),
+                "waiting": (self.waiting_plans.get(room_id) or (None, None))[1],
+                "interrupted": plan.interrupted if plan else False,
+                "lead_bias_minutes": self._lead_bias(room_id, plan.switch_at) if plan else None,
+                "last_outcome": last.get("outcome"),
+                "last_capture": last.get("capture"),
+                "last_lead_error_minutes": last.get("lead_error_minutes"),
+                "last_lead_bias_minutes": last.get("lead_bias_minutes"),
                 "last_arrival_minutes_vs_switch": last.get("arrival_minutes_vs_switch"),
                 "last_overshoot_k": last.get("overshoot_k"),
                 "last_switchpoint": last.get("switchpoint"),
@@ -813,6 +1044,7 @@ class Optimum:
             "plan_flow": self.pcfg["plan_flow"],
             "max_lead_minutes": self.pcfg["max_lead_minutes"],
             "dhw_charge_minutes": charge_length(self.dhw_charges),
+            "max_source_age_minutes": MAX_SOURCE_AGE.total_seconds() / 60,
             "rooms": rooms,
         }
 
@@ -867,6 +1099,7 @@ class Optimum:
         attrs = {
             "status": fit.status if fit else "learning",
             "confidence": fit.confidence if fit else "none",
+            "refit_pending": self.refit_pending and fit is not None,
             "events": fit.events if fit else 0,
             "minutes_per_k": round(model.minutes_per_k, 2) if model else None,
             "outdoor_model": model.outdoor_model if model else False,
@@ -939,6 +1172,14 @@ class Optimum:
             "forecast_entity": self.cfg["forecast_entity"],
             "forecast_fetched_at": _iso(self.forecast.fetched_at),
             "waiting": self.waiting,
+            # True while the fits shown were built before duplicate warm-ups were removed
+            # from the stored events; the next learning pass rebuilds them.
+            "refit_pending": self.refit_pending,
+            "learned_at": _iso(self.learned_at),
+            # Extra lead learnt from arrivals, by room and switch time, and how many
+            # pre-heats have been scored into it.
+            "lead_bias": dict(self.lead_bias),
+            "scored_preheats": len(self.scored_keys),
             "scores": rolling(self.scores),
             "rooms": rooms,
             "last_error": self.last_error,

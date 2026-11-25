@@ -27,6 +27,17 @@ def _at(ts):
     return datetime.fromtimestamp(ts, timezone.utc) if ts is not None else None
 
 
+def _slot_out(slot):
+    return [slot[0].timestamp(), slot[1]] if slot else None
+
+
+def _slot_in(raw):
+    try:
+        return (_at(float(raw[0])), float(raw[1]))
+    except TypeError, ValueError, IndexError:
+        return None
+
+
 @dataclass(frozen=True)
 class PreheatPlan:
     """One room's planned warm-up to one upward switchpoint.
@@ -58,8 +69,19 @@ class PreheatPlan:
     latest_start: datetime | None = None
     dhw_wait_minutes: float = 0.0
     start_reason: str = ""
-    # The room's temperature at the switchpoint: what the next start learns from.
+    # The room's temperature at the switchpoint, as far as it could be established: what
+    # the next start learns from. None until the capture is finalised, and when it failed.
     switch_temp: float | None = None
+    # The last qualified report at or before the switchpoint and the first after it, each
+    # ``(report time, value)``; the finalised capture (method, times, values, gap, reason).
+    obs_before: tuple | None = None
+    obs_after: tuple | None = None
+    capture: dict | None = None
+    # A restart or reload between the start and the capture: the outcome is still
+    # reported, but it teaches nothing.
+    interrupted: bool = False
+    # A hot water charge was running when this pre-heat was due to begin, however briefly.
+    dhw_held: bool = False
     # Minutes of lead added (or, negative, taken off) from earlier arrivals at this time.
     lead_bias_minutes: float = 0.0
 
@@ -107,6 +129,11 @@ class PreheatPlan:
             "start_reason": self.start_reason,
             "switch_temp": self.switch_temp,
             "lead_bias_minutes": self.lead_bias_minutes,
+            "obs_before": _slot_out(self.obs_before),
+            "obs_after": _slot_out(self.obs_after),
+            "capture": self.capture,
+            "interrupted": self.interrupted,
+            "dhw_held": self.dhw_held,
         }
 
     @classmethod
@@ -134,6 +161,11 @@ class PreheatPlan:
             start_reason=str(raw.get("start_reason") or ""),
             switch_temp=raw.get("switch_temp"),
             lead_bias_minutes=float(raw.get("lead_bias_minutes") or 0.0),
+            obs_before=_slot_in(raw.get("obs_before")),
+            obs_after=_slot_in(raw.get("obs_after")),
+            capture=raw.get("capture") if isinstance(raw.get("capture"), dict) else None,
+            interrupted=bool(raw.get("interrupted")),
+            dhw_held=bool(raw.get("dhw_held")),
         )
 
     def start(self, now, temp, reason="planned", margin_minutes=0):
@@ -158,23 +190,116 @@ class PreheatPlan:
 
 
 # Learning the lead from how a pre-heat turned out. A room within this much of its goal at
-# the switchpoint was on time; otherwise the shortfall is turned into minutes at the pace
-# the plan climbed at. The extra lead stays within these limits, and one arrival never
-# moves it by more than LEAD_STEP_MAX.
-ARRIVAL_DEADBAND_K = 0.1
+# the switchpoint was on time (0.1 K sensor steps and a reading up to ten minutes from the
+# switchpoint leave about that much doubt); otherwise the shortfall is turned into minutes
+# at the pace the plan climbed at. The extra lead stays within these limits, and one
+# arrival never moves it by more than LEAD_STEP_MAX.
+ARRIVAL_DEADBAND_K = 0.2
 LEAD_BIAS_MIN = -30.0
 LEAD_BIAS_MAX = 60.0
 LEAD_STEP_MAX = 20.0
+
+
+# Capturing the temperature at the switchpoint. Reports are kept only inside this window
+# either side of it, and the capture is finalised once the window has closed. Two reports
+# that bracket the switchpoint no further apart than BRACKET_SPAN are interpolated;
+# failing that the nearest report counts if it is within NEAREST of the switchpoint.
+CAPTURE_WINDOW = timedelta(minutes=15)
+BRACKET_SPAN = timedelta(minutes=25)
+NEAREST = timedelta(minutes=10)
+
+
+def note_report(plan, reported_at, value):
+    """``plan`` with a qualified report filed in its slot, if it belongs in one.
+
+    The slots are the last report at or before the switchpoint and the first after it,
+    both inside the capture window. A report already filed, one outside the window, and
+    anything once the capture is final or the plan interrupted change nothing.
+    """
+    if plan.capture is not None or plan.interrupted or reported_at is None or value is None:
+        return plan
+    if abs(reported_at - plan.switch_at) > CAPTURE_WINDOW:
+        return plan
+    if reported_at <= plan.switch_at:
+        if plan.obs_before is None or reported_at > plan.obs_before[0]:
+            return replace(plan, obs_before=(reported_at, float(value)))
+    elif plan.obs_after is None or reported_at < plan.obs_after[0]:
+        return replace(plan, obs_after=(reported_at, float(value)))
+    return plan
+
+
+def finalise_capture(plan):
+    """``plan`` with its capture settled from the reports in its two slots.
+
+    Interpolated between two reports that bracket the switchpoint within ``BRACKET_SPAN``;
+    else the nearest report within ``NEAREST``; else nothing, with the reason. Never
+    extrapolated. The record keeps the method, both reports and the gap between them (or
+    from the one report to the switchpoint), in minutes.
+    """
+    if plan.capture is not None:
+        return plan
+    before, after, switch = plan.obs_before, plan.obs_after, plan.switch_at
+    record = {
+        "method": None,
+        "value": None,
+        "before": [before[0].isoformat(), before[1]] if before else None,
+        "after": [after[0].isoformat(), after[1]] if after else None,
+        "gap_minutes": None,
+        "reason": None,
+    }
+    if plan.interrupted:
+        record["reason"] = "restart or reload during the pre-heat"
+    elif before and after and after[0] - before[0] <= BRACKET_SPAN:
+        span = (after[0] - before[0]).total_seconds()
+        share = (switch - before[0]).total_seconds() / span if span > 0 else 0.0
+        record["method"] = "interpolated"
+        record["value"] = round(before[1] + (after[1] - before[1]) * share, 2)
+        record["gap_minutes"] = round(span / 60, 1)
+    else:
+        near = [slot for slot in (before, after) if slot and abs(slot[0] - switch) <= NEAREST]
+        if near:
+            slot = min(near, key=lambda item: abs(item[0] - switch))
+            record["method"] = "nearest"
+            record["value"] = slot[1]
+            record["gap_minutes"] = round(abs(slot[0] - switch).total_seconds() / 60, 1)
+        else:
+            record["reason"] = "no qualified report within 10 minutes of the switchpoint"
+    return replace(plan, capture=record, switch_temp=record["value"])
+
+
+# A start within this of its planned minute is the control cycle catching up: of the 21
+# starts journalled 18 to 21 Nov 2026, 13 began 0.1 to 0.7 minutes after their planned
+# time with nothing in the way. Later than this, for whatever reason, the room did not
+# get the start it was planned.
+LATE_START_MINUTES = 2.0
+
+
+def held_back(plan) -> bool:
+    """Whether this pre-heat did not get the start it was planned.
+
+    A hot water charge was running when it was due (``dhw_held``, set at the time and
+    kept, so a charge that ended a minute later still counts), it began while one was
+    running (the start reasons other than ``planned``), or it began late for any other
+    reason. How the room then arrived says nothing about the plan.
+    """
+    return (
+        plan.dhw_held
+        or plan.start_reason not in ("", "planned")
+        or plan.dhw_wait_minutes > LATE_START_MINUTES
+    )
 
 
 def lead_error_minutes(plan) -> float | None:
     """Minutes the start was out by, from the room's temperature at the switchpoint.
 
     Positive: it was short, so it should have started that much earlier. Negative: it was
-    over its goal. None when there is nothing fair to learn from: no reading, a plan that
-    never started or was held back by hot water, or a room that had no climb to make.
+    over its goal. None when there is nothing fair to learn from: no captured reading, an
+    interrupted pre-heat, a plan that never started or was held back by hot water, or a
+    room that had no climb to make.
     """
-    if not plan.started or plan.switch_temp is None or plan.dhw_wait_minutes > 0:
+    if plan.interrupted or not plan.capture or plan.capture.get("method") is None:
+        return None
+    if not plan.started or plan.switch_temp is None or held_back(plan):
         return None
     rise = plan.goal - plan.start_temp
     if rise <= 0 or plan.climb_minutes <= 0:

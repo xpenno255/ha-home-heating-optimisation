@@ -2,6 +2,16 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.34.2 - arrival learning learns when it should, and only from readings it can trust
+
+- **Hot water no longer cancels nearly every lesson.** In 0.33.0 a pre-heat taught nothing whenever any hot-water wait was recorded, and a start latched on the control cycle after its planned minute records a wait of 0.1-0.7 minutes. Sixteen of the 21 starts journalled on 18-21 Nov carried such a wait; the three really held by hot water waited 2.3, 7.3 and 16.1 minutes. A start now counts as held back only when a hot water charge was running when it was due (`dhw_held`, recorded at the time) or it began more than 2 minutes late.
+- **The temperature at the switchpoint is captured, not sampled.** The arrival is the room reading whose value changed nearest the switchpoint, taken from a bounded window around it, and each pre-heat is finalised once, 15 minutes after its switchpoint. Back-to-back switchpoints in one room are finished and scored independently.
+- **Each pre-heat is learnt from exactly once.** Scored pre-heats are remembered over a restart (`scored_keys`), starts and hot-water holds are saved at once, and a pre-heat that was running across a restart before its arrival was captured is marked `interrupted`: reported, but not learnt from.
+- **Warm-up events are deduplicated** before the 60-event limit is applied, on load and on merge; a store that shrinks is refitted.
+- **A pre-heat needs a current room reading to begin.** A reading counts as current when there is physical evidence from the sensor's device within 45 minutes: the value changed, another measurement on the same device changed (humidity, temperature, pressure, illuminance, CO2), or the device reports when it was last heard on the radio. A state merely written again, and anything stamped at or before a restart, does not count. Without one the pre-heat waits (journal `waiting`), and is reported `not_started` if nothing arrives before the switchpoint. Rooms publish `air_evidence_at` and `air_evidence`; the room control path is unchanged.
+- Within 0.2 K of the goal now counts as on time (was 0.1 K).
+- Why: the planner added in 0.33.0 hardly ever learnt, and when it did it could learn from a stale reading or from the same morning twice.
+
 ## 0.34.1 - a cooling mark is not lost while a room sensor is silent
 
 - Rooms card: a room marked as cooling to a lowered target keeps the mark through a cycle without a room reading. Only a reading within 0.15 K of the target, the target going back up or a pre-heat ends it.
