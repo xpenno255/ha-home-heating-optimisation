@@ -7,7 +7,9 @@ the house has been empty for ``deep_after_minutes``. It ends the moment anyone i
 
 Phones report too few fixes on the way home to see a return coming, so the one usable
 early sign is a person leaving a work zone: the setback then lifts at once so the house
-can recover, and comes back if nobody has arrived after ``resume_minutes``.
+can recover, and comes back if nobody has arrived after ``resume_minutes``. It also comes
+back, at the depth it had reached, once everyone who left work has been back in a work
+zone for ``BACK_AT_WORK_MINUTES``: they went out for lunch, not home.
 
 Visitor mode suppresses it: guests are in the house while the owners are out.
 """
@@ -42,6 +44,9 @@ LIMITS = {
     "resume_minutes": (15, 240),
 }
 INTEGERS = ("start_minutes", "deep_after_minutes", "resume_minutes")
+# Back in a work zone this long after leaving it: not on the way home after all. Long
+# enough that a phone flickering across the edge of the zone does not swing every target.
+BACK_AT_WORK_MINUTES = 5
 HOME, WORK, OUT = "home", "work", "out"
 UNKNOWN = (None, "", "unknown", "unavailable")
 
@@ -106,15 +111,22 @@ class AwayParams:
     deep_after_minutes: float = 120
     deep_k: float = 1.0
     resume_minutes: float = 90
+    back_at_work_minutes: float = BACK_AT_WORK_MINUTES
 
 
 @dataclass(frozen=True)
 class AwayState:
-    """Since when the house has been empty, a lift for someone heading home, who was at work."""
+    """Since when the house has been empty, a lift for someone heading home, who was at work.
+
+    ``left_work`` names those whose leaving a work zone lifted the setback, and
+    ``back_at_work_since`` is when all of them were last seen back in one.
+    """
 
     away_since: datetime | None = None
     heading_home_since: datetime | None = None
     at_work: tuple[str, ...] = ()
+    left_work: tuple[str, ...] = ()
+    back_at_work_since: datetime | None = None
 
 
 def away_step(state: AwayState, people, now: datetime, params: AwayParams):
@@ -128,12 +140,22 @@ def away_step(state: AwayState, people, now: datetime, params: AwayParams):
     since = state.away_since or now
     minutes = (now - since).total_seconds() / 60
     at_work = tuple(sorted(name for name, where in people if where == WORK))
-    heading = state.heading_home_since
-    if minutes >= params.start_minutes and any(name not in at_work for name in state.at_work):
-        heading = now
+    heading, left, back = state.heading_home_since, state.left_work, state.back_at_work_since
+    gone = [name for name in state.at_work if name not in at_work]
+    if minutes >= params.start_minutes and gone:
+        heading, left = now, tuple(sorted({*left, *gone}))
     if heading is not None and (now - heading).total_seconds() / 60 >= params.resume_minutes:
         heading = None
-    new = AwayState(since, heading, at_work)
+    if heading is not None and left and all(name in at_work for name in left):
+        # Everyone who left work is back there: once that has lasted, nobody is on the way.
+        back = back or now
+        if (now - back).total_seconds() / 60 >= params.back_at_work_minutes:
+            heading = None
+    else:
+        back = None
+    if heading is None:
+        left, back = (), None
+    new = AwayState(since, heading, at_work, left, back)
     if minutes < params.start_minutes:
         return new, 0.0, "waiting"
     if heading is not None:
@@ -150,6 +172,10 @@ def dump_state(state: AwayState) -> dict:
             state.heading_home_since.isoformat() if state.heading_home_since else None
         ),
         "at_work": list(state.at_work),
+        "left_work": list(state.left_work),
+        "back_at_work_since": (
+            state.back_at_work_since.isoformat() if state.back_at_work_since else None
+        ),
     }
 
 
@@ -157,10 +183,16 @@ def load_state(raw) -> AwayState:
     """The saved state; anything unreadable starts from an occupied house."""
     try:
         times = []
-        for key in ("away_since", "heading_home_since"):
+        for key in ("away_since", "heading_home_since", "back_at_work_since"):
             value = dt_util.parse_datetime(str(raw[key])) if raw.get(key) else None
             times.append(dt_util.as_utc(value) if value is not None else None)
-        return AwayState(times[0], times[1], tuple(str(n) for n in raw.get("at_work") or ()))
+        return AwayState(
+            times[0],
+            times[1],
+            tuple(str(n) for n in raw.get("at_work") or ()),
+            tuple(str(n) for n in raw.get("left_work") or ()),
+            times[2],
+        )
     except Exception:  # noqa: BLE001 - absent or malformed
         return AwayState()
 
@@ -234,6 +266,11 @@ class AwayTracker:
             "heading_home_since": (
                 self._state.heading_home_since.isoformat()
                 if self._state.heading_home_since
+                else None
+            ),
+            "back_at_work_since": (
+                self._state.back_at_work_since.isoformat()
+                if self._state.back_at_work_since
                 else None
             ),
         }

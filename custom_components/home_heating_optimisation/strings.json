@@ -451,7 +451,7 @@
       },
       "away": {
         "title": "Away setback",
-        "description": "Lowers every room's target a little while everyone is out, and restores it the moment anyone is home. Nobody is at home when every person chosen here is somewhere else; a person whose location is unknown counts as at home. Nothing changes for the first minutes of an absence. If someone leaves one of the work zones the setback lifts at once so the house can recover, and returns if nobody has arrived after the resume time. Visitor mode suppresses it. Applies only inside each room's operating window.",
+        "description": "Lowers every room's target a little while everyone is out, and restores it the moment anyone is home. Nobody is at home when every person chosen here is somewhere else; a person whose location is unknown counts as at home. Nothing changes for the first minutes of an absence. If someone leaves one of the work zones the setback lifts at once so the house can recover, and returns if nobody has arrived after the resume time, or five minutes after they are back at work (the setback then continues at the depth it had). Visitor mode suppresses it. Applies only inside each room's operating window.",
         "data": {
           "enabled": "Enabled",
           "people": "People whose absence counts",

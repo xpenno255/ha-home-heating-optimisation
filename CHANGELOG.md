@@ -2,6 +2,18 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.34.0 - the rooms card tells cooling and spreading from an overshoot; back at work brings the away setback back
+
+- **Rooms card: over the target is not always an overshoot.** A room is shown orange ("above") only when the heating put it there. Two other cases are now grey:
+  - *Cooling.* When a room's comfort target is lowered by 0.25 K or more (a schedule step down, the away setback) while the room is warmer than the new target, the tile reads "2.2° to cool" until the room is within 0.15 K of it, the target goes back up, or a pre-heat takes the room over. The tooltip says whether the schedule or the away setback lowered it. The marks are kept over a restart.
+  - *Spreading.* A room over its target while heat spreading holds its valve open reads "0.4° spreading".
+- The Evohome line now shows the heat-spreading lift ("spreading +0.6") whenever it stands in for the overdrive in the target sent to Evohome; before, it showed the overdrive that was not being applied, so the line did not add up.
+- The summary counts cooling and spreading rooms separately, and the top line shows "Away −1.0°" while the away setback is on ("Away heading home" while it is lifted for someone who left work).
+- The overview sensor's rooms carry `spread`, `cooling` (`away`, `schedule` or none), `comfort` (the comfort target) and `away`; `house` carries `away_status` and `away_setback`.
+- Why: the card compares the room with the target HHO is aiming at, which is right, but on 24 Nov the Living room read "2.2° above" at 23:00 and "1.2° above" at midnight only because the schedule had dropped from 20.0 to 18.0 at 22:30; on 25 Nov every room turned further "above" at 08:28 when the away setback lowered the targets. Neither is the heating overshooting.
+- **Away setback: back at work brings it back.** When the setback has lifted because someone left a work zone, it now returns once everyone who left has been back in a work zone for five minutes, at the depth it had reached (the clock for the deeper stage never stopped). Leaving again lifts it again. Until now the lift ran its full `resume_minutes` (90) whatever happened. A lift already running when this version starts keeps the old rule. The report's `away` block has `back_at_work_since`.
+- Why: a walk out of the office at lunchtime heated an empty house at full target for an hour and a half. The phone history shows such exits on both office days checked (23 Nov 12:28-12:36 and 12:50-12:57; 24 Nov 13:17-13:25). Five minutes rather than at once because the same history shows a phone crossing the edge of the zone twice within three minutes.
+
 ## 0.33.0 - a room's say over the flow temperature follows its radiator, and starts learn from arrivals
 
 - **Say over the flow temperature.** The whole house shares one flow temperature, so a room now has a say over it in proportion to its radiator: full say from `flow_say_full_kw` (warm-up options, default 4 kW; 0 gives every room full say), less in proportion below that. This applies to three things: the demand correction is now driven by the most-open valve with each valve counted by its say (boiler data `weighted_demand`) instead of the plain most-open valve; a pre-heating room's lag behind its plan asks for flow by its say; and a room in catch-up raises the flow by its say.
