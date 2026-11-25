@@ -4,8 +4,9 @@
  * carries every room's temperature, target, overdrive or heat-spreading lift, Evohome target,
  * valve demand and pre-heat state. Usage: `type: custom:hho-rooms-card`.
  * A room over its target is an overshoot (orange) only when the heating put it there: one
- * still cooling to a target that was just lowered, or held open by heat spreading, is grey.
- * Rooms sit two abreast from a card width of 340 px (most phones) and three from 760 px;
+ * still cooling to a target that was just lowered, or held open by heat spreading, is grey
+ * ("0.9° above · cooling").
+ * Rooms sit two abreast from a card width of 300 px (phones) and three from 760 px;
  * `columns` fixes the number. Optional `tolerance` sets the on-target band in degrees Celsius (default 0.15), `order` lists
  * room names in display order (others follow), and `hot_water: false` hides the cylinder tile.
  * Tapping a tile opens that room's thermostat (`more_info: false` turns this off).
@@ -85,12 +86,12 @@ ha-card{display:block;overflow:hidden;container:hho / inline-size;color:var(--in
 .pre svg{width:14px;height:14px;flex:none;margin-top:2px;color:var(--pre)}
 .empty{padding:24px;color:var(--muted)}
 /* The dashboard column, not the browser viewport, controls the tile count. */
-@container hho (min-width:340px){.grid{--cols:2}}
+@container hho (min-width:300px){.grid{--cols:2}}
 @container hho (min-width:760px){.grid{--cols:3}.head{flex-direction:row;align-items:center}.summary{margin-left:auto;justify-content:flex-end}}
 @container hho (max-width:429px){.house{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}}
 /* Two tiles side by side on a phone: less padding, and smaller figures in the narrowest tiles. */
 @container hho (max-width:429px){.room{padding:10px 12px}.head{padding:14px 14px 12px}.house{padding:10px 14px}}
-@container hho-room (max-width:170px){.now .v{font-size:27px;letter-spacing:-1px}.tgt .v{font-size:20px}.top h3{font-size:14px}}
+@container hho-room (max-width:170px){.now .v{font-size:27px;letter-spacing:-1px}.tgt .v{font-size:20px}.top h3{font-size:14px}.delta{max-width:100%;white-space:normal;border-radius:10px;padding:2px 7px}}
 /* Keep both temperatures on one baseline; move the chip rather than squeezing them. */
 @container hho-room (max-width:249px){
  .pair{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
@@ -200,7 +201,7 @@ class HhoRoomsCard extends HTMLElement {
     const col = { below: "var(--below)", above: "var(--above)", ok: "var(--ok)" }[st] || "var(--calm)";
     const p = Math.max(0, Math.min(100, 50 + (diff / 1.5) * 50));
     const size = `${Math.abs(diff).toFixed(1)}°`;
-    const delta = !has ? "" : st === "ok" ? "on target" : st === "cooling" ? `${size} to cool` : `${size} ${st}`;
+    const delta = !has ? "" : st === "ok" ? "on target" : st === "cooling" ? `${size} above · cooling` : st === "spreading" ? `${size} above · spreading` : `${size} ${st}`;
     const why = st === "cooling"
       ? (r.cooling === "away"
         ? "Everyone is out, so the target was lowered: the room is cooling to it, not overshooting"
