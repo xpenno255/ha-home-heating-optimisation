@@ -5,11 +5,17 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
 from ..const import DOMAIN, NAME, VERSION
 
 ENTITY_ID = f"sensor.{DOMAIN}_rooms_overview"
+# A comfort target lowered by at least this much (a schedule step down, the away setback)
+# leaves the room to cool: until it has, being over the target is not an overshoot.
+COOLING_DROP_K = 0.25
+# The room has cooled once it is this close to the lowered target.
+COOLING_DONE_K = 0.15
 
 
 def _round(value, digits=1):
@@ -26,7 +32,46 @@ def _demand(controls, c):
     return None if value is None or not 0 <= value <= 1 else round(value * 100)
 
 
-def room_view(controls, room_id, c, preheat):
+def cooling_step(mark, last, d):
+    """``(mark, last)`` after this cycle, for a room that is cooling to a lowered target.
+
+    ``mark`` is why the room's comfort target came down while the room was warmer than it
+    (``away`` or ``schedule``), or None; ``last`` is the comfort target and away setback
+    seen on the cycle before. The mark goes when the room has cooled, when the target
+    goes back up, and when a pre-heat takes the room over. A room first seen with the
+    away setback already on (nothing remembered from before a restart) is taken to be
+    cooling to it.
+    """
+    comfort = d.target_ot
+    if comfort is None:
+        return mark, last
+    away = d.away_setback_k or 0.0
+    if last is None:
+        mark = mark or ("away" if away > 0 else None)
+    else:
+        change = comfort - last[0]
+        if change <= -COOLING_DROP_K:
+            mark = "away" if away > last[1] else "schedule"
+        elif change >= COOLING_DROP_K:
+            mark = None
+    air, target = d.air_temp, d.air_setpoint
+    if mark and (d.preheating or air is None or target is None or air - target < COOLING_DONE_K):
+        mark = None
+    return mark, (comfort, away)
+
+
+def spread_lift(d):
+    """The heat-spreading lift in the target sent to Evohome, or None when overdrive is.
+
+    The same rule as the room cycle: a lift stands in for the overdrive when it is the
+    larger of the two, and 0.0 is still a lift (it takes a negative overdrive off).
+    """
+    if d.preheating or d.spread_mode != "active" or d.spread_k is None:
+        return None
+    return d.spread_k if d.spread_k > d.overdrive_k else None
+
+
+def room_view(controls, room_id, c, preheat, cooling=None):
     """What the card shows for one room."""
     d = c.data
     plan = preheat.get(room_id) or {}
@@ -55,6 +100,10 @@ def room_view(controls, room_id, c, preheat):
         "air": _round(d.air_temp, 2),
         "target": _round(target, 2),
         "overdrive": _round(push),
+        "spread": _round(spread_lift(d)),
+        "cooling": cooling,
+        "comfort": _round(d.target_ot, 2),
+        "away": _round(d.away_setback_k),
         "evohome": _round(d.zone_setpoint),
         "evohome_temp": _round(d.zone_temp),
         "demand": demand,
@@ -64,11 +113,20 @@ def room_view(controls, room_id, c, preheat):
     }
 
 
+def away_view(controls):
+    """The away setback for the card's top line: status and degrees, or nothing."""
+    away = getattr(controls, "away", None)
+    if away is None:
+        return {}
+    return {"away_status": away.status, "away_setback": _round(away.setback_k)}
+
+
 def house_view(controls):
     b = controls.boiler.data if controls.boiler else None
     if b is None:
-        return {}
+        return away_view(controls)
     return {
+        **away_view(controls),
         "outdoor": _round(b.outdoor_temp),
         "flow": _round(b.current_flow),
         "flow_target": _round(b.flow_setpoint),
@@ -130,7 +188,7 @@ def hot_water_view(controls):
     return view
 
 
-class RoomsOverviewSensor(SensorEntity):
+class RoomsOverviewSensor(SensorEntity, RestoreEntity):
     """State: rooms calling for heat. Attributes: every room's figures and the boiler's."""
 
     _attr_has_entity_name = True
@@ -152,12 +210,42 @@ class RoomsOverviewSensor(SensorEntity):
             model="Heating control and analytics",
         )
         self._snapshot = None
+        # Per room: why it is cooling to a lowered target, and the target it last had.
+        self._cooling = {}
+        self._comfort = {}
 
     async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self._restore(await self.async_get_last_state())
         sources = [c for c in (self.controls.boiler, *self.controls.rooms.values()) if c]
         for coordinator in sources:
             self.async_on_remove(coordinator.async_add_listener(self._changed))
         self._changed()
+
+    def _restore(self, last):
+        """Carry the cooling marks over a restart, so a room mid-cool is not an overshoot."""
+        rooms = last.attributes.get("rooms") if last is not None else None
+        for room in rooms if isinstance(rooms, list) else []:
+            try:
+                room_id, comfort = room["id"], float(room["comfort"])
+                away = float(room.get("away") or 0.0)
+            except KeyError, TypeError, ValueError:
+                continue
+            self._comfort[room_id] = (comfort, away)
+            if room.get("cooling") in ("away", "schedule"):
+                self._cooling[room_id] = room["cooling"]
+
+    def _cooling_now(self, room_id, c):
+        if c.data is None:
+            return self._cooling.get(room_id)
+        mark, last = cooling_step(self._cooling.get(room_id), self._comfort.get(room_id), c.data)
+        if last is not None:
+            self._comfort[room_id] = last
+        if mark:
+            self._cooling[room_id] = mark
+        else:
+            self._cooling.pop(room_id, None)
+        return mark
 
     def _preheat(self):
         optimum = getattr(self.controls.heating, "optimum", None)
@@ -170,7 +258,8 @@ class RoomsOverviewSensor(SensorEntity):
     def _changed(self):
         preheat = self._preheat()
         rooms = [
-            room_view(self.controls, rid, c, preheat) for rid, c in self.controls.rooms.items()
+            room_view(self.controls, rid, c, preheat, self._cooling_now(rid, c))
+            for rid, c in self.controls.rooms.items()
         ]
         try:
             hot_water = hot_water_view(self.controls)

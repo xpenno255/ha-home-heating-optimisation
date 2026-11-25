@@ -1,8 +1,10 @@
 /* Home Heating Optimisation: room-by-room warmth card.
  *
  * Reads sensor.home_heating_optimisation_rooms_overview (served with the integration), which
- * carries every room's temperature, target, overdrive, Evohome target, valve demand and
- * pre-heat state. Usage: `type: custom:hho-rooms-card`.
+ * carries every room's temperature, target, overdrive or heat-spreading lift, Evohome target,
+ * valve demand and pre-heat state. Usage: `type: custom:hho-rooms-card`.
+ * A room over its target is an overshoot (orange) only when the heating put it there: one
+ * still cooling to a target that was just lowered, or held open by heat spreading, is grey.
  * Optional `tolerance` sets the on-target band in degrees Celsius (default 0.15), `order` lists
  * room names in display order (others follow), and `hot_water: false` hides the cylinder tile.
  * Tapping a tile opens that room's thermostat (`more_info: false` turns this off).
@@ -25,7 +27,7 @@ const CLOCK =
 
 const STYLE = `
 :host{display:block;min-width:0;line-height:1.4;--below:#5aa9e6;--above:#e8913a;--ok:#58c49a;--heat:#e3a23b;--pre:#b08de8;
- --ink:var(--primary-text-color,#f1f2ef);--muted:var(--secondary-text-color,#a8b0b4);
+ --ink:var(--primary-text-color,#f1f2ef);--muted:var(--secondary-text-color,#a8b0b4);--calm:var(--muted);
  --line:var(--divider-color,#3b4247);--tile:var(--ha-card-background,var(--card-background-color,#22272b));
  --track:color-mix(in srgb,var(--ink) 12%,var(--tile))}
 *{box-sizing:border-box}
@@ -46,6 +48,7 @@ ha-card{display:block;overflow:hidden;container:hho / inline-size;color:var(--in
 .room{--accent:var(--ok);background:var(--tile);padding:12px 16px;position:relative;display:flex;flex-direction:column;gap:8px;min-width:0;container:hho-room / inline-size;box-shadow:1px 0 0 var(--line),0 1px 0 var(--line)}
 .room::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--edge,transparent)}
 .room.below{--accent:var(--below);--edge:var(--below)}.room.above{--accent:var(--above);--edge:var(--above)}
+.room.cooling,.room.spreading{--accent:var(--calm);--edge:var(--calm)}
 .room.no-data{--accent:var(--track)}
 .room.preheating{background:color-mix(in srgb,var(--pre) 5%,var(--tile))}
 .top{display:flex;align-items:baseline;justify-content:space-between;gap:4px 10px;flex-wrap:wrap}
@@ -176,8 +179,12 @@ class HhoRoomsCard extends HTMLElement {
     const has = r.state !== "no_data" && hasNumber(r.air) && hasNumber(r.target);
     // Remove floating-point noise without rounding away the tolerance boundary.
     const diff = has ? Math.round((r.air - r.target) * 1e6) / 1e6 : 0;
-    const st = !has || diff === 0 || Math.abs(diff) < this._config.tolerance
+    let st = !has || diff === 0 || Math.abs(diff) < this._config.tolerance
       ? "ok" : diff < 0 ? "below" : "above";
+    // Over the target, but not because the heating overshot: the target was just lowered
+    // and the room is still cooling to it, or heat spreading is holding its valve open.
+    if (st === "above" && (r.cooling === "away" || r.cooling === "schedule")) st = "cooling";
+    else if (st === "above" && hasNumber(r.spread) && Number(r.spread) > 0) st = "spreading";
     return { has, diff, st };
   }
 
@@ -186,14 +193,29 @@ class HhoRoomsCard extends HTMLElement {
       r = { ...r, air: null, target: null, evohome: null, overdrive: null, demand: null, calling: false };
     }
     const { has, diff, st } = this._comfort(r);
-    const col = st === "below" ? "var(--below)" : st === "above" ? "var(--above)" : "var(--ok)";
+    const col = { below: "var(--below)", above: "var(--above)", ok: "var(--ok)" }[st] || "var(--calm)";
     const p = Math.max(0, Math.min(100, 50 + (diff / 1.5) * 50));
-    const delta = !has ? "" : st === "ok" ? "on target" : `${Math.abs(diff).toFixed(1)}° ${st}`;
-    const od = hasNumber(r.overdrive) ? Number(r.overdrive) : 0;
-    const odc = od === 0 ? "z" : st;
-    const ods = !hasNumber(r.overdrive) ? "–" : od > 0 ? `+${od.toFixed(1)}` : od < 0 ? `−${Math.abs(od).toFixed(1)}` : "0.0";
+    const size = `${Math.abs(diff).toFixed(1)}°`;
+    const delta = !has ? "" : st === "ok" ? "on target" : st === "cooling" ? `${size} to cool` : `${size} ${st}`;
+    const why = st === "cooling"
+      ? (r.cooling === "away"
+        ? "Everyone is out, so the target was lowered: the room is cooling to it, not overshooting"
+        : "The schedule lowered the target: the room is cooling to it, not overshooting")
+      : st === "spreading"
+        ? "Over the target on purpose: heat spreading is holding this valve open to share the boiler's heat"
+        : "Room temperature minus HHO target";
     const pre = r.preheat;
     const preheating = pre && pre.status === "active";
+    // A heat-spreading lift stands in for the overdrive in the target sent to Evohome.
+    const spread = !preheating && hasNumber(r.spread);
+    const pushed = spread ? r.spread : r.overdrive;
+    const od = hasNumber(pushed) ? Number(pushed) : 0;
+    const odc = od === 0 ? "z" : st;
+    const ods = !hasNumber(pushed) ? "–" : od > 0 ? `+${od.toFixed(1)}` : od < 0 ? `−${Math.abs(od).toFixed(1)}` : "0.0";
+    const pushLabel = preheating ? "push" : spread ? "spreading" : "overdrive";
+    const pushWhy = spread
+      ? "Heat spreading: added to the target sent to Evohome to hold this valve open and share the boiler's heat; it stands in for the overdrive"
+      : "Added to the target sent to Evohome so its valve opens harder (positive) or closes sooner (negative)";
     const flag = STATES[r.state] || (!has ? STATES.no_data : null);
     const status = flag
       ? `<span class="st flag">${esc(flag)}</span>`
@@ -213,11 +235,11 @@ class HhoRoomsCard extends HTMLElement {
       <div class="top"><h3 title="${esc(r.name)}">${esc(r.name)}</h3>${status}</div>
       <div class="pair">
         <div class="now"><div class="lbl">Room</div><div class="v">${fmt(r.air)}<sup>°</sup></div></div>
-        ${delta ? `<span class="delta ${st}" title="Room temperature minus HHO target">${delta}</span>` : ""}
+        ${delta ? `<span class="delta ${st}" title="${esc(why)}">${delta}</span>` : ""}
         <div class="tgt"><div class="lbl">${preheating ? "Pre-heat to" : "Target"}</div><div class="v">${fmt(r.target)}<sup>°</sup></div></div>
       </div>
       <div class="gap" role="img" aria-label="${esc(has ? `${delta}; centre is target, scale minus to plus 1.5 degrees` : "Temperature difference unavailable")}" title="±1.5 °C around the target"><div class="f" style="left:${Math.min(p, 50)}%;width:${Math.abs(p - 50)}%;background:${col}"></div><div class="c"></div>${has ? `<div class="d" style="left:${p}%;background:${col}"></div>` : ""}</div>
-      <div class="evo"><span title="Target written to the Evohome zone: HHO target, sensor-match offset and overdrive">Evohome told <b>${fmt(r.evohome)}°</b></span><span class="evo-drive">${preheating ? "push" : "overdrive"}<span class="od ${odc}" title="Added to the target sent to Evohome so its valve opens harder (positive) or closes sooner (negative)">${ods}</span></span></div>
+      <div class="evo"><span title="Target written to the Evohome zone: HHO target, sensor-match offset and overdrive or heat-spreading lift">Evohome told <b>${fmt(r.evohome)}°</b></span><span class="evo-drive">${pushLabel}<span class="od ${odc}" title="${esc(pushWhy)}">${ods}</span></span></div>
       <div class="valve${quietValve ? " zero" : ""}"><span>Valve</span><div class="meter"><i style="width:${demand}%"></i></div><b>${hasDemand ? `${Number(r.demand)}%` : "–"}</b></div>
       ${preText ? `<div class="pre">${CLOCK}<span>${esc(preText)}</span></div>` : ""}
     </div>`;
@@ -270,14 +292,22 @@ class HhoRoomsCard extends HTMLElement {
     const rooms = this._ordered(Array.isArray(a.rooms) ? a.rooms : []);
     const hw = this._config.hot_water !== false && a.hot_water ? this._hotWater(a.hot_water) : "";
     const h = a.house || {};
-    let below = 0, ok = 0, above = 0;
+    let below = 0, ok = 0, above = 0, cooling = 0, spreading = 0;
     for (const r of rooms) {
       const { has, st } = this._comfort(r);
       if (!has) continue;
       if (st === "below") below++;
       else if (st === "above") above++;
+      else if (st === "cooling") cooling++;
+      else if (st === "spreading") spreading++;
       else ok++;
     }
+    const setback = hasNumber(h.away_setback) ? Number(h.away_setback) : 0;
+    const away = ["away", "deep"].includes(h.away_status) && setback > 0
+      ? `<span title="Everyone is out: every room's target is lowered by this much">Away<b>−${setback.toFixed(1)}°</b></span>`
+      : h.away_status === "heading_home"
+        ? `<span title="Everyone is out, but someone has left work: targets are back to normal until someone is home">Away<b>heading home</b></span>`
+        : "";
     const columns = Number(this._config.columns);
     const cols = Number.isInteger(columns) && columns > 0 ? `style="--cols:${columns}"` : "";
     const body = !state
@@ -290,6 +320,8 @@ class HhoRoomsCard extends HTMLElement {
           <span class="sum"><i style="background:var(--below)"></i><b>${below}</b> below</span>
           <span class="sum"><i style="background:var(--ok)"></i><b>${ok}</b> on target</span>
           <span class="sum"><i style="background:var(--above)"></i><b>${above}</b> above</span>
+          ${cooling ? `<span class="sum" title="Over a target that was just lowered, and cooling to it"><i style="background:var(--calm)"></i><b>${cooling}</b> cooling</span>` : ""}
+          ${spreading ? `<span class="sum" title="Over the target while heat spreading holds the valve open"><i style="background:var(--calm)"></i><b>${spreading}</b> spreading</span>` : ""}
         </div>
       </div>
       <div class="house">
@@ -298,6 +330,7 @@ class HhoRoomsCard extends HTMLElement {
         <span>Return<b>${fmt(h.return, 0)}°</b></span>
         <span class="${h.burner ? "on" : ""}">Burner<b>${h.burner ? "on" : "off"}</b></span>
         ${String(h.mode || "").startsWith("dhw") ? "<span>Hot water <b>charging</b></span>" : ""}
+        ${away}
       </div>
       ${body}
     </ha-card>`;
@@ -311,6 +344,6 @@ if (!customElements.get("hho-rooms-card")) {
   window.customCards.push({
     type: "hho-rooms-card",
     name: "HHO rooms",
-    description: "Every room's temperature, target, overdrive, valve and pre-heat (Home Heating Optimisation).",
+    description: "Every room's temperature, target, overdrive or spreading lift, valve and pre-heat (Home Heating Optimisation).",
   });
 }

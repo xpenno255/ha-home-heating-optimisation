@@ -88,6 +88,57 @@ def test_nobody_home_after_leaving_work_brings_it_back():
     assert run(steps)[1:] == (1.0, "deep")
 
 
+def test_back_at_work_brings_it_back_at_the_depth_it_had():
+    steps = [(0, both(WORK, OUT)), (240, both(WORK, OUT)), (241, both(OUT))]
+    assert run(steps)[1:] == (0.0, "heading_home")
+    steps.append((260, both(WORK, OUT)))  # a is back in the work zone
+    state, k, status = run(steps)
+    assert (k, status) == (0.0, "heading_home") and state.left_work == ("a",)
+    assert state.back_at_work_since == T0 + timedelta(minutes=260)
+    # Not yet after four minutes; from the fifth the deeper setback is back, not the first.
+    assert run([*steps, (264, both(WORK, OUT))])[1:] == (0.0, "heading_home")
+    state, k, status = run([*steps, (265, both(WORK, OUT))])
+    assert (k, status) == (1.0, "deep")
+    assert state.heading_home_since is None and state.left_work == ()
+    assert state.back_at_work_since is None and state.away_since == T0
+
+
+def test_a_flicker_at_the_edge_of_the_work_zone_does_not_bring_it_back():
+    steps = [(0, both(WORK, OUT)), (240, both(WORK, OUT)), (241, both(OUT))]
+    # Back for two minutes, out again: the lift holds and its clock starts again.
+    steps += [(260, both(WORK, OUT)), (262, both(OUT))]
+    state, k, status = run(steps)
+    assert (k, status) == (0.0, "heading_home") and state.back_at_work_since is None
+    assert state.heading_home_since == T0 + timedelta(minutes=262)
+    assert run([*steps, (300, both(OUT))])[1:] == (0.0, "heading_home")
+    # Back again and staying: five minutes from this return, not from the first.
+    steps.append((301, both(WORK, OUT)))
+    assert run([*steps, (305, both(WORK, OUT))])[1:] == (0.0, "heading_home")
+    assert run([*steps, (306, both(WORK, OUT))])[1:] == (1.0, "deep")
+
+
+def test_it_waits_for_everyone_who_left_work():
+    steps = [(0, both(WORK)), (240, both(WORK)), (241, both(OUT, WORK)), (250, both(OUT))]
+    state, k, status = run(steps)
+    assert (k, status) == (0.0, "heading_home") and state.left_work == ("a", "b")
+    # One of the two back at work is not enough: the other may be on the way home.
+    assert run([*steps, (255, both(WORK, OUT)), (275, both(WORK, OUT))])[1:] == (
+        0.0,
+        "heading_home",
+    )
+    # Both back, in either work zone, for five minutes.
+    both_back = [*steps, (255, both(WORK, OUT)), (275, both(WORK)), (280, both(WORK))]
+    assert run(both_back)[1:] == (1.0, "deep")
+
+
+def test_a_lift_saved_before_this_rule_still_ends_on_the_resume_time():
+    # No record of who left work: being at work cannot end the lift early.
+    state = AwayState(T0, T0 + timedelta(minutes=241), ("a",))
+    late = [(260, both(WORK, OUT)), (300, both(WORK, OUT))]
+    assert run(late, state)[1:] == (0.0, "heading_home")
+    assert run([*late, (331, both(WORK, OUT))], state)[1:] == (1.0, "deep")
+
+
 def test_leaving_work_before_any_setback_does_nothing():
     assert run([(0, both(WORK, OUT)), (10, both(OUT)), (40, both(OUT))])[1:] == (0.5, "away")
 
@@ -95,6 +146,10 @@ def test_leaving_work_before_any_setback_does_nothing():
 def test_state_round_trips_and_bad_data_starts_at_home():
     state = AwayState(T0, T0 + timedelta(hours=3), ("a",))
     assert load_state(dump_state(state)) == state
+    state = AwayState(T0, T0 + timedelta(hours=3), (), ("a",), T0 + timedelta(hours=4))
+    assert load_state(dump_state(state)) == state
+    old = {"away_since": T0.isoformat(), "heading_home_since": None, "at_work": ["a"]}
+    assert load_state(old) == AwayState(T0, None, ("a",))
     assert load_state({}) == AwayState() and load_state({"away_since": "nonsense"}) == AwayState()
 
 
@@ -173,6 +228,37 @@ async def test_rooms_come_down_while_everyone_is_out_and_back_on_return(  # noqa
     freezer.tick(timedelta(minutes=1))
     await c.refresh()
     assert room.data.target_ot == normal and c.report()["away"]["status"] == "home"
+
+
+async def test_back_at_the_office_returns_the_rooms_to_the_deeper_setback(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    people(hass, "not_home", "Office")
+    hass.states.async_set("zone.office", "0", {"friendly_name": "Office"})
+    entry, c, calls = await start(hass, with_away(controlled, work_zones=["zone.office"]))
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    await c.refresh()
+    normal = room.data.target_ot
+    freezer.tick(timedelta(minutes=125))
+    await c.refresh()
+    assert room.data.away_setback_k == 1.0
+    # Out of the office for lunch: lifted. Back at the desk: the deeper setback again
+    # after five minutes, without the half hour and the two hours from the start.
+    people(hass, "not_home", "not_home")
+    freezer.tick(timedelta(minutes=1))
+    await c.refresh()
+    assert room.data.target_ot == normal and room.data.away_status == "heading_home"
+    people(hass, "not_home", "Office")
+    freezer.tick(timedelta(minutes=20))
+    await c.refresh()
+    assert room.data.target_ot == normal and c.report()["away"]["back_at_work_since"]
+    freezer.tick(timedelta(minutes=5))
+    await c.refresh()
+    assert room.data.away_setback_k == 1.0 and room.data.target_ot == normal - 1.0
+    assert c.report()["away"]["status"] == "deep"
+    assert c.report()["away"]["back_at_work_since"] is None
 
 
 async def test_unknown_whereabouts_count_as_home(hass, controlled, sources, freezer):  # noqa: F811
