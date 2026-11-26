@@ -457,6 +457,42 @@ async def test_one_report_nine_minutes_before_the_switchpoint_is_enough(hass, co
     heating.analytics = None
 
 
+async def test_the_lead_can_be_set_by_hand_and_the_learning_carries_on(hass, controlled, freezer):  # noqa: F811
+    heating, controls, optimum, plan = await warming(hass, controlled, freezer)
+    key = optimum._lead_key("study", SWITCH)
+    time_of_day = key.split("|")[1]
+    result = optimum.set_lead("study", time_of_day, 15)
+    assert optimum.lead_bias[key] == 15.0
+    assert result["before_minutes"] == 0.0 and result["lead_bias_minutes"] == 15.0
+    assert result["learning"] is True
+    # Kept inside the range the learning keeps to.
+    assert optimum.set_lead("study", time_of_day, 500)["lead_bias_minutes"] == 60.0
+    assert optimum.set_lead("study", time_of_day, -500)["lead_bias_minutes"] == -30.0
+    optimum.set_lead("study", time_of_day, 15)
+    sets = [
+        e["data"]
+        for e in heating.journal.events(kinds=["preheat"])
+        if e["data"]["event"] == "lead_set"
+    ]
+    assert len(sets) == 4 and sets[-1]["before_minutes"] == -30.0
+    # Through the service, by room and switchpoint time.
+    hour, minute = (int(x) for x in time_of_day.split(":"))
+    response = await hass.services.async_call(
+        "home_heating_optimisation",
+        "set_preheat_lead",
+        {"room_id": "study", "time": f"{hour:02d}:{minute:02d}:00", "minutes": 12},
+        blocking=True,
+        return_response=True,
+    )
+    assert response["lead_bias_minutes"] == 12.0 and optimum.lead_bias[key] == 12.0
+    # A short arrival still adds to it.
+    await at(hass, controls, optimum, freezer, SWITCH - 9 * MIN, air=20.3)
+    await at(hass, controls, optimum, freezer, SWITCH + 16 * MIN)
+    await at(hass, controls, optimum, freezer, SWITCH + 61 * MIN)
+    assert bias(optimum) > 12.0
+    heating.analytics = None
+
+
 async def test_a_late_report_alone_teaches_nothing(hass, controlled, freezer):  # noqa: F811
     heating, controls, optimum, plan = await warming(hass, controlled, freezer)
     optimum.lead_bias[optimum._lead_key("study", SWITCH)] = 6.0

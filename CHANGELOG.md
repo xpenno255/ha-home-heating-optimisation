@@ -2,6 +2,13 @@
 
 Remaining commissioning and roadmap work is tracked in the [GitHub backlog index (#12)](https://github.com/xpenno255/ha-home-heating-optimisation/issues/12). Every 0.6.x release is a commissioning prerelease: software validation is complete, physical commissioning is not.
 
+## 0.35.0 - a room can be pushed harder when it is under target, and a warm-up's start can be set by hand
+
+- **A room's own overdrive strength.** Each room has a new number, "control overdrive strength" (0 to 3; 0 uses the house-wide strength in the warm-up settings). When set, it replaces the house-wide strength for the push **while the room is under its target only**: the easing-off above target is unchanged, and so is the limit. The hold is still fed by the house-wide push, so a stronger push does not also fill the hold faster. With 2.0 a room 0.3 K short is told 1.0 K more than its target instead of 0.5 K.
+- **Set a warm-up's lead by hand.** New service `set_preheat_lead` (`room_id`, `time` of the switchpoint, `minutes` from -30 to 60) sets the extra lead the arrival learning keeps for that room at that time of day. The learning carries on from the value set: a room that then arrives over its goal starts later again. The journal records it as a `preheat` event `lead_set`.
+- Why: over the evenings of 23-26 Nov the Living room was at least 0.2 K under its target for 689 minutes. For half of them Evohome was not calling the boiler, with the Living room valve at 73-85 %; Evohome's call follows the most-open valve steeply (a 36 % call at 60-80 % open, 62 % at 80-99 %), and the valve only reached fully open from 0.55 K short. That is the lingering sag the stronger push is for. But 44-79 % of the shortfall built up while the room was 0.45 K or more short, mostly between 16:00 and 18:00, when the boiler was already called 71-95 % of the time and the push was at its limit: more push does nothing there, an earlier start does. The learning had moved the 16:00 start 9.4 minutes in two days.
+- A review of the first proposal (double the house-wide strength) found it would also have doubled how fast the hold builds, the mechanism that made the Living room swing on 21 Nov; hence the separate feed.
+
 ## 0.34.4 - the rooms card says "above · cooling", and two columns on narrower phones
 
 - Rooms card: the grey chip for a room cooling to a lowered target now reads "0.9° above · cooling" instead of "0.9° to cool", and the one for heat spreading "0.4° above · spreading". "To cool" was read as "too cool", as if the room were cold.

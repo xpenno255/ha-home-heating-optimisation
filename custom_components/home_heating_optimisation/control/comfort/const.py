@@ -207,6 +207,9 @@ DEFAULT_CAP = 1.5
 # Per-room overdrive limit (K); 0 uses the warm-up settings' limit.
 CONF_OVERDRIVE_LIMIT = "overdrive_limit"
 DEFAULT_OVERDRIVE_LIMIT = 0.0
+# A room's own strength for the push while it is under target; 0 = the house-wide one.
+CONF_OVERDRIVE_STRENGTH = "overdrive_strength"
+DEFAULT_OVERDRIVE_STRENGTH = 0.0
 CONF_MANUAL_HOLD = "manual_hold_minutes"
 DEFAULT_MANUAL_HOLD = 120
 CONF_PREHEAT_RELEASE = "preheat_release_minutes"

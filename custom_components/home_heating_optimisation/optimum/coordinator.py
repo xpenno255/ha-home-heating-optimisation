@@ -36,6 +36,8 @@ from .policy import optimum_config
 from .preheat import (
     CAPTURE_WINDOW,
     CHARGE_RANGE,
+    LEAD_BIAS_MAX,
+    LEAD_BIAS_MIN,
     MAX_CHARGES,
     PreheatPlan,
     avoid_charge,
@@ -920,6 +922,21 @@ class Optimum:
         if not self.pcfg.get("arrival_gain"):
             return 0.0
         return float(self.lead_bias.get(self._lead_key(room_id, switch_at), 0.0))
+
+    def set_lead(self, room_id, time_of_day, minutes) -> dict:
+        """Set the extra lead for one room's warm-up at one time of day, by hand.
+
+        The learning carries on from the new value: a room that then arrives over its
+        goal starts later again. Kept within the same range the learning keeps to.
+        """
+        key = f"{room_id}|{time_of_day}"
+        before = float(self.lead_bias.get(key, 0.0))
+        after = round(max(LEAD_BIAS_MIN, min(LEAD_BIAS_MAX, float(minutes))), 1)
+        self.lead_bias[key] = after
+        data = {"time_of_day": time_of_day, "before_minutes": before, "lead_bias_minutes": after}
+        self._preheat_event("lead_set", room_id, data)
+        self._save_soon()
+        return {"room_id": room_id, **data, "learning": bool(self.pcfg.get("arrival_gain"))}
 
     def _learn_lead(self, room_id, plan) -> dict:
         """Take a share of this arrival's error into the next start; what was learnt.
