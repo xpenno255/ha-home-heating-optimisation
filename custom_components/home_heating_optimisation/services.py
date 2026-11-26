@@ -110,12 +110,36 @@ def async_register_services(hass):
             raise ServiceValidationError("Configure at least one energy meter first")
         return energy.report(call.data["days"])
 
+    async def set_preheat_lead(call):
+        coordinator = heating()
+        optimum = getattr(coordinator, "optimum", None)
+        if optimum is None:
+            raise ServiceValidationError("The pre-heat planner is not running")
+        room_id = call.data["room_id"]
+        controls = getattr(coordinator, "controls", None)
+        if controls is None or room_id not in controls.rooms:
+            raise ServiceValidationError(f"Unknown room ID: {room_id}")
+        return optimum.set_lead(room_id, call.data["time"].strftime("%H:%M"), call.data["minutes"])
+
     async def scorecard(call):
         card = heating().scorecard
         if card is None:
             raise ServiceValidationError("The daily scorecard is not running")
         return card.report(call.data["days"])
 
+    hass.services.async_register(
+        DOMAIN,
+        "set_preheat_lead",
+        set_preheat_lead,
+        schema=vol.Schema(
+            {
+                vol.Required("room_id"): cv.string,
+                vol.Required("time"): cv.time,
+                vol.Required("minutes"): vol.All(vol.Coerce(float), vol.Range(min=-30, max=60)),
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     hass.services.async_register(
         DOMAIN,
         "get_scorecard",

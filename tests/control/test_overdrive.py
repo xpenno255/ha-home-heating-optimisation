@@ -221,6 +221,84 @@ async def test_a_room_held_just_short_keeps_part_of_its_push_at_target(  # noqa:
     assert room.data.overdrive_hold_k == 0.0 and room.data.overdrive_k == -0.3
 
 
+async def test_a_room_strength_pushes_harder_under_target_only(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    from custom_components.home_heating_optimisation.control.migration import handover
+
+    hass.states.async_set("climate.study", "auto", {"current_temperature": 19.0, "temperature": 20})
+    entry, c, calls = await start(hass, controlled)
+    await handover(c)
+    await c.set_mode("study", "active")
+    room = c.rooms["study"]
+    settings = {"catchup_overdrive_k": 1.0, "overdrive_strength": 1.0, "overdrive_period_min": 10}
+    room._overdrive_settings = lambda: settings
+    await c.refresh()
+    target = room.data.air_setpoint
+
+    async def at(offset):
+        hass.states.async_set(
+            "sensor.air", round(target + offset, 2), {"unit_of_measurement": "°C"}
+        )
+        room._overdrive = OverdriveState(hold=room._overdrive.hold, hold_at=room._overdrive.hold_at)
+        freezer.tick(timedelta(minutes=1))
+        await c.refresh()
+        return room.data.overdrive_k
+
+    # The house strength: +0.5 at 0.3 short, +0.3 at 0.2 short, -0.3 at 0.3 over.
+    assert await at(-0.3) == 0.5 and await at(-0.2) == 0.3 and await at(0.3) == -0.3
+    assert room.get_tunable("overdrive_strength") == 0.0
+    # The room's own strength doubles the push under target, within the same limit...
+    room.set_tunable("overdrive_strength", 2.0)
+    assert await at(-0.3) == 1.0 and await at(-0.2) == 0.6 and await at(-0.5) == 1.0
+    # ...and changes nothing over target.
+    assert await at(0.3) == -0.3 and await at(0.1) == -0.1
+    # Zero hands the room back to the house strength.
+    room.set_tunable("overdrive_strength", 0.0)
+    assert await at(-0.3) == 0.5
+
+
+async def test_a_room_strength_does_not_fill_the_hold_faster(  # noqa: F811
+    hass, controlled, sources, freezer
+):
+    from custom_components.home_heating_optimisation.control.migration import handover
+
+    async def held(strength):
+        hass.states.async_set(
+            "climate.study", "auto", {"current_temperature": 19.0, "temperature": 20}
+        )
+        entry, c, calls = await start(hass, controlled)
+        await handover(c)
+        await c.set_mode("study", "active")
+        room = c.rooms["study"]
+        settings = {
+            "catchup_overdrive_k": 1.0,
+            "overdrive_strength": 1.0,
+            "overdrive_period_min": 10,
+        }
+        room._overdrive_settings = lambda: settings
+        room.set_tunable("overdrive_strength", strength)
+        room._overdrive = OverdriveState()
+        await c.refresh()
+        target = room.data.air_setpoint
+        for _ in range(60):
+            hass.states.async_set(
+                "sensor.air", round(target - 0.2, 2), {"unit_of_measurement": "°C"}
+            )
+            freezer.tick(timedelta(minutes=1))
+            await c.refresh()
+        result = room._overdrive.hold, room.data.overdrive_k
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+        return result
+
+    hold, push = await held(0.0)
+    hold_strong, push_strong = await held(2.0)
+    # The push is twice as big, the hold has grown exactly as it would have without it.
+    assert push == 0.3 and push_strong == 0.6
+    assert hold > 0 and abs(hold_strong - hold) < 1e-9
+
+
 async def test_the_hold_is_kept_while_the_room_is_outside_its_window(  # noqa: F811
     hass, controlled, sources
 ):

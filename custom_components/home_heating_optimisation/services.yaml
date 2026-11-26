@@ -72,6 +72,24 @@ get_energy_report:
           min: 1
           max: 90
           mode: box
+set_preheat_lead:
+  fields:
+    room_id:
+      required: true
+      selector:
+        text:
+    time:
+      required: true
+      selector:
+        time:
+    minutes:
+      required: true
+      selector:
+        number:
+          min: -30
+          max: 60
+          step: 1
+          mode: box
 get_scorecard:
   fields:
     days:

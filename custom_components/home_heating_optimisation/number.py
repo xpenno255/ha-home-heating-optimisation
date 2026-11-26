@@ -12,6 +12,8 @@ ROOM_NUMBERS = (
     ("cap_down", 0, 3, 0.5, "K"),
     # 0 = use the Overdrive limit in the warm-up settings.
     ("overdrive_limit", 0, 3, 0.1, "K"),
+    # 0 = use the Overdrive strength in the warm-up settings. Applies under target only.
+    ("overdrive_strength", 0, 3, 0.1, None),
 )
 BOILER_NUMBERS = (
     ("design_flow", 30, 80, 1, "°C"),

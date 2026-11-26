@@ -44,6 +44,7 @@ from .const import (
     CONF_OCCUPANCY_SENSOR,
     CONF_OUTDOOR_TEMP_SENSOR,
     CONF_OVERDRIVE_LIMIT,
+    CONF_OVERDRIVE_STRENGTH,
     CONF_OVERRIDE_DURATION,
     CONF_PREHEAT_RELEASE,
     CONF_PRIMARY_CLIMATE,
@@ -75,6 +76,7 @@ from .const import (
     DEFAULT_MANUAL_HOLD,
     DEFAULT_MODE,
     DEFAULT_OVERDRIVE_LIMIT,
+    DEFAULT_OVERDRIVE_STRENGTH,
     DEFAULT_OVERRIDE_DURATION,
     DEFAULT_PREHEAT_RELEASE,
     DEFAULT_RUN_INTERVAL,
@@ -446,6 +448,7 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             (CONF_CAP_UP, DEFAULT_CAP),
             (CONF_CAP_DOWN, DEFAULT_CAP),
             (CONF_OVERDRIVE_LIMIT, DEFAULT_OVERDRIVE_LIMIT),
+            (CONF_OVERDRIVE_STRENGTH, DEFAULT_OVERDRIVE_STRENGTH),
         ):
             stored = store.get(key)
             fallback = self._config.get(
@@ -1431,9 +1434,16 @@ class OTCoordinator(DataUpdateCoordinator[OTCoordinatorData]):
             return 0.0
         state = self._overdrive
         short = d.air_setpoint - d.air_temp
-        push = overdrive_wanted(short, strength, limit)
+        house_push = overdrive_wanted(short, strength, limit)
+        push = house_push
+        # A room's own strength acts only while the room is under target: easing off
+        # above it is unchanged. The hold is still fed by the house-wide push, so a
+        # stronger push does not also fill the hold faster.
+        room_strength = self._tunables.get(CONF_OVERDRIVE_STRENGTH, 0.0)
+        if room_strength and room_strength > 0 and short > 0:
+            push = overdrive_wanted(short, room_strength, limit)
         seconds = (now - state.hold_at).total_seconds() if state.hold_at else None
-        hold = hold_step(state.hold, short, push, seconds, limit)
+        hold = hold_step(state.hold, short, house_push, seconds, limit)
         state = replace(state, hold=hold, hold_at=now)
         self._overdrive = overdrive_step(state, with_hold(push, hold, limit, short), now, period_s)
         return self._overdrive.value

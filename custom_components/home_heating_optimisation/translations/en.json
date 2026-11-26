@@ -851,6 +851,24 @@
         }
       }
     },
+    "set_preheat_lead": {
+      "name": "Set pre-heat lead",
+      "description": "Set how many minutes earlier (or later, if negative) one room's warm-up starts for the switchpoint at one time of day. This is the same figure the arrival learning adjusts, so the learning carries on from the value set here.",
+      "fields": {
+        "room_id": {
+          "name": "Room ID",
+          "description": "Stable room ID."
+        },
+        "time": {
+          "name": "Switchpoint time",
+          "description": "Local time of the switchpoint the warm-up is for, for example 16:00."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "Extra lead in minutes, from 30 later (-30) to 60 earlier (60)."
+        }
+      }
+    },
     "get_scorecard": {
       "name": "Get daily scorecard",
       "description": "Return one row per local day: outdoor temperature and degree-days, heating and hot water gas, gas per degree-day, each room's time on target against its air target, burner starts and Evohome writes. Today's part-day is returned separately.",
